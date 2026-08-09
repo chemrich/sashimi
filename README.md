@@ -31,9 +31,19 @@ Two steps, because APBS is a compiled binary that no Python installer can
 provide. Install it from your system package manager first:
 
 ```sh
-brew install apbs        # macOS, native on Apple silicon
+brew tap brewsci/bio && brew install brewsci/bio/apbs   # macOS, native arm64
 sudo apt install apbs    # Ubuntu 24.04+ / Debian 12+ (22.04 has only 3.0.0)
 ```
+
+Note that APBS is **not** in homebrew-core — `brewsci/bio` is a third-party
+tap, and recent Homebrew refuses to load it without an explicit trust step.
+Weigh that against conda-forge, which carries the same 3.4.1 under a governed
+channel, if provenance matters to you more than a single toolchain does.
+
+The two builds differ in one visible way: Debian's is MPI-enabled and writes
+its grid as `potential-PE0.dx` where Homebrew's writes `potential.dx`. Same
+version, same input, same contents. `sashimi.apbs.run.find_potential` accepts
+either.
 
 Then everything else, which is pure Python:
 
