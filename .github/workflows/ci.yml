@@ -21,34 +21,53 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # linux-64 is the lab target; macos-latest is arm64, which Phase 0
+        # linux-64 is the lab target; macos-latest is arm64, which phase 0
         # established as a first-class platform rather than a Rosetta fallback.
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
 
-      - uses: prefix-dev/setup-pixi@v0.10.1
+      # APBS is a compiled binary, so no Python installer can provide it. Both
+      # of these ship exactly 3.4.1 — Ubuntu 24.04 has 3.4.1-5.1ubuntu2 and the
+      # Homebrew formula is 3.4.1. Ubuntu 22.04 has only 3.0.0, so this job
+      # cannot be moved back to an older runner image. tests/test_corpus.py
+      # asserts the version and re-checks the Born numbers, which is what
+      # replaces the exact pin a lockfile used to give.
+      - name: Install APBS (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends apbs
+
+      - name: Install APBS (macOS)
+        if: runner.os == 'macOS'
+        run: brew install apbs
+
+      - name: Report the APBS build under test
+        run: apbs --version 2>&1 | head -3 || true
+
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
-          # Fail if pixi.lock is out of date with pixi.toml, rather than
-          # silently resolving something different from what runs locally.
-          locked: true
-          cache: true
+          enable-cache: true
+
+      - name: Install
+        # --frozen: fail if uv.lock is out of date with pyproject.toml, rather
+        # than silently resolving something different from what runs locally.
+        run: uv sync --frozen --all-groups
 
       - name: Lint
-        run: pixi run --frozen lint
+        run: uv run --frozen ruff check .
 
       - name: Format
-        run: pixi run --frozen ruff format --check .
+        run: uv run --frozen ruff format --check .
 
       - name: Type check
-        run: pixi run --frozen typecheck
+        run: uv run --frozen mypy
 
       - name: Test
-        # The full suite, APBS-marked tests included: the binary comes from the
-        # same lockfile as everything else, so it is present here.
-        run: pixi run --frozen pytest -q
+        run: uv run --frozen pytest -q
 
-  # Single stable check name for branch protection to require. Matrix job names
+  # Single stable check name for the branch ruleset to require. Matrix job names
   # change whenever the matrix does; this one does not.
   ci-ok:
     name: ci-ok

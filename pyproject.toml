@@ -4,7 +4,21 @@ version = "0.1.0"
 description = "Thinly sliced Poisson: an MCP-native wrapper around APBS for biomolecular electrostatics"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["numpy>=2.0"]
+dependencies = [
+    "numpy>=2.0",
+    # Structure preparation. Pure Python, so PyPI is the whole story here —
+    # unlike APBS, which uv cannot install and which comes from the system
+    # package manager. See README "Install".
+    "pdb2pqr==3.7.1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18",
+    "pre-commit>=4.0",
+    "pytest>=8.0",
+    "ruff>=0.14",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -22,7 +36,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["src", "tests"]
+src = ["src", "tests", "scripts"]
 # Ruff formats Python blocks inside Markdown. PLAN.md's snippets are
 # illustrative and column-aligned for reading, not code to be normalized.
 extend-exclude = ["*.md"]
@@ -73,11 +87,11 @@ ignore = [
 ban-relative-imports = "all"
 
 [tool.ruff.lint.isort]
-known-first-party = ["sashimi"]
+known-first-party = ["sashimi", "scripts", "tests"]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 strict = true
 warn_unreachable = true
 enable_error_code = [

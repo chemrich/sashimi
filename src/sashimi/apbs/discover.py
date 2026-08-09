@@ -1,10 +1,15 @@
 """Locating the APBS binary.
 
-Order: `$SASHIMI_APBS_PATH`, then the active pixi/conda environment, then bare
-`shutil.which`. The pinned environment deliberately outranks `which` — a
-system-wide APBS (Homebrew's, say) otherwise shadows the pinned one silently
-and "reproducible environment" stops meaning anything. The resolved path
-travels in `SolveResult.backend` so a shadowed binary is visible after the fact.
+Order: `$SASHIMI_APBS_PATH`, then `shutil.which`, then an active conda
+environment. APBS is a compiled binary that no Python installer can provide, so
+it comes from the system package manager (`brew install apbs`, `apt install
+apbs`) and `which` is the normal answer. The conda fallback is a courtesy for
+environments that still supply it.
+
+Nothing here pins a version — the expected 3.4.1 is asserted in the test suite
+and re-verified against the golden corpus, so a drifted system binary fails
+loudly with numbers rather than silently at import. The resolved path and
+version travel in `SolveResult.backend` and the diagnostics either way.
 
 Every APBS invocation writes an `io.mc` log into the working directory,
 `--version` included, so the version probe runs inside a temp dir.
@@ -27,8 +32,8 @@ __all__ = ["ApbsBinary", "ApbsNotFound", "discover_apbs"]
 
 _VERSION_RE = re.compile(r"APBS\s+(\d+\.\d+\.\d+)")
 _INSTALL_HINT = (
-    "Install it with `pixi add apbs` (or `conda install -c conda-forge apbs`), "
-    "or point $SASHIMI_APBS_PATH at an existing binary."
+    "Install it with `brew install apbs` (macOS) or `apt install apbs` "
+    "(Ubuntu 24.04+ / Debian 12+), or point $SASHIMI_APBS_PATH at an existing binary."
 )
 
 
@@ -53,19 +58,12 @@ def _candidates() -> list[Path]:
     if explicit := os.environ.get("SASHIMI_APBS_PATH"):
         found.append(Path(explicit).expanduser())
 
-    # pixi run / conda activate both export CONDA_PREFIX.
-    if prefix := os.environ.get("CONDA_PREFIX"):
-        found.append(Path(prefix) / "bin" / "apbs")
-
-    # A pixi project whose env exists but is not activated.
-    for parent in [Path.cwd(), *Path.cwd().parents]:
-        candidate = parent / ".pixi" / "envs" / "default" / "bin" / "apbs"
-        if candidate.exists():
-            found.append(candidate)
-            break
-
     if on_path := shutil.which("apbs"):
         found.append(Path(on_path))
+
+    # Courtesy fallback for conda users; `conda activate` exports CONDA_PREFIX.
+    if prefix := os.environ.get("CONDA_PREFIX"):
+        found.append(Path(prefix) / "bin" / "apbs")
 
     return found
 
