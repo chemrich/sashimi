@@ -59,15 +59,23 @@ repo:
 
 1. **Settings → General → Allow auto-merge.** Without it, the Dependabot
    auto-merge workflow fails at `gh pr merge --auto`.
-2. **A branch protection rule (or ruleset) on `main` requiring the `ci-ok`
-   status check.** This is what makes auto-merge *wait*. With no required
-   check, `--auto` merges as soon as the PR is mergeable — green CI or not.
-   `ci-ok` is a single job gating the whole matrix, so the required check name
-   stays stable when the matrix changes.
+2. **A ruleset on `main` requiring the `ci-ok` status check.** This is what
+   makes auto-merge *wait*. `ci-ok` is a single job gating the whole matrix, so
+   the required check name stays stable when the matrix changes.
 
-Dependabot covers GitHub Actions and the `pyproject.toml` dependencies. It has
-no pixi support, so `pixi.toml` / `pixi.lock` — which is where APBS, pdb2pqr,
-ruff and mypy are pinned — stays manual via `pixi update`.
+Both need a public repository or a paid plan; on a private repo on the Free
+plan the ruleset API returns 403 and `allow_auto_merge` silently stays `false`.
+
+Until both exist, the auto-merge workflow deliberately skips with a warning
+rather than merging. That guard is not decoration: `gh pr merge --auto` does
+**not** fail when auto-merge is unavailable — it merges the PR immediately,
+ignoring CI. PR #1 landed on `main` with a red build exactly that way.
+
+Dependabot covers GitHub Actions only. It has no pixi support, and because
+pixi installs this package from `pyproject.toml` as an editable path
+dependency, a Dependabot edit to `pyproject.toml` desyncs `pixi.lock` and fails
+CI's `--locked` check. Python and conda dependencies — numpy, APBS, pdb2pqr,
+ruff, mypy — are updated with `pixi update`.
 
 ## Layers
 

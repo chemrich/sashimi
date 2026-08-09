@@ -16,15 +16,9 @@ updates:
     commit-message:
       prefix: "ci"
 
-  - package-ecosystem: pip
-    directory: /
-    schedule:
-      interval: weekly
-    # Runtime dependencies are declared in pyproject.toml. The constraints are
-    # deliberately loose, so this mostly matters for security advisories.
-    groups:
-      python:
-        patterns: ["*"]
-        update-types: [minor, patch]
-    commit-message:
-      prefix: "deps"
+  # No pip ecosystem here, deliberately. pixi installs this package from
+  # pyproject.toml as an editable path dependency, so pyproject's constraints
+  # are baked into pixi.lock. Dependabot edits pyproject.toml and cannot
+  # regenerate the lockfile, which desyncs the two and fails CI's `--locked`
+  # check on every such PR. Proven the hard way by PR #1. Python dependencies
+  # are updated with `pixi update` instead.

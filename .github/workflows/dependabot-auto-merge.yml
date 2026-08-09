@@ -24,12 +24,34 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # `gh pr merge --auto` does NOT fail when auto-merge is unavailable — it
+      # silently merges the PR immediately, CI status ignored. That is how PR #1
+      # landed on main with a red build. So verify both preconditions first and
+      # skip rather than merge if either is missing.
+      - name: Verify the merge protections actually exist
+        id: guard
+        run: |
+          allow=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.allow_auto_merge')
+          rules=$(gh api "repos/$GITHUB_REPOSITORY/rules/branches/$BASE_REF" \
+            --jq '[.[] | select(.type == "required_status_checks")] | length' 2>/dev/null || echo 0)
+          if [ "$allow" != "true" ] || [ "$rules" = "0" ]; then
+            echo "::warning::Auto-merge skipped (allow_auto_merge=$allow, required-status-check rules=$rules). Without both, --auto would merge immediately instead of waiting for CI. See README 'Repository settings'."
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "safe=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Enable auto-merge for patch and minor updates
         # Majors are held for a human: a green CI run proves the suite still
         # passes, not that a breaking change is acceptable.
         if: |
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+          steps.guard.outputs.safe == 'true' && (
+            steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+            steps.metadata.outputs.update-type == 'version-update:semver-minor'
+          )
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
