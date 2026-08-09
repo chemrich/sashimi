@@ -41,10 +41,15 @@ def test_discovery_reports_a_version_and_path():
     assert binary.label == f"apbs-{binary.version}"
 
 
-def test_discovery_prefers_the_pinned_environment():
-    """A system-wide APBS must not shadow the pixi env."""
-    binary = discover_apbs()
-    assert ".pixi" in str(binary.path) or "conda" in str(binary.path).lower()
+def test_explicit_path_outranks_everything_else(monkeypatch, tmp_path):
+    """$SASHIMI_APBS_PATH is the escape hatch when the system binary is wrong."""
+    real = discover_apbs()
+    discover._discover_cached.cache_clear()
+    monkeypatch.setenv("SASHIMI_APBS_PATH", str(real.path))
+    try:
+        assert discover_apbs().path == real.path
+    finally:
+        discover._discover_cached.cache_clear()
 
 
 def test_version_probe_leaves_no_io_mc(tmp_path, monkeypatch):
@@ -98,7 +103,7 @@ def test_missing_binary_raises_with_an_install_hint(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda _: None)
     monkeypatch.setattr("pathlib.Path.cwd", staticmethod(lambda: Path("/")))
     try:
-        with pytest.raises(ApbsNotFound, match="pixi add apbs"):
+        with pytest.raises(ApbsNotFound, match="brew install apbs"):
             discover.discover_apbs()
     finally:
         discover._discover_cached.cache_clear()

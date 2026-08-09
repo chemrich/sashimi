@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from sashimi.apbs.run import find_potential
 from sashimi.dx import parse_dx, read_dx, write_dx
 from sashimi.protocol import PotentialGrid
 
@@ -116,3 +117,35 @@ def test_stats_reports_geometry_and_range():
     stats = make_grid(shape=(3, 3, 3)).stats()
     assert stats["shape"] == [3, 3, 3]
     assert stats["min"] <= stats["mean"] <= stats["max"]
+
+
+class TestPotentialDiscovery:
+    """APBS names its output differently depending on how it was built.
+
+    Serial builds write `potential.dx`; MPI-enabled builds append the
+    processing-element rank as `potential-PE0.dx`, even for a single-process
+    run. Homebrew's apbs 3.4.1 does the former, Debian's the latter — same
+    version, same input, different filename.
+    """
+
+    def test_finds_the_serial_name(self, tmp_path):
+        (tmp_path / "potential.dx").touch()
+        assert find_potential(tmp_path) == tmp_path / "potential.dx"
+
+    def test_finds_the_mpi_ranked_name(self, tmp_path):
+        (tmp_path / "potential-PE0.dx").touch()
+        assert find_potential(tmp_path) == tmp_path / "potential-PE0.dx"
+
+    def test_prefers_the_serial_name_when_both_exist(self, tmp_path):
+        (tmp_path / "potential.dx").touch()
+        (tmp_path / "potential-PE0.dx").touch()
+        assert find_potential(tmp_path) == tmp_path / "potential.dx"
+
+    def test_returns_none_when_nothing_was_written(self, tmp_path):
+        (tmp_path / "io.mc").touch()
+        (tmp_path / "input.in").touch()
+        assert find_potential(tmp_path) is None
+
+    def test_ignores_unrelated_dx_files(self, tmp_path):
+        (tmp_path / "charge.dx").touch()
+        assert find_potential(tmp_path) is None

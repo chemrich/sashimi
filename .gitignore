@@ -6,11 +6,8 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
-.venv
-
-# pixi
-.pixi/
+# uv-managed virtual environment
+.venv/
 
 # APBS scratch (written to cwd on every invocation, including --version)
 io.mc

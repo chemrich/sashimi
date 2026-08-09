@@ -65,6 +65,22 @@ def _tail(text: str, lines: int = 25) -> str:
     return "\n".join(text.strip().splitlines()[-lines:])
 
 
+def find_potential(work: Path) -> Path | None:
+    """Locate the DX grid APBS wrote, whichever name this build chose.
+
+    Serial builds write `<stem>.dx`. Builds compiled with MPI support append
+    the processing-element rank — `<stem>-PE0.dx` — even for a single-process
+    `mg-auto` run. Debian's apbs 3.4.1 does this and Homebrew's does not, so
+    the same version and the same input file produce different filenames on
+    different platforms. The contents are identical.
+    """
+    exact = work / f"{POTENTIAL_STEM}.dx"
+    if exact.exists():
+        return exact
+    ranked = sorted(work.glob(f"{POTENTIAL_STEM}-PE*.dx"))
+    return ranked[0] if ranked else None
+
+
 def _as_text(raw: object) -> str:
     """Captured output is str under `text=True` and bytes otherwise; typeshed
     annotates `TimeoutExpired.stdout` as bytes regardless, so accept both."""
@@ -124,11 +140,16 @@ def run_apbs(
                     f"Last output:\n{_tail(combined)}"
                 )
 
-        dx_path = work / f"{POTENTIAL_STEM}.dx"
-        if not dx_path.exists():
+        dx_path = find_potential(work)
+        if dx_path is None:
+            # Name what the run *did* leave behind. A build that writes the grid
+            # under another name, or writes nothing at all, are different faults
+            # and the message should not make the caller guess which happened.
+            produced = sorted(p.name for p in work.iterdir())
             raise ApbsCrash(
-                f"APBS exited {proc.returncode} without writing {dx_path.name}. "
+                f"APBS exited {proc.returncode} without writing {POTENTIAL_STEM}.dx. "
                 f"Exit code alone is not reliable here, so this is treated as failure.\n"
+                f"Files in the working directory: {produced}\n"
                 f"Last output:\n{_tail(combined)}"
             )
         try:

@@ -1,0 +1,63 @@
+{
+  "case": "born-ion",
+  "description": "Born ion (+1e, 3 A) solved through sashimi's own GridSpec/SolventModel. Regenerate with `uv run python scripts/build_corpus.py` after a deliberate, reviewed change; a diff here means the numbers moved.",
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 1.0,
+    "ionic_strength": 0.0,
+    "surface_method": "smol",
+    "surface_radius": 1.4,
+    "temperature": 298.15
+  },
+  "reference_backend": "apbs-3.4.1",
+  "cases": {
+    "res=0.5": {
+      "grid_spec": {
+        "resolution": 0.5,
+        "padding": 10.0
+      },
+      "dime": [
+        65,
+        65,
+        65
+      ],
+      "spacing": [
+        0.40625,
+        0.40625,
+        0.40625
+      ],
+      "energy_kj_mol": -230.0256961664,
+      "potential_at_x": {
+        "3.75": 1.9231189999999996,
+        "4.5": 1.5985702307692302,
+        "5.25": 1.3668659230769236,
+        "6.0": 1.1944734615384618,
+        "7.5": 0.953827976923077
+      }
+    },
+    "res=0.25": {
+      "grid_spec": {
+        "resolution": 0.25,
+        "padding": 10.0
+      },
+      "dime": [
+        129,
+        129,
+        129
+      ],
+      "spacing": [
+        0.203125,
+        0.203125,
+        0.203125
+      ],
+      "energy_kj_mol": -228.8693838586,
+      "potential_at_x": {
+        "3.75": 1.9195965384615379,
+        "4.5": 1.590893384615384,
+        "5.25": 1.3616740000000003,
+        "6.0": 1.1908425384615389,
+        "7.5": 0.9519694307692308
+      }
+    }
+  }
+}

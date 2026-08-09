@@ -21,34 +21,61 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # linux-64 is the lab target; macos-latest is arm64, which Phase 0
+        # linux-64 is the lab target; macos-latest is arm64, which phase 0
         # established as a first-class platform rather than a Rosetta fallback.
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
 
-      - uses: prefix-dev/setup-pixi@v0.10.1
+      # APBS is a compiled binary, so no Python installer can provide it, and
+      # micromamba is here for exactly one job: fetching it. It manages nothing
+      # Python — uv owns all of that below.
+      #
+      # conda-forge rather than the system package managers, deliberately. The
+      # alternatives work but neither is well-governed: macOS APBS lives only in
+      # the third-party brewsci/bio tap (Homebrew refuses to load it without an
+      # explicit trust step), and Debian's build differs from it in observable
+      # ways. conda-forge carries the same 3.4.1 for linux-64 and osx-arm64 from
+      # one channel with a public recipe, which is what CI should be testing.
+      - uses: mamba-org/setup-micromamba@v3.2.1
         with:
-          # Fail if pixi.lock is out of date with pixi.toml, rather than
-          # silently resolving something different from what runs locally.
-          locked: true
-          cache: true
+          environment-name: apbs
+          create-args: apbs=3.4.1
+          condarc: |
+            channels:
+              - conda-forge
+          cache-environment: true
+
+      - name: Point sashimi at the conda-forge APBS
+        shell: bash -el {0}
+        run: |
+          apbs_bin="$(micromamba run -n apbs which apbs)"
+          echo "SASHIMI_APBS_PATH=$apbs_bin" >> "$GITHUB_ENV"
+          # In a temp dir: every APBS invocation drops an io.mc log in cwd.
+          (cd "$(mktemp -d)" && "$apbs_bin" --version 2>&1 | head -3)
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install
+        # --frozen: fail if uv.lock is out of date with pyproject.toml, rather
+        # than silently resolving something different from what runs locally.
+        run: uv sync --frozen --all-groups
 
       - name: Lint
-        run: pixi run --frozen lint
+        run: uv run --frozen ruff check .
 
       - name: Format
-        run: pixi run --frozen ruff format --check .
+        run: uv run --frozen ruff format --check .
 
       - name: Type check
-        run: pixi run --frozen typecheck
+        run: uv run --frozen mypy
 
       - name: Test
-        # The full suite, APBS-marked tests included: the binary comes from the
-        # same lockfile as everything else, so it is present here.
-        run: pixi run --frozen pytest -q
+        run: uv run --frozen pytest -q
 
-  # Single stable check name for branch protection to require. Matrix job names
+  # Single stable check name for the branch ruleset to require. Matrix job names
   # change whenever the matrix does; this one does not.
   ci-ok:
     name: ci-ok

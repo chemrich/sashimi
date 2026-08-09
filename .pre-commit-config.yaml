@@ -1,8 +1,7 @@
-# Ruff and mypy run as local hooks through pixi rather than from their own
+# Ruff and mypy run as local hooks through uv rather than from their own
 # pre-commit mirrors. That keeps a single pinned version of each tool — the one
-# in pixi.lock — shared by this hook, `pixi run check`, and CI. Mirror hooks
-# carry their own `rev`, which drifts from the lockfile and is not something
-# dependabot can update (there is no pre-commit ecosystem).
+# in uv.lock — shared by this hook and CI. Mirror hooks carry their own `rev`,
+# which drifts from the lockfile.
 default_install_hook_types: [pre-commit, pre-push]
 
 repos:
@@ -26,14 +25,14 @@ repos:
     hooks:
       - id: ruff-check
         name: ruff check
-        entry: pixi run --frozen ruff check --force-exclude --fix
+        entry: uv run --frozen ruff check --force-exclude --fix
         language: system
         types_or: [python, pyi]
         require_serial: true
 
       - id: ruff-format
         name: ruff format
-        entry: pixi run --frozen ruff format --force-exclude
+        entry: uv run --frozen ruff format --force-exclude
         language: system
         types_or: [python, pyi]
         require_serial: true
@@ -43,7 +42,7 @@ repos:
       # do not exist and misses ones that do.
       - id: mypy
         name: mypy (strict)
-        entry: pixi run --frozen mypy
+        entry: uv run --frozen mypy
         language: system
         types_or: [python, pyi]
         pass_filenames: false
@@ -53,7 +52,7 @@ repos:
       # binary that a contributor may not have, and CI runs the full suite.
       - id: pytest-fast
         name: pytest (no binary required)
-        entry: pixi run --frozen pytest -m "not apbs" -q
+        entry: uv run --frozen pytest -m "not apbs" -q
         language: system
         types_or: [python, pyi, toml]
         pass_filenames: false

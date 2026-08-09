@@ -1,7 +1,3 @@
-# Note the coverage gap: Dependabot has no pixi ecosystem, so nothing here
-# updates pixi.toml or pixi.lock — apbs, pdb2pqr, ruff, mypy and pytest are all
-# pinned there and stay manual (`pixi update`). APBS 3.4.1 is deliberately
-# frozen anyway; the dev tools are the ones worth refreshing periodically.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -16,9 +12,22 @@ updates:
     commit-message:
       prefix: "ci"
 
-  # No pip ecosystem here, deliberately. pixi installs this package from
-  # pyproject.toml as an editable path dependency, so pyproject's constraints
-  # are baked into pixi.lock. Dependabot edits pyproject.toml and cannot
-  # regenerate the lockfile, which desyncs the two and fails CI's `--locked`
-  # check on every such PR. Proven the hard way by PR #1. Python dependencies
-  # are updated with `pixi update` instead.
+  # `uv`, not `pip`. The uv ecosystem updates pyproject.toml and uv.lock in the
+  # same commit; the pip ecosystem edits only the manifest, which desyncs the
+  # lockfile and fails CI's `--frozen` check. That is what happened under pixi
+  # in PR #1, and it is not a pixi-specific trap.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"
+
+# Not covered: APBS. It is a compiled binary from the system package manager
+# (brew / apt), which no Dependabot ecosystem tracks. tests/test_corpus.py is
+# the guard there — it asserts the version and re-checks the Born energies, so
+# a drifted build fails loudly rather than quietly changing results.

@@ -29,8 +29,8 @@ The protocol layer is the load-bearing decision. Everything above it speaks in p
 
 ```
 sashimi/
-├── pyproject.toml            # package metadata; runtime deps: numpy, pydantic, fastmcp
-├── pixi.toml                 # pins apbs=3.4.1 (conda-forge) + pdb2pqr=3.7.1 (pypi)
+├── pyproject.toml            # uv-managed; runtime deps: numpy, pdb2pqr, pydantic, fastmcp
+├── uv.lock                   # the single lockfile; APBS is a system prerequisite
 ├── src/sashimi/
 │   ├── protocol.py           # PQRData, GridSpec, PotentialGrid, SolveResult, Solver
 │   ├── pqr.py                # PQR read/write (own parser — trivial format, no deps)
@@ -40,7 +40,7 @@ sashimi/
 │   │   ├── input.py          # GridSpec → mg-auto input file (jinja-free f-strings)
 │   │   ├── grid.py           # physical grid intent → legal dime/cglen/fglen (psize logic)
 │   │   ├── run.py            # subprocess, tmpdir, timeout, stdout parsing, error mapping
-│   │   └── discover.py       # binary discovery: $SASHIMI_APBS_PATH → which() → pixi env
+│   │   └── discover.py       # binary discovery: $SASHIMI_APBS_PATH → which() → conda env
 │   ├── prep.py               # pdb2pqr subprocess wrapper (PDB → PQRData)
 │   ├── corpus.py             # golden-corpus build/verify (the debye validation target)
 │   └── mcp/server.py         # FastMCP tools
@@ -49,7 +49,7 @@ sashimi/
 │   ├── test_solver.py        # @pytest.mark.apbs — requires binary
 │   ├── test_analytic.py      # born ion vs closed-form
 │   └── corpus/               # checked-in golden summaries (JSON, not raw grids)
-└── .github/workflows/ci.yml  # micromamba installs apbs + pdb2pqr, runs full suite
+└── .github/workflows/ci.yml  # micromamba installs apbs; uv does the rest
 ```
 
 ## 4. The protocol layer (the debye contract)
@@ -102,7 +102,7 @@ Design notes. Units are fixed at the protocol boundary (Å, kT/e, kJ/mol) so deb
 
 **DX I/O** (`dx.py`): own reader/writer (~80 lines) rather than a `gridData`/MDAnalysis dependency — the format is trivial (header with counts/origin/deltas, then 3 floats per line, C-order) and owning it keeps sashimi's dependency tree at numpy + pydantic + fastmcp. Round-trip fidelity is unit-tested, and the writer exists so debye's output can be exported to DX for PyMOL/ChimeraX regardless of backend.
 
-**Binary discovery**: `$SASHIMI_APBS_PATH` env var wins, then a probe of the active pixi/conda env, then `shutil.which("apbs")`. The pixi env deliberately outranks bare `which()` — a system-wide APBS (e.g. Homebrew's, which is the same 3.4.1 today) otherwise shadows the pinned binary silently, and "reproducible env" stops meaning anything. `SolveResult.backend` records the resolved *path* alongside the version so provenance catches a shadowed binary after the fact. On failure, the error message includes the one-liner to fix it (`pixi add apbs` / `conda install -c conda-forge apbs`).
+**Binary discovery**: `$SASHIMI_APBS_PATH` env var wins, then `shutil.which("apbs")`, then an active conda env as a courtesy. APBS is compiled, so no Python installer can provide it. It arrives from conda-forge (what CI tests, and what §7 recommends) or a system package manager; `$SASHIMI_APBS_PATH` is how CI points at a specific one without touching PATH. `SolveResult.backend` records the resolved *path* alongside the version, so which binary produced a given result is always recoverable. On failure the error message includes the platform one-liner to fix it.
 
 Discovery's version probe must run inside a temp dir: **APBS writes an `io.mc` log into the working directory on every invocation, `apbs --version` included**. Solving is already covered by the per-solve `TemporaryDirectory` above, but a probe from the server's cwd litters the user's repo. `io.mc` is gitignored as a backstop.
 
@@ -132,7 +132,9 @@ Two calibration facts from the Phase 0 spike, both of which will otherwise produ
 
 The golden corpus is a first-class deliverable, not a test artifact. `sashimi corpus build` runs a fixed manifest of cases (structure + GridSpec + SolventModel, seeds pinned) and writes, per case, a JSON summary: grid geometry, energy, potential min/max/mean/std, and potential values at ~50 pinned probe points per structure. Summaries are checked into the repo; raw grids are reproducible on demand. `sashimi corpus verify --backend X` re-runs the manifest against any `Solver` and diffs within stated tolerances. Day one this is a regression net for sashimi itself (and for any future conda-forge APBS rebuild); the day debye exists, `sashimi corpus verify --backend debye` is its acceptance test, with APBS ground truth baked in and no APBS installation required.
 
-CI: GitHub Actions running `pixi run pytest` against the committed `pixi.lock`, full suite on `linux-64`. Using pixi rather than a hand-rolled micromamba env keeps CI and dev on the identical lockfile, and is what makes the mixed conda-forge/PyPI dependency split reproducible.
+CI: GitHub Actions running `uv run pytest` against the committed `uv.lock`, full suite on `ubuntu-latest` and `macos-latest`. uv covers Python exactly; APBS comes from conda-forge via micromamba, whose only job in CI is fetching that one binary. conda-forge is chosen over the system package managers for provenance — macOS APBS exists only in the third-party `brewsci/bio` tap, and Debian's build is MPI-enabled and names its output `potential-PE0.dx` rather than `potential.dx` (`find_potential` accepts either, and the binary-free tests cover both).
+
+Because APBS is no longer version-pinned by a lockfile, `tests/test_corpus.py` carries that weight: it asserts the discovered version and re-solves the Born ion against checked-in energies and probe values (`tests/corpus/born-sashimi.json`, regenerated deliberately via `scripts/build_corpus.py`). A drifted system binary fails there, in kJ/mol. This is the phase 0/1 slice of the golden corpus below, pulled forward to cover exactly what the lockfile used to.
 
 **Settled in Phase 0 — `osx-arm64` is fine.** conda-forge ships an `osx-arm64` build of apbs 3.4.1; it installs and runs natively on Apple silicon, and the Born ion reproduces the published energies to seven significant figures (`smol` −229.0124252387, `mol` −229.7735526282, vs APBS's −229.0124 / −229.7736). No Rosetta, no local build, no README caveat. Provisional ground truth is checked in at `tests/corpus/born-phase0.json`. Add `osx-arm64` to the CI matrix as a cheap regression guard.
 
