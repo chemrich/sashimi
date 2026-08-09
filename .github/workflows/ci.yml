@@ -39,9 +39,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends apbs
 
+      # APBS is not in homebrew-core — it lives in the third-party brewsci/bio
+      # tap, which recent Homebrew refuses to load without an explicit trust
+      # step. See README "Install" for what that means for provenance.
       - name: Install APBS (macOS)
         if: runner.os == 'macOS'
-        run: brew install apbs
+        run: |
+          brew tap brewsci/bio
+          brew trust brewsci/bio || true
+          brew install brewsci/bio/apbs
 
       - name: Report the APBS build under test
         run: apbs --version 2>&1 | head -3 || true

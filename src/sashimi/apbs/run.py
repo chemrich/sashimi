@@ -126,9 +126,14 @@ def run_apbs(
 
         dx_path = work / f"{POTENTIAL_STEM}.dx"
         if not dx_path.exists():
+            # Name what the run *did* leave behind. A build that writes the grid
+            # under another name, or writes nothing at all, are different faults
+            # and the message should not make the caller guess which happened.
+            produced = sorted(p.name for p in work.iterdir())
             raise ApbsCrash(
                 f"APBS exited {proc.returncode} without writing {dx_path.name}. "
                 f"Exit code alone is not reliable here, so this is treated as failure.\n"
+                f"Files in the working directory: {produced}\n"
                 f"Last output:\n{_tail(combined)}"
             )
         try:
