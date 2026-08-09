@@ -30,7 +30,7 @@ The protocol layer is the load-bearing decision. Everything above it speaks in p
 ```
 sashimi/
 ├── pyproject.toml            # uv-managed; runtime deps: numpy, pdb2pqr, pydantic, fastmcp
-├── uv.lock                   # the single lockfile; APBS comes from brew/apt
+├── uv.lock                   # the single lockfile; APBS is a system prerequisite
 ├── src/sashimi/
 │   ├── protocol.py           # PQRData, GridSpec, PotentialGrid, SolveResult, Solver
 │   ├── pqr.py                # PQR read/write (own parser — trivial format, no deps)
@@ -49,7 +49,7 @@ sashimi/
 │   ├── test_solver.py        # @pytest.mark.apbs — requires binary
 │   ├── test_analytic.py      # born ion vs closed-form
 │   └── corpus/               # checked-in golden summaries (JSON, not raw grids)
-└── .github/workflows/ci.yml  # micromamba installs apbs + pdb2pqr, runs full suite
+└── .github/workflows/ci.yml  # micromamba installs apbs; uv does the rest
 ```
 
 ## 4. The protocol layer (the debye contract)
@@ -102,7 +102,7 @@ Design notes. Units are fixed at the protocol boundary (Å, kT/e, kJ/mol) so deb
 
 **DX I/O** (`dx.py`): own reader/writer (~80 lines) rather than a `gridData`/MDAnalysis dependency — the format is trivial (header with counts/origin/deltas, then 3 floats per line, C-order) and owning it keeps sashimi's dependency tree at numpy + pydantic + fastmcp. Round-trip fidelity is unit-tested, and the writer exists so debye's output can be exported to DX for PyMOL/ChimeraX regardless of backend.
 
-**Binary discovery**: `$SASHIMI_APBS_PATH` env var wins, then `shutil.which("apbs")`, then an active conda env as a courtesy. APBS is compiled, so no Python installer can provide it and `which` is the normal answer; it arrives via `brew install apbs` or `apt install apbs`, both of which ship exactly 3.4.1. `SolveResult.backend` records the resolved *path* alongside the version, so which binary produced a given result is always recoverable. On failure the error message includes the platform one-liner to fix it.
+**Binary discovery**: `$SASHIMI_APBS_PATH` env var wins, then `shutil.which("apbs")`, then an active conda env as a courtesy. APBS is compiled, so no Python installer can provide it. It arrives from conda-forge (what CI tests, and what §7 recommends) or a system package manager; `$SASHIMI_APBS_PATH` is how CI points at a specific one without touching PATH. `SolveResult.backend` records the resolved *path* alongside the version, so which binary produced a given result is always recoverable. On failure the error message includes the platform one-liner to fix it.
 
 Discovery's version probe must run inside a temp dir: **APBS writes an `io.mc` log into the working directory on every invocation, `apbs --version` included**. Solving is already covered by the per-solve `TemporaryDirectory` above, but a probe from the server's cwd litters the user's repo. `io.mc` is gitignored as a backstop.
 
