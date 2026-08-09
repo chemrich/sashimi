@@ -140,7 +140,9 @@ CI: GitHub Actions running `pixi run pytest` against the committed `pixi.lock`, 
 
 **Phase 0 — spike (half a day). ✅ Done.** Pixi env with apbs 3.4.1 (conda-forge) + pdb2pqr 3.7.1 (PyPI); born example reproduces published energies on `osx-arm64`; energy, grid geometry, and five probe points locked in `tests/corpus/born-phase0.json`. Also confirmed the DX contract §5 assumes — 65³, uniform 0.1875 Å spacing, C-order, 3 floats per line, kT/e.
 
-**Phase 1 — core library (2–3 days).** `protocol.py`, `pqr.py`, `dx.py`, `apbs/` backend, unit + analytic tests green locally. Exit criterion: `ApbsSolver().solve_lpbe(pqr, GridSpec())` returns a correct Born energy from a Python REPL.
+**Phase 1 — core library (2–3 days). ✅ Done.** `protocol.py`, `pqr.py`, `dx.py`, `apbs/` backend; 49 tests green (31 of them binary-free). Exit criterion met: `ApbsSolver().solve_lpbe(pqr, GridSpec())` on the Born ion returns −230.03 / −228.87 / −228.56 kJ/mol at 0.41 / 0.20 / 0.16 Å spacing against a closed form of −228.61 — 0.62% → 0.11% → 0.02%, converging monotonically, which is what rules out a systematic unit error.
+
+One structural note: `GridTooLarge` and `ConvergenceFailure` are backend-neutral and live in `sashimi/errors.py`, while `ApbsNotFound` and `ApbsCrash` subclass them under `sashimi.apbs`. A native solver hits the first pair too; only the second pair is APBS's business. §5's four exception names all exist, just split across that boundary.
 
 **Phase 2 — MCP server (1–2 days).** The four tools, error mapping, MCP Inspector pass, registration in your Claude config alongside mcpymol. Exit criterion: from a chat session, prepare a PDB and produce a DX that PyMOL renders as a sane surface potential.
 

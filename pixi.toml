@@ -12,3 +12,14 @@ numpy = ">=2.0"
 [pypi-dependencies]
 # conda-forge tops out at 3.6.1; 3.7.1 is PyPI-only.
 pdb2pqr = "==3.7.1"
+sashimi = { path = ".", editable = true }
+
+[feature.dev.dependencies]
+pytest = ">=8.0"
+
+[environments]
+default = { features = ["dev"] }
+
+[tasks]
+test = "pytest"
+test-fast = "pytest -m 'not apbs'"
