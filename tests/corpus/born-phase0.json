@@ -1,0 +1,55 @@
+{
+  "case": "born-ion-smol-auto",
+  "backend": "apbs-3.4.1",
+  "platform": "osx-arm64",
+  "source": "APBS examples/born/apbs-smol-auto.in (3 A sphere, +1e, 3-level focus)",
+  "grid": {
+    "counts": [
+      65,
+      65,
+      65
+    ],
+    "origin": [
+      -6.0,
+      -6.0,
+      -6.0
+    ],
+    "spacing": [
+      0.1875,
+      0.1875,
+      0.1875
+    ]
+  },
+  "energy_kj_mol": {
+    "smol": -229.0124252387,
+    "mol": -229.7735526282,
+    "analytic": -228.6108
+  },
+  "potential_kT_e": {
+    "center": 5501.178,
+    "min": 0.686472,
+    "max": 5501.178,
+    "probes": {
+      "x=3.0": {
+        "apbs_kT_e": 4.063297,
+        "analytic_kT_e": 2.378658
+      },
+      "x=3.75": {
+        "apbs_kT_e": 1.924325,
+        "analytic_kT_e": 1.902926
+      },
+      "x=4.5": {
+        "apbs_kT_e": 1.595215,
+        "analytic_kT_e": 1.585772
+      },
+      "x=5.25": {
+        "apbs_kT_e": 1.365439,
+        "analytic_kT_e": 1.359233
+      },
+      "x=6.0": {
+        "apbs_kT_e": 1.196458,
+        "analytic_kT_e": 1.189329
+      }
+    }
+  }
+}

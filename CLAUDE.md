@@ -1,0 +1,1 @@
+This project implements PLAN.md. Backend is the conda-forge apbs 3.4.1 binary, never vendored source. The sashimi.protocol module is a stable contract for a future native solver (debye) — don't leak APBS concepts above it. Env is pixi-managed. Work through the phases in order; each has an exit criterion.
