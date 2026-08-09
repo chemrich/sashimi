@@ -27,30 +27,32 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # APBS is a compiled binary, so no Python installer can provide it. Both
-      # of these ship exactly 3.4.1 — Ubuntu 24.04 has 3.4.1-5.1ubuntu2 and the
-      # Homebrew formula is 3.4.1. Ubuntu 22.04 has only 3.0.0, so this job
-      # cannot be moved back to an older runner image. tests/test_corpus.py
-      # asserts the version and re-checks the Born numbers, which is what
-      # replaces the exact pin a lockfile used to give.
-      - name: Install APBS (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends apbs
+      # APBS is a compiled binary, so no Python installer can provide it, and
+      # micromamba is here for exactly one job: fetching it. It manages nothing
+      # Python — uv owns all of that below.
+      #
+      # conda-forge rather than the system package managers, deliberately. The
+      # alternatives work but neither is well-governed: macOS APBS lives only in
+      # the third-party brewsci/bio tap (Homebrew refuses to load it without an
+      # explicit trust step), and Debian's build differs from it in observable
+      # ways. conda-forge carries the same 3.4.1 for linux-64 and osx-arm64 from
+      # one channel with a public recipe, which is what CI should be testing.
+      - uses: mamba-org/setup-micromamba@v3.2.1
+        with:
+          environment-name: apbs
+          create-args: apbs=3.4.1
+          condarc: |
+            channels:
+              - conda-forge
+          cache-environment: true
 
-      # APBS is not in homebrew-core — it lives in the third-party brewsci/bio
-      # tap, which recent Homebrew refuses to load without an explicit trust
-      # step. See README "Install" for what that means for provenance.
-      - name: Install APBS (macOS)
-        if: runner.os == 'macOS'
+      - name: Point sashimi at the conda-forge APBS
+        shell: bash -el {0}
         run: |
-          brew tap brewsci/bio
-          brew trust brewsci/bio || true
-          brew install brewsci/bio/apbs
-
-      - name: Report the APBS build under test
-        run: apbs --version 2>&1 | head -3 || true
+          apbs_bin="$(micromamba run -n apbs which apbs)"
+          echo "SASHIMI_APBS_PATH=$apbs_bin" >> "$GITHUB_ENV"
+          # In a temp dir: every APBS invocation drops an io.mc log in cwd.
+          (cd "$(mktemp -d)" && "$apbs_bin" --version 2>&1 | head -3)
 
       - uses: astral-sh/setup-uv@v9.0.0
         with:

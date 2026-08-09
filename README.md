@@ -31,19 +31,29 @@ Two steps, because APBS is a compiled binary that no Python installer can
 provide. Install it from your system package manager first:
 
 ```sh
+# Recommended — same channel and build CI tests against, linux-64 and osx-arm64
+micromamba create -n apbs -c conda-forge apbs=3.4.1
+export SASHIMI_APBS_PATH="$(micromamba run -n apbs which apbs)"
+```
+
+Any conda-family tool works for that (`conda`, `mamba`, `pixi`); it manages
+nothing Python here, it just fetches one binary. If you would rather use a
+system package manager:
+
+```sh
 brew tap brewsci/bio && brew install brewsci/bio/apbs   # macOS, native arm64
 sudo apt install apbs    # Ubuntu 24.04+ / Debian 12+ (22.04 has only 3.0.0)
 ```
 
-Note that APBS is **not** in homebrew-core — `brewsci/bio` is a third-party
-tap, and recent Homebrew refuses to load it without an explicit trust step.
-Weigh that against conda-forge, which carries the same 3.4.1 under a governed
-channel, if provenance matters to you more than a single toolchain does.
+Both work, but neither is as well-governed: APBS is **not** in homebrew-core —
+`brewsci/bio` is a third-party tap that recent Homebrew refuses to load without
+an explicit trust step — and Debian's build differs observably from it. CI
+therefore tests the conda-forge build on both platforms.
 
-The two builds differ in one visible way: Debian's is MPI-enabled and writes
-its grid as `potential-PE0.dx` where Homebrew's writes `potential.dx`. Same
-version, same input, same contents. `sashimi.apbs.run.find_potential` accepts
-either.
+That difference is real and worth knowing: Debian's APBS is MPI-enabled and
+writes its grid as `potential-PE0.dx`, where the Homebrew and conda-forge
+builds write `potential.dx`. Same version, same input, same contents.
+`sashimi.apbs.run.find_potential` accepts either.
 
 Then everything else, which is pure Python:
 
