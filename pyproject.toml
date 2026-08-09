@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Thinly sliced Poisson: an MCP-native wrapper around APBS for biomolecular electrostatics"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["numpy>=2.5.1"]
+dependencies = ["numpy>=2.0"]
 
 [build-system]
 requires = ["hatchling"]
