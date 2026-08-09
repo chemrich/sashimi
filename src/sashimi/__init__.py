@@ -15,9 +15,9 @@ from sashimi.protocol import (
     GridSpec,
     PotentialGrid,
     PQRData,
-    SolveResult,
-    Solver,
     SolventModel,
+    Solver,
+    SolveResult,
 )
 
 __version__ = "0.1.0"
@@ -30,8 +30,8 @@ __all__ = [
     "PotentialGrid",
     "SashimiError",
     "SolveResult",
-    "Solver",
     "SolventModel",
+    "Solver",
     "SolverCrash",
     "SolverNotFound",
     "__version__",

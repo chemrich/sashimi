@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes the in-flight run obsolete. main is
+# excluded so pushes there always produce a complete, citable result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # linux-64 is the lab target; macos-latest is arm64, which Phase 0
+        # established as a first-class platform rather than a Rosetta fallback.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: prefix-dev/setup-pixi@v0.10.1
+        with:
+          # Fail if pixi.lock is out of date with pixi.toml, rather than
+          # silently resolving something different from what runs locally.
+          locked: true
+          cache: true
+
+      - name: Lint
+        run: pixi run --frozen lint
+
+      - name: Format
+        run: pixi run --frozen ruff format --check .
+
+      - name: Type check
+        run: pixi run --frozen typecheck
+
+      - name: Test
+        # The full suite, APBS-marked tests included: the binary comes from the
+        # same lockfile as everything else, so it is present here.
+        run: pixi run --frozen pytest -q
+
+  # Single stable check name for branch protection to require. Matrix job names
+  # change whenever the matrix does; this one does not.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all checks passed
+        run: |
+          if [ "${{ needs.check.result }}" != "success" ]; then
+            echo "check job result: ${{ needs.check.result }}"
+            exit 1
+          fi
+          echo "all checks passed"

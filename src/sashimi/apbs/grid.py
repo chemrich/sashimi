@@ -19,9 +19,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from sashimi.errors import GridTooLarge
-from sashimi.protocol import GridSpec, PQRData
+from sashimi.protocol import Diagnostics, GridSpec, PQRData
 
-__all__ = ["ApbsGrid", "legal_dime", "size_grid", "LEGAL_DIME"]
+__all__ = ["LEGAL_DIME", "ApbsGrid", "legal_dime", "size_grid"]
 
 CFAC = 1.7  # coarse grid / molecular extent, per psize.py
 LEVELS = 4  # mg-auto nlev; fixes the legal-dime lattice at 32c + 1
@@ -44,7 +44,7 @@ class ApbsGrid:
     def n_points(self) -> int:
         return self.dime[0] * self.dime[1] * self.dime[2]
 
-    def as_diagnostics(self) -> dict:
+    def as_diagnostics(self) -> Diagnostics:
         return {
             "dime": list(self.dime),
             "cglen": [round(v, 4) for v in self.cglen],

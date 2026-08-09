@@ -8,12 +8,27 @@ so no APBS concept (dime, cglen, fglen, chgm, srfm) may leak into this module.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import numpy as np
+import numpy.typing as npt
+
+DIMENSIONS = 3  # space, throughout
+
+# Every array crossing this boundary is float64. Pinning the dtype in the type
+# is what keeps `Any` from leaking out of numpy operations into the public API.
+FloatArray = npt.NDArray[np.float64]
+
+# Diagnostics are a deliberately open, JSON-shaped bag: what a backend can
+# usefully report differs per backend, so the values are not a fixed union.
+Diagnostics = dict[str, Any]
 
 __all__ = [
+    "DIMENSIONS",
+    "Diagnostics",
+    "FloatArray",
     "GridSpec",
     "PQRData",
     "PotentialGrid",
@@ -27,9 +42,9 @@ __all__ = [
 class PQRData:
     """A charged, radius-assigned structure. Units: angstroms and elementary charge."""
 
-    coords: np.ndarray  # (N, 3), A
-    charges: np.ndarray  # (N,), e
-    radii: np.ndarray  # (N,), A
+    coords: FloatArray  # (N, 3), A
+    charges: FloatArray  # (N,), e
+    radii: FloatArray  # (N,), A
     labels: tuple[str, ...] = ()  # optional per-atom "resName resSeq atomName"
 
     def __post_init__(self) -> None:
@@ -49,16 +64,19 @@ class PQRData:
     def total_charge(self) -> float:
         return float(self.charges.sum())
 
-    def extent(self) -> np.ndarray:
+    def _bounds(self) -> tuple[FloatArray, FloatArray]:
+        lo = np.asarray((self.coords - self.radii[:, None]).min(axis=0), dtype=np.float64)
+        hi = np.asarray((self.coords + self.radii[:, None]).max(axis=0), dtype=np.float64)
+        return lo, hi
+
+    def extent(self) -> FloatArray:
         """Bounding-box side lengths including atomic radii, (3,) in A."""
-        lo = (self.coords - self.radii[:, None]).min(axis=0)
-        hi = (self.coords + self.radii[:, None]).max(axis=0)
+        lo, hi = self._bounds()
         return hi - lo
 
-    def center(self) -> np.ndarray:
+    def center(self) -> FloatArray:
         """Geometric center of the radius-inflated bounding box, (3,) in A."""
-        lo = (self.coords - self.radii[:, None]).min(axis=0)
-        hi = (self.coords + self.radii[:, None]).max(axis=0)
+        lo, hi = self._bounds()
         return (lo + hi) / 2.0
 
 
@@ -107,12 +125,12 @@ class SolventModel:
 class PotentialGrid:
     """A uniform scalar field of electrostatic potential in kT/e."""
 
-    values: np.ndarray  # (nx, ny, nz), kT/e
-    origin: np.ndarray  # (3,), A — position of values[0, 0, 0]
-    spacing: np.ndarray  # (3,), A — uniform per-axis
+    values: FloatArray  # (nx, ny, nz), kT/e
+    origin: FloatArray  # (3,), A — position of values[0, 0, 0]
+    spacing: FloatArray  # (3,), A — uniform per-axis
 
     def __post_init__(self) -> None:
-        if self.values.ndim != 3:
+        if self.values.ndim != DIMENSIONS:
             raise ValueError(f"values must be 3-D, got shape {self.values.shape}")
         self.origin = np.asarray(self.origin, dtype=float).reshape(3)
         self.spacing = np.asarray(self.spacing, dtype=float).reshape(3)
@@ -121,22 +139,25 @@ class PotentialGrid:
 
     @property
     def shape(self) -> tuple[int, int, int]:
-        return self.values.shape  # type: ignore[return-value]
+        nx, ny, nz = self.values.shape
+        return nx, ny, nz
 
-    def to_dx(self, path) -> None:
+    def to_dx(self, path: str | os.PathLike[str]) -> None:
         """Write as OpenDX, for PyMOL/ChimeraX. Backend-independent by design."""
-        from sashimi.dx import write_dx
+        # Imported here, not at module scope: dx.py imports PotentialGrid from
+        # this module, so a top-level import would be circular.
+        from sashimi.dx import write_dx  # noqa: PLC0415
 
         write_dx(path, self)
 
-    def value_at(self, points: np.ndarray) -> np.ndarray:
+    def value_at(self, points: npt.ArrayLike) -> FloatArray:
         """Trilinearly interpolate at arbitrary coordinates, (M, 3) A -> (M,) kT/e.
 
         Points outside the grid yield NaN rather than a clamped edge value: a
         silently clamped potential reads as a real measurement.
         """
         pts = np.atleast_2d(np.asarray(points, dtype=float))
-        if pts.shape[-1] != 3:
+        if pts.shape[-1] != DIMENSIONS:
             raise ValueError(f"points must be (M, 3), got {pts.shape}")
 
         frac = (pts - self.origin) / self.spacing
@@ -164,7 +185,7 @@ class PotentialGrid:
         out[inside] = acc
         return out
 
-    def stats(self) -> dict:
+    def stats(self) -> Diagnostics:
         v = self.values
         return {
             "shape": list(v.shape),
@@ -182,7 +203,7 @@ class SolveResult:
     potential: PotentialGrid
     energy_kj_mol: float | None = None  # total polar solvation energy when requested
     backend: str = ""  # "apbs-3.4.1" | "debye-x.y" — provenance travels
-    diagnostics: dict = field(default_factory=dict)
+    diagnostics: Diagnostics = field(default_factory=dict)
 
 
 class Solver(Protocol):
@@ -190,7 +211,9 @@ class Solver(Protocol):
         self,
         pqr: PQRData,
         grid: GridSpec,
-        solvent: SolventModel = SolventModel(),
+        # B008 is about mutable defaults; SolventModel is a frozen dataclass, and
+        # spelling the default inline is what documents the physics at the call site.
+        solvent: SolventModel = SolventModel(),  # noqa: B008
         *,
         compute_energy: bool = False,
     ) -> SolveResult: ...

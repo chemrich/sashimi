@@ -1,0 +1,30 @@
+# Note the coverage gap: Dependabot has no pixi ecosystem, so nothing here
+# updates pixi.toml or pixi.lock — apbs, pdb2pqr, ruff, mypy and pytest are all
+# pinned there and stay manual (`pixi update`). APBS 3.4.1 is deliberately
+# frozen anyway; the dev tools are the ones worth refreshing periodically.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # One PR for all action bumps rather than four — they are near-always
+      # safe and reviewing them individually is pure overhead.
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    # Runtime dependencies are declared in pyproject.toml. The constraints are
+    # deliberately loose, so this mostly matters for security advisories.
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"

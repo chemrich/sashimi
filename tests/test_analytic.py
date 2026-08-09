@@ -8,9 +8,9 @@ a wrong factor produces a plausible-looking grid.
 import numpy as np
 import pytest
 
-from born_reference import born_potential, born_solvation_energy
 from sashimi.apbs import ApbsSolver
 from sashimi.protocol import GridSpec, PQRData, SolventModel
+from tests.born_reference import born_potential, born_solvation_energy
 
 pytestmark = pytest.mark.apbs
 

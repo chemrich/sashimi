@@ -16,6 +16,9 @@ sashimi = { path = ".", editable = true }
 
 [feature.dev.dependencies]
 pytest = ">=8.0"
+ruff = ">=0.14"
+mypy = ">=1.18"
+pre-commit = ">=4.0"
 
 [environments]
 default = { features = ["dev"] }
@@ -23,3 +26,8 @@ default = { features = ["dev"] }
 [tasks]
 test = "pytest"
 test-fast = "pytest -m 'not apbs'"
+lint = "ruff check ."
+format = "ruff format ."
+typecheck = "mypy src tests"
+# What CI runs, and what pre-commit approximates locally.
+check = { depends-on = ["lint", "typecheck", "test"] }

@@ -31,7 +31,7 @@ DEFAULT_TIMEOUT = 300.0
 
 _ENERGY_RE = re.compile(r"Global net ELEC energy\s*=\s*([-+0-9.eE]+)\s*kJ/mol")
 _TOTAL_ENERGY_RE = re.compile(r"Total electrostatic energy\s*=\s*([-+0-9.eE]+)\s*kJ/mol")
-_ITERATIONS_RE = re.compile(r"Vpmg_solve:\s*solution\s*took\s*([0-9.]+)\s*sec", re.I)
+_ITERATIONS_RE = re.compile(r"Vpmg_solve:\s*solution\s*took\s*([0-9.]+)\s*sec", re.IGNORECASE)
 
 # APBS exits 0 on these; they must be caught by reading stdout.
 _CONVERGENCE_SIGNATURES = (
@@ -65,6 +65,14 @@ def _tail(text: str, lines: int = 25) -> str:
     return "\n".join(text.strip().splitlines()[-lines:])
 
 
+def _as_text(raw: object) -> str:
+    """Captured output is str under `text=True` and bytes otherwise; typeshed
+    annotates `TimeoutExpired.stdout` as bytes regardless, so accept both."""
+    if isinstance(raw, bytes):
+        return raw.decode(errors="replace")
+    return raw if isinstance(raw, str) else ""
+
+
 def run_apbs(
     binary: ApbsBinary,
     *,
@@ -86,9 +94,13 @@ def run_apbs(
                 text=True,
                 timeout=timeout,
                 cwd=work,
+                # Deliberately not check=True: APBS exits 0 on several failures,
+                # so the exit code is not the signal. Success is verified below
+                # from the output that was actually produced.
+                check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            partial = _tail(exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or ""))
+            partial = _tail(_as_text(exc.stdout))
             raise ApbsCrash(
                 f"APBS timed out after {timeout:g}s. Reduce resolution or raise the timeout.\n"
                 f"Last output:\n{partial}"

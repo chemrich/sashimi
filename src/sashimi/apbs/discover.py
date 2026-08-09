@@ -80,6 +80,7 @@ def _probe_version(path: Path) -> str | None:
                 text=True,
                 timeout=30,
                 cwd=tmp,
+                check=False,  # a non-zero exit just means "not a usable APBS"
             )
         except (OSError, subprocess.SubprocessError):
             return None
@@ -88,7 +89,8 @@ def _probe_version(path: Path) -> str | None:
 
 
 @lru_cache(maxsize=8)
-def _discover_cached(explicit: str | None, conda_prefix: str | None, cwd: str) -> ApbsBinary:
+def _discover_cached(_explicit: str | None, _conda_prefix: str | None, _cwd: str) -> ApbsBinary:
+    """Arguments are cache keys only; `_candidates` reads the environment itself."""
     tried: list[str] = []
     for candidate in _candidates():
         if not candidate.is_file() or not os.access(candidate, os.X_OK):

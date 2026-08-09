@@ -12,46 +12,66 @@ three delta vectors, then the values in C order, three per line.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from sashimi.protocol import PotentialGrid
 
-__all__ = ["read_dx", "write_dx", "parse_dx"]
+__all__ = ["parse_dx", "read_dx", "write_dx"]
+
+_AXES = 3
+_SKEW_TOLERANCE = 1e-9  # a delta matrix this close to diagonal is axis-aligned
 
 
-def parse_dx(text: str) -> PotentialGrid:
+@dataclass
+class _Header:
+    counts: tuple[int, int, int]
+    origin: np.ndarray
+    deltas: list[list[float]]
+    n_items: int | None
+    data_start: int
+
+
+def _parse_header(lines: list[str]) -> _Header:
     counts: tuple[int, int, int] | None = None
     origin: np.ndarray | None = None
     deltas: list[list[float]] = []
     n_items: int | None = None
+    data_start: int | None = None
 
-    lines = text.splitlines()
-    data_start = None
     for i, raw in enumerate(lines):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         tok = line.split()
-        if tok[0] == "object" and "gridpositions" in line:
-            counts = tuple(int(v) for v in tok[-3:])  # type: ignore[assignment]
-        elif tok[0] == "origin":
+        if tok[0] == "origin":
             origin = np.array([float(v) for v in tok[1:4]])
         elif tok[0] == "delta":
             deltas.append([float(v) for v in tok[1:4]])
+        elif tok[0] == "object" and "gridpositions" in line:
+            counts = (int(tok[-3]), int(tok[-2]), int(tok[-1]))
         elif tok[0] == "object" and "class array" in line:
             if "items" in tok:
                 n_items = int(tok[tok.index("items") + 1])
             data_start = i + 1
             break
 
-    if counts is None or origin is None or len(deltas) < 3 or data_start is None:
+    if counts is None or origin is None or len(deltas) < _AXES or data_start is None:
         raise ValueError("malformed DX header: missing counts, origin, deltas, or data marker")
+    return _Header(counts, origin, deltas, n_items, data_start)
 
-    d = np.array(deltas[:3], dtype=float)
+
+def parse_dx(text: str) -> PotentialGrid:
+    lines = text.splitlines()
+    header = _parse_header(lines)
+    counts, origin, data_start = header.counts, header.origin, header.data_start
+    n_items = header.n_items
+
+    d = np.array(header.deltas[:_AXES], dtype=float)
     off_diagonal = d - np.diag(np.diag(d))
-    if np.any(np.abs(off_diagonal) > 1e-9):
+    if np.any(np.abs(off_diagonal) > _SKEW_TOLERANCE):
         raise ValueError("non-axis-aligned DX grids are not supported")
     spacing = np.diag(d)
     if np.any(spacing <= 0):
@@ -120,8 +140,5 @@ def write_dx(path: str | os.PathLike[str], grid: PotentialGrid, *, comment: str 
     ]
 
     flat = grid.values.reshape(-1)  # C order
-    body = [
-        " ".join(f"{v:.6e}" for v in flat[i : i + 3])
-        for i in range(0, n, 3)
-    ]
+    body = [" ".join(f"{v:.6e}" for v in flat[i : i + 3]) for i in range(0, n, 3)]
     Path(path).write_text("\n".join(head + body + tail))

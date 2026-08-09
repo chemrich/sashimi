@@ -38,7 +38,7 @@ def test_fine_grid_honors_padding():
 def test_coarse_grid_is_larger_than_fine():
     """Otherwise the Debye-Huckel boundary sits on the fine-grid edge."""
     grid = size_grid(ion(), GridSpec())
-    assert all(c > f for c, f in zip(grid.cglen, grid.fglen))
+    assert all(c > f for c, f in zip(grid.cglen, grid.fglen, strict=True))
     np.testing.assert_allclose(grid.cglen, np.array(grid.fglen) * CFAC)
 
 

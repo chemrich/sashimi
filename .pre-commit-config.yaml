@@ -1,0 +1,60 @@
+# Ruff and mypy run as local hooks through pixi rather than from their own
+# pre-commit mirrors. That keeps a single pinned version of each tool — the one
+# in pixi.lock — shared by this hook, `pixi run check`, and CI. Mirror hooks
+# carry their own `rev`, which drifts from the lockfile and is not something
+# dependabot can update (there is no pre-commit ecosystem).
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+        # Preserve the DX/PQR fixtures byte-for-byte; both formats are
+        # whitespace-sensitive and the tests assert on exact output.
+        exclude: ^tests/corpus/
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: pixi run --frozen ruff check --force-exclude --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: pixi run --frozen ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      # Whole-project, not per-file: mypy needs the full import graph to
+      # resolve types, so feeding it only the staged files reports errors that
+      # do not exist and misses ones that do.
+      - id: mypy
+        name: mypy (strict)
+        entry: pixi run --frozen mypy
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
+
+      # Only the binary-free tier on push: the APBS-marked tests need a solver
+      # binary that a contributor may not have, and CI runs the full suite.
+      - id: pytest-fast
+        name: pytest (no binary required)
+        entry: pixi run --frozen pytest -m "not apbs" -q
+        language: system
+        types_or: [python, pyi, toml]
+        pass_filenames: false
+        stages: [pre-push]

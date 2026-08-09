@@ -17,7 +17,7 @@ from __future__ import annotations
 from sashimi.apbs.grid import ApbsGrid
 from sashimi.protocol import SolventModel
 
-__all__ = ["build_input", "POTENTIAL_STEM"]
+__all__ = ["POTENTIAL_STEM", "build_input"]
 
 POTENTIAL_STEM = "potential"  # APBS appends .dx
 

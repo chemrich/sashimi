@@ -39,6 +39,36 @@ pixi run test-fast     # skips everything needing the binary
 pixi/conda environment is preferred over a system-wide `apbs`, so a Homebrew
 install cannot silently shadow the pinned one.
 
+## Development
+
+```sh
+pixi run pre-commit install   # once, per clone
+pixi run check                # lint + typecheck + test, same as CI
+```
+
+Ruff and mypy (strict) run as pre-commit hooks and again in CI. Both run
+*through pixi*, so the hook, `pixi run check`, and CI all use the one version
+pinned in `pixi.lock` — there is no second set of tool versions to drift. The
+binary-free test tier runs on push; CI runs the full suite including the
+APBS-marked tests.
+
+### Repository settings
+
+Two settings the checked-in workflows depend on, neither of which lives in the
+repo:
+
+1. **Settings → General → Allow auto-merge.** Without it, the Dependabot
+   auto-merge workflow fails at `gh pr merge --auto`.
+2. **A branch protection rule (or ruleset) on `main` requiring the `ci-ok`
+   status check.** This is what makes auto-merge *wait*. With no required
+   check, `--auto` merges as soon as the PR is mergeable — green CI or not.
+   `ci-ok` is a single job gating the whole matrix, so the required check name
+   stays stable when the matrix changes.
+
+Dependabot covers GitHub Actions and the `pyproject.toml` dependencies. It has
+no pixi support, so `pixi.toml` / `pixi.lock` — which is where APBS, pdb2pqr,
+ruff and mypy are pinned — stays manual via `pixi update`.
+
 ## Layers
 
 `sashimi.protocol` is the load-bearing boundary. Above it everything speaks

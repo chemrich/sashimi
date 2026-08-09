@@ -1,11 +1,13 @@
 """Backend behaviour that needs the real binary: discovery, error mapping,
 guardrails, and the DX contract as APBS actually writes it."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
-from sashimi.apbs import ApbsSolver, discover_apbs
-from sashimi.apbs.discover import ApbsNotFound
+from sashimi.apbs import ApbsSolver, discover, discover_apbs
+from sashimi.apbs.discover import ApbsNotFound, _probe_version
 from sashimi.apbs.grid import size_grid
 from sashimi.apbs.input import build_input
 from sashimi.apbs.run import ApbsCrash, run_apbs
@@ -47,8 +49,6 @@ def test_discovery_prefers_the_pinned_environment():
 
 def test_version_probe_leaves_no_io_mc(tmp_path, monkeypatch):
     """APBS writes io.mc into cwd on every invocation, --version included."""
-    from sashimi.apbs.discover import _probe_version
-
     binary = discover_apbs()
     monkeypatch.chdir(tmp_path)
     assert _probe_version(binary.path) is not None
@@ -91,13 +91,12 @@ def test_impossible_grid_fails_before_launching_apbs(ion):
 
 
 def test_missing_binary_raises_with_an_install_hint(monkeypatch):
-    from sashimi.apbs import discover
-
     discover._discover_cached.cache_clear()
     monkeypatch.setenv("SASHIMI_APBS_PATH", "/nonexistent/apbs")
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
-    monkeypatch.setattr(discover.shutil, "which", lambda _: None)
-    monkeypatch.setattr(discover.Path, "cwd", staticmethod(lambda: discover.Path("/")))
+    # String targets rather than reaching through the module's imported names.
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    monkeypatch.setattr("pathlib.Path.cwd", staticmethod(lambda: Path("/")))
     try:
         with pytest.raises(ApbsNotFound, match="pixi add apbs"):
             discover.discover_apbs()

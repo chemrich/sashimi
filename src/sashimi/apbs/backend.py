@@ -9,7 +9,7 @@ from sashimi.apbs.grid import size_grid
 from sashimi.apbs.input import build_input
 from sashimi.apbs.run import DEFAULT_TIMEOUT, parse_block_energies, run_apbs
 from sashimi.pqr import format_pqr
-from sashimi.protocol import GridSpec, PQRData, SolveResult, SolventModel
+from sashimi.protocol import GridSpec, PQRData, SolventModel, SolveResult
 
 __all__ = ["ApbsSolver"]
 
@@ -36,7 +36,7 @@ class ApbsSolver:
         self,
         pqr: PQRData,
         grid: GridSpec,
-        solvent: SolventModel = SolventModel(),
+        solvent: SolventModel = SolventModel(),  # noqa: B008 — frozen dataclass
         *,
         compute_energy: bool = False,
     ) -> SolveResult:

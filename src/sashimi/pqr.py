@@ -14,11 +14,15 @@ from pathlib import Path
 
 import numpy as np
 
-from sashimi.protocol import PQRData
+from sashimi.protocol import DIMENSIONS, PQRData
 
 __all__ = ["format_pqr", "parse_pqr", "read_pqr", "write_pqr"]
 
 _RECORDS = ("ATOM", "HETATM")
+
+# <record> <serial> <atom> <res> [chain] <resSeq> x y z q r
+_MIN_FIELDS = 9  # the same line without a chain ID
+_FIELDS_WITH_RESSEQ = 10
 
 
 def parse_pqr(text: str) -> PQRData:
@@ -31,20 +35,23 @@ def parse_pqr(text: str) -> PQRData:
         if not raw.startswith(_RECORDS):
             continue
         tok = raw.split()
-        # <record> <serial> <atom> <res> [chain] <resSeq> x y z q r
-        if len(tok) < 9:
-            raise ValueError(f"line {lineno}: expected at least 9 fields, got {len(tok)}: {raw!r}")
+        if len(tok) < _MIN_FIELDS:
+            raise ValueError(
+                f"line {lineno}: expected at least {_MIN_FIELDS} fields, got {len(tok)}: {raw!r}"
+            )
         try:
             x, y, z, q, r = (float(v) for v in tok[-5:])
         except ValueError as exc:
-            raise ValueError(f"line {lineno}: non-numeric coordinate/charge/radius: {raw!r}") from exc
+            raise ValueError(
+                f"line {lineno}: non-numeric coordinate/charge/radius: {raw!r}"
+            ) from exc
         if r < 0:
             raise ValueError(f"line {lineno}: negative radius {r}")
         coords.append((x, y, z))
         charges.append(q)
         radii.append(r)
         atom_name, res_name = tok[2], tok[3]
-        res_seq = tok[-6] if len(tok) >= 10 else ""
+        res_seq = tok[-6] if len(tok) >= _FIELDS_WITH_RESSEQ else ""
         labels.append(f"{res_name} {res_seq} {atom_name}".strip())
 
     if not coords:
@@ -73,7 +80,7 @@ def format_pqr(pqr: PQRData) -> str:
     for i in range(pqr.n_atoms):
         label = pqr.labels[i] if i < len(pqr.labels) else ""
         parts = label.split()
-        if len(parts) == 3:
+        if len(parts) == DIMENSIONS:  # res_name, res_seq, atom_name
             res_name, res_seq, atom_name = parts
         else:
             res_name, res_seq, atom_name = "UNK", str(i + 1), "X"

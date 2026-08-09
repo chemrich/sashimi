@@ -1,0 +1,45 @@
+name: Dependabot auto-merge
+
+# Enabling auto-merge is not the same as merging: GitHub queues the PR and
+# merges it only once every REQUIRED status check passes. That word "required"
+# is load-bearing — with no branch protection requiring `ci-ok`, there is
+# nothing to wait for and the PR merges as soon as it is mergeable. See
+# README.md "Repository settings" for the two settings this depends on.
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    # Verified via the event payload, not the PR title or branch name, so a
+    # contributor cannot get a PR auto-merged by naming it convincingly.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for patch and minor updates
+        # Majors are held for a human: a green CI run proves the suite still
+        # passes, not that a breaking change is acceptable.
+        if: |
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Explain why a major update was left alone
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr comment "$PR_URL" --body \
+            "Major version bump — auto-merge not enabled. Needs a human to look at the changelog."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
