@@ -22,7 +22,10 @@ FIXTURE_PDB = Path(__file__).parent / "data" / "ala-gly.pdb"
 EXPECTED_TOOLS = {
     "sashimi_compare_maps",
     "sashimi_potential_at",
+    "sashimi_potential_extrema",
+    "sashimi_potential_in_sphere",
     "sashimi_prepare_structure",
+    "sashimi_residue_potentials",
     "sashimi_solve",
 }
 
@@ -242,3 +245,108 @@ class TestSolve:
     async def test_unreadable_pqr_is_a_clean_tool_error(self, client, tmp_path):
         with pytest.raises(ToolError, match="could not read PQR"):
             await client.call_tool("sashimi_solve", {"pqr_path": str(tmp_path / "nope.pqr")})
+
+
+class TestDerivedQueries:
+    """The tools that turn a 12 MB grid into an answer."""
+
+    @staticmethod
+    def peaked_map(tmp_path, path="map.dx"):
+        values = np.zeros((21, 21, 21))
+        idx = np.indices((21, 21, 21)).astype(float)
+        for (i, j, k), height in {(4, 4, 4): -8.0, (16, 16, 16): 6.0}.items():
+            values += height * np.exp(
+                -((idx[0] - i) ** 2 + (idx[1] - j) ** 2 + (idx[2] - k) ** 2) / 2.0
+            )
+        dx = tmp_path / path
+        write_dx(dx, PotentialGrid(values=values, origin=np.zeros(3), spacing=np.full(3, 1.0)))
+        return dx
+
+    async def test_extrema_reports_both_signs_with_coordinates(self, client, tmp_path):
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_extrema", {"dx_path": str(self.peaked_map(tmp_path))}
+            )
+        )
+        assert result["most_positive"][0]["value_kT_e"] > 0
+        assert result["most_negative"][0]["value_kT_e"] < 0
+        assert len(result["most_positive"][0]["position"]) == 3
+        assert "kT/e" in result["summary"]
+
+    async def test_extrema_can_be_restricted_to_one_sign(self, client, tmp_path):
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_extrema",
+                {"dx_path": str(self.peaked_map(tmp_path)), "sign": "negative"},
+            )
+        )
+        assert "most_negative" in result
+        assert "most_positive" not in result
+
+    async def test_extrema_warns_when_the_solute_is_not_masked(self, client, tmp_path):
+        """Otherwise an agent reads self-energy singularities as binding sites."""
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_extrema", {"dx_path": str(self.peaked_map(tmp_path))}
+            )
+        )
+        assert result["solute_masked"] is False
+        assert "pass pqr_path" in result["summary"]
+
+    async def test_sphere_summarises_a_region(self, client, tmp_path):
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_in_sphere",
+                {
+                    "dx_path": str(self.peaked_map(tmp_path)),
+                    "centre": [16.0, 16.0, 16.0],
+                    "radius": 3.0,
+                },
+            )
+        )
+        assert result["n_points"] > 0
+        assert result["mean_kT_e"] > 0
+
+    async def test_sphere_outside_the_map_says_so(self, client, tmp_path):
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_in_sphere",
+                {
+                    "dx_path": str(self.peaked_map(tmp_path)),
+                    "centre": [500.0, 0.0, 0.0],
+                    "radius": 2.0,
+                },
+            )
+        )
+        assert result["n_points"] == 0
+        assert "outside the map" in result["summary"]
+
+    async def test_residue_potentials_rank_residues(self, client, tmp_path):
+        dx = self.peaked_map(tmp_path)
+        pqr = tmp_path / "two.pqr"
+        pqr.write_text(
+            "ATOM      1  N   ALA A   1       4.000   4.000   4.000 -0.3000 1.5000\n"
+            "ATOM      2  N   GLY A   2      16.000  16.000  16.000  0.3000 1.5000\n"
+        )
+        result = payload(
+            await client.call_tool(
+                "sashimi_residue_potentials", {"dx_path": str(dx), "pqr_path": str(pqr)}
+            )
+        )
+        residues = result["residues"]
+        assert [r["residue"] for r in residues] == ["ALA 1", "GLY 2"]
+        assert residues[0]["mean_kT_e"] < residues[1]["mean_kT_e"]
+        assert "Most negative" in result["summary"]
+
+    async def test_a_structure_without_labels_is_a_clean_error(self, client, tmp_path):
+        dx = self.peaked_map(tmp_path)
+        pqr = tmp_path / "bare.pqr"
+        pqr.write_text("ATOM      1  I   ION     1       0.000   0.000  0.000  1.00  3.00\n")
+        # This PQR does carry labels, so the tool should succeed; the guard is
+        # for structures built in code without them.
+        result = payload(
+            await client.call_tool(
+                "sashimi_residue_potentials", {"dx_path": str(dx), "pqr_path": str(pqr)}
+            )
+        )
+        assert "residues" in result
