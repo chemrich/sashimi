@@ -566,7 +566,20 @@ the same query returns −1.82 kT/e at a solvent-side position instead. The tool
 says in its response when the solute was not masked, because an agent cannot
 otherwise tell the difference between a binding site and an atom.
 
-Remaining: the MCP capabilities/validate-inputs surface; PyPI release, which
+Also done: the **capabilities and validate-inputs surface**.
+`sashimi_capabilities` reports backends and their state, portable surface
+models, units, grid defaults and what is deliberately unsupported — and reports
+a *missing* backend rather than raising, since the one tool that can explain an
+absent APBS must not be the one tool that cannot run.
+`sashimi_validate_inputs` dry-runs a request in single-digit milliseconds: grid
+sizing and surface mapping are pure arithmetic, so the dime, point count,
+estimated map size and any blocking problem are all knowable before a solve that
+would take a minute and write 56 MB. A relaxed resolution warns rather than
+blocks, because the solve would still run and would say so. A test asserts the
+prediction matches what `sashimi_solve` actually does — a forecast that can
+disagree with the event is worse than none.
+
+Remaining: PyPI release, which
 needs a distribution name — `sashimi` is taken on PyPI by a dormant saliency
 library, so the import name and the install name will differ; registration
 alongside mcpymol; and the Proxmox VM plus Tailscale for benchmark and timeout

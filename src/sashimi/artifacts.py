@@ -32,9 +32,21 @@ from typing import Any
 
 from sashimi.protocol import PQRData
 
-__all__ = ["ADDRESS_LENGTH", "content_address", "describe_cleanup", "map_path"]
+__all__ = [
+    "ADDRESS_LENGTH",
+    "BYTES_PER_DX_VALUE",
+    "content_address",
+    "describe_cleanup",
+    "estimated_dx_bytes",
+    "map_path",
+]
 
 ADDRESS_LENGTH = 12  # hex characters; 48 bits, ample against accidental collision
+
+# Measured against APBS 3.4.1 output: a 97^3 map is 12.3 MB, so 13.5 bytes per
+# value in text OpenDX. Used to tell a caller what a solve would cost on disk
+# before they pay for it.
+BYTES_PER_DX_VALUE = 13.5
 
 CLEANUP_CONTRACT = (
     "sashimi does not delete potential maps it writes. Filenames are content-"
@@ -80,6 +92,13 @@ def map_path(
     """Where a map with this address lives, alongside `base`."""
     directory = Path(base).expanduser().resolve().parent
     return directory / f"{stem}-{address}{suffix}"
+
+
+def estimated_dx_bytes(n_points: int) -> float:
+    """Roughly how large the OpenDX map for a grid of this size will be."""
+    if n_points < 0:
+        raise ValueError(f"n_points must be non-negative, got {n_points}")
+    return n_points * BYTES_PER_DX_VALUE
 
 
 def describe_cleanup() -> str:

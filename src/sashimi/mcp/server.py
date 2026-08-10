@@ -1,6 +1,6 @@
 """FastMCP tools.
 
-Four tools, all prefixed `sashimi_`. Parameters are flat and physically named
+All prefixed `sashimi_`. Parameters are flat and physically named
 rather than nested config objects — agents call those more reliably — and every
 response pairs structured content with a short human-readable summary.
 
@@ -27,6 +27,7 @@ from pydantic import Field
 from sashimi.analysis import potential_extrema, potential_in_sphere, residue_potentials
 from sashimi.apbs import ApbsSolver
 from sashimi.artifacts import content_address, describe_cleanup, map_path
+from sashimi.capabilities import describe_capabilities, validate_request
 from sashimi.dx import read_dx
 from sashimi.errors import SashimiError
 from sashimi.pqr import read_pqr
@@ -48,7 +49,9 @@ mcp: FastMCP[Any] = FastMCP(
         "sashimi_prepare_structure on a PDB to get a PQR (read its warnings — "
         "rebuilt sidechains change the energies), then sashimi_solve for a "
         "potential map and optional solvation energy, then sashimi_potential_at "
-        "to query the saved map without re-solving. Potentials are kT/e, "
+        "to query the saved map without re-solving. Call sashimi_capabilities "
+        "to see what this installation supports, and sashimi_validate_inputs to "
+        "check a solve's cost before running it. Potentials are kT/e, "
         "energies kJ/mol, distances angstroms. " + describe_cleanup()
     ),
 )
@@ -465,6 +468,66 @@ def sashimi_residue_potentials(
             + note
         ),
     }
+
+
+@mcp.tool
+def sashimi_capabilities() -> dict[str, Any]:
+    """What this installation can do: backends, surface models, units, limits.
+
+    Ask this before planning work rather than discovering the answer by failing.
+    A missing backend is reported here, with the reason — this tool is
+    deliberately the one that still works when nothing else does.
+    """
+    return describe_capabilities()
+
+
+@mcp.tool
+def sashimi_validate_inputs(
+    *,
+    pqr_path: Annotated[str, Field(description="Path to a PQR file.")],
+    resolution: Annotated[
+        float, Field(description="Target fine-grid spacing, angstroms.", gt=0, le=5.0)
+    ] = 0.5,
+    padding: Annotated[
+        float,
+        Field(description="Minimum solute-surface to grid-edge distance, angstroms.", ge=0),
+    ] = 10.0,
+    surface_model: Annotated[
+        str, Field(description="Dielectric boundary definition, as for sashimi_solve.")
+    ] = "smoothed-molecular",
+    max_points: Annotated[
+        int | None,
+        Field(description="Grid point budget. Omit for the default guardrail.", gt=0),
+    ] = None,
+) -> dict[str, Any]:
+    """Check a solve before paying for it: grid shape, map size, whether it works.
+
+    Runs no solver. Grid sizing is arithmetic, so the point count, the achieved
+    spacing, the estimated map size on disk and any blocking problem are all
+    knowable in milliseconds — worth asking first when a solve can take a minute
+    and write tens of megabytes.
+
+    `ok` is false only for problems that would prevent the solve. A relaxed
+    resolution is reported as a warning, because the solve would still run and
+    the result would say it happened.
+    """
+    try:
+        structure = read_pqr(Path(pqr_path).expanduser())
+    except (OSError, ValueError) as exc:
+        raise ToolError(f"could not read PQR {pqr_path}: {exc}") from exc
+
+    try:
+        solvent = SolventModel(surface_model=SurfaceModel(surface_model))
+    except ValueError as exc:
+        supported = ", ".join(sorted(m.value for m in SurfaceModel))
+        raise ToolError(f"unknown surface_model {surface_model!r}; one of: {supported}") from exc
+
+    spec = GridSpec(
+        resolution=resolution,
+        padding=padding,
+        **({"max_points": max_points} if max_points is not None else {}),
+    )
+    return validate_request(structure, spec, solvent)
 
 
 def _load_grid(path: str) -> PotentialGrid:
