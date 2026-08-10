@@ -47,19 +47,11 @@ APBS_VOCABULARY = (
     "mdh",
 )
 
-# protocol.py currently fails this: `SolventModel.surface_method` is typed
-# Literal["smol", "spl2", "mol"], which is APBS's `srfm` values sitting two
-# layers above the backend. ROADMAP.md section 4.1 item 5 records it as phase 4
-# work; strict xfail means this flips to a failure the moment it is fixed, so
-# the marker cannot outlive the debt.
-KNOWN_LEAK = pytest.param(
-    "protocol.py",
-    marks=pytest.mark.xfail(
-        strict=True,
-        reason="ROADMAP.md 4.1 item 5: surface_method carries APBS srfm values",
-    ),
-)
-VOCABULARY_MODULES = (KNOWN_LEAK, "dx.py", "pqr.py", "errors.py")
+# Phase 4 paid the debt this used to carry: `SolventModel.surface_method`, once
+# Literal["smol", "spl2", "mol"], is now a solver-neutral `SurfaceModel` enum
+# and the APBS keywords live in `sashimi.apbs.options`. The strict xfail that
+# tracked it is gone because it started passing, which is what strict is for.
+VOCABULARY_MODULES = PROTOCOL_MODULES
 
 
 def imports_of(path: Path) -> set[str]:
@@ -99,10 +91,9 @@ def test_protocol_modules_stay_dependency_light(module):
 def test_no_apbs_vocabulary_above_the_backend(module):
     """CLAUDE.md's layering rule, enforced rather than trusted.
 
-    `SolventModel.surface_method` carries APBS's `srfm` values today, which is
-    why protocol.py is an expected failure here. Phase 4 replaces it with a
-    solver-neutral enum; at that point the xfail marker must be removed, and
-    strict=True guarantees someone notices.
+    `SolventModel.surface_method` carried APBS's `srfm` values through phases
+    1-3. Phase 4 replaced it with a solver-neutral `SurfaceModel`; this test is
+    what stops the leak recurring.
     """
     text = (SRC / module).read_text().lower()
     # Comments may discuss APBS; code may not use its vocabulary as values.

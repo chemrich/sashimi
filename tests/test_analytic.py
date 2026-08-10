@@ -9,7 +9,13 @@ import numpy as np
 import pytest
 
 from sashimi.apbs import ApbsSolver
-from sashimi.protocol import GridSpec, PQRData, SolventModel
+from sashimi.protocol import (
+    FiniteDifferenceRequest,
+    GridSpec,
+    PQRData,
+    SolventModel,
+    SurfaceModel,
+)
 from tests.born_reference import born_potential, born_solvation_energy
 
 pytestmark = pytest.mark.apbs
@@ -22,7 +28,7 @@ BORN_SOLVENT = SolventModel(
     solvent_dielectric=78.54,
     solute_dielectric=1.0,
     ionic_strength=0.0,
-    surface_method="smol",
+    surface_model=SurfaceModel.SMOOTHED_MOLECULAR,
     surface_radius=1.4,
     temperature=298.15,
 )
@@ -43,11 +49,12 @@ def solved(born_ion):
     """Solve once per resolution; APBS runs are seconds, not milliseconds."""
     solver = ApbsSolver()
     return {
-        res: solver.solve_lpbe(
-            born_ion,
-            GridSpec(resolution=res, padding=10.0),
-            BORN_SOLVENT,
-            compute_energy=True,
+        res: solver.solve(
+            FiniteDifferenceRequest(
+                structure=born_ion,
+                solvent=BORN_SOLVENT,
+                grid=GridSpec(resolution=res, padding=10.0),
+            )
         )
         for res in (0.5, 0.25)
     }
@@ -97,8 +104,12 @@ def test_potential_is_positive_and_decays(solved):
 
 def test_provenance_and_diagnostics_travel(solved):
     result = solved[0.5]
-    assert result.backend.startswith("apbs-3.")
+    assert result.provenance.backend.startswith("apbs-3.")
     assert result.diagnostics["dime"] == [65, 65, 65]
     assert result.diagnostics["n_points"] == 65**3
     assert result.diagnostics["resolution_relaxed"] is False
-    assert "binary_path" in result.diagnostics
+    assert result.provenance.binary_path is not None
+    # Surface model travels with the result: it is the largest modelling
+    # confounder, and cross-solver comparison checks it before reporting.
+    assert result.provenance.resolved_parameters["surface_model"] == "smoothed-molecular"
+    assert result.provenance.resolved_parameters["apbs"]["srfm"] == "smol"

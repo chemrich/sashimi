@@ -22,16 +22,16 @@ from sashimi.corpus import (
     write_summary,
 )
 from sashimi.errors import SashimiError
-from sashimi.protocol import Solver
+from sashimi.protocol import FiniteDifferenceRequest, Solver
 
 __all__ = ["main"]
 
 # Backends `--backend` can name. debye registers itself here when it exists;
 # the corpus is designed to be its acceptance gate.
-BACKENDS: dict[str, Callable[[], Solver]] = {}
+BACKENDS: dict[str, Callable[[], Solver[FiniteDifferenceRequest]]] = {}
 
 
-def _apbs_solver() -> Solver:
+def _apbs_solver() -> Solver[FiniteDifferenceRequest]:
     from sashimi.apbs import ApbsSolver  # noqa: PLC0415 — keeps `--help` binary-free
 
     return ApbsSolver()

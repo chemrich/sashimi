@@ -148,27 +148,30 @@ smallest legal dime meeting the resolution target, capped by `max_points`.
 `diagnostics` reports the grid actually used, so callers can detect when the
 resolution target was relaxed.
 
-### 4.1 As built vs. target — the known debt
+### 4.1 Resolved in phase 4
 
-The protocol shipped in phases 1–2 is APBS-shaped in four specific ways. Each
-is a deliberate item for phase 4, not a settled design:
+The protocol shipped in phases 1-3 was APBS-shaped in five specific ways. All
+five are now paid; the table is kept because the *reasons* remain the design
+rationale, and because a future backend will test them again.
 
-| # | As built | Target | Why it matters |
-|---|---|---|---|
-| 1 | `GridSpec` is the second positional parameter of `Solver.solve_lpbe` | A solver-family-specific request payload; FD backends take a grid, BEM backends do not | A BEM backend cannot implement the current signature honestly |
-| 2 | `SolveResult.potential` is a required `PotentialGrid`; `energy_kj_mol` is optional | `potential: PotentialGrid \| SurfacePotential \| None`, energy **always** present | Solvation energy is the universal currency — every solver produces it; a volume grid is not |
-| 3 | Provenance is backend string + resolved path + wall time | Also binary checksum and the full resolved parameter set | Makes results reproducible and cross-solver comparison first-class |
-| 4 | Errors split backend-neutral vs APBS-specific | Split *input* / *solver* / *environment* | The current axis does not tell a caller whose fault it is or what to do |
-| 5 | `SolventModel.surface_method` is `Literal["smol", "spl2", "mol"]` | A solver-neutral surface enum; native values behind per-backend options | Those are APBS `srfm` *values* sitting two layers above the backend. DelPhi's Gaussian dielectric is not a member, and a BEM mesh density is not on the list at all |
+| # | Was | Now |
+|---|---|---|
+| 1 | `GridSpec` was the second positional parameter of `solve_lpbe` | `FiniteDifferenceRequest.grid`; `BoundaryElementRequest` has no such field |
+| 2 | `potential` required, `energy_kj_mol` optional | `potential: PotentialGrid \| SurfacePotential \| None`; both are requested via `want_energy` / `want_potential` and `check_satisfies` enforces delivery |
+| 3 | Provenance was a backend string | `Provenance` with binary path, **sha256**, resolved parameters and wall time |
+| 4 | Errors split backend-neutral vs APBS-specific | `InputError` / `SolverError` / `BackendUnavailable`, by who can act |
+| 5 | `surface_method: Literal["smol", "spl2", "mol"]` | `SurfaceModel` enum; APBS keywords live in `sashimi.apbs.options` |
 
-Item 5 was found while resolving §14's open questions and is guarded by
-`tests/test_protocol_boundary.py`, which marks it a strict `xfail` — the marker
-fails once the debt is paid, so it cannot outlive it. That file also asserts the
-protocol seam of §10.
+Item 2 deviates from the original wording in one respect worth flagging: energy
+is *requested*, not unconditionally computed. Making it mandatory would force
+the APBS reference calculation on every solve — roughly double the work — for a
+caller who only wants a map to colour a surface with. `want_energy` defaults to
+true, so the common path is unchanged; `check_satisfies` is what makes the
+request binding.
 
-The migration cost is real and grows with every caller: today those are
-`sashimi.mcp.server`, `sashimi.corpus`, and the test suite. That is the argument
-for doing phase 4 before phase 5, not after.
+`tests/test_bem_contract.py` is the standing check: a real `Solver`
+implementation returning surface potentials, exercised through the same types
+APBS uses, in the binary-free tier.
 
 ### 4.2 Error taxonomy
 
@@ -519,26 +522,25 @@ build|verify`, summaries checked in. Exit criterion demonstrated four ways: a
 (kT/e↔mV), spacing by 10 (Å↔nm), or flipping the energy sign is caught, with the
 moved field named. Tolerances tested from both sides.
 
-**Phase 4 — Protocol hardening. ← next.** The five items in §4.1: demote the
-grid specification to an FD-family request detail; make potential a
-`PotentialGrid | SurfacePotential | None` union with energy always present; add
-binary checksum and resolved parameters to provenance; restructure errors into
-input / solver / environment; replace `surface_method` with a solver-neutral
-enum. Plus, from §14's decisions:
+**Phase 4 — Protocol hardening. ✅** All five items of §4.1, plus the equation
+in the FD-family request payload (representable; `ApbsSolver` refuses to solve
+it rather than returning untested numbers), a `SurfaceModel` enum with APBS
+keywords moved to `sashimi.apbs.options`, and binary checksums in provenance.
 
-- the PB equation (linear/nonlinear) as a field of the **FD-family** request
-  payload, so a BEM backend cannot be handed a nonlinear request — representable
-  but *not implemented*, no `npbe` code and no nonlinear corpus cases yet;
-- an explicit reference type in the corpus (`RecordedReference` /
-  `BackendReference`), which is what makes phase 7's `validate` thin;
-- content-addressed DX filenames derived from the resolved-parameter hash, plus
-  a documented cleanup contract and an explicit local-filesystem assumption;
-- the protocol test suite that runs everywhere with no binary, alongside the
-  existing `tests/test_protocol_boundary.py`.
+Exit criterion met: `sashimi.bem_stub.StubBemSolver` implements
+`Solver[BoundaryElementRequest]`, returns a `SurfacePotential` through the
+shared `SolveResult`, declines a volumetric field, and refuses a Gaussian
+dielectric as an `InputError` — with no APBS-shaped concession anywhere. The
+strict `xfail` on `surface_method` started passing and its marker is gone.
 
-Exit criterion: a stub BEM backend returning surface potentials satisfies the
-protocol without a single APBS-shaped concession, and the strict `xfail` on
-`surface_method` has been removed because it passes.
+Evidence the rewrite changed no physics: all five corpus energies are
+bit-identical across it, to the last recorded digit. The only diffs in the
+recorded summaries are `surface_method: "smol"` becoming
+`surface_model: "smoothed-molecular"` and the new `resolved_parameters` block.
+
+Deferred to phase 5, having grown out of scope here: content-addressed DX
+filenames and the corpus reference type. Both are additive and neither blocks
+shipping.
 
 **Phase 5 — Ship it.** PyPI release with conda-forge APBS documented as
 prerequisite; MCP capabilities/validate-inputs surface; register alongside

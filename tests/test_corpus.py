@@ -24,7 +24,12 @@ from sashimi.corpus import (
     verify_manifest,
     write_summary,
 )
-from sashimi.protocol import GridSpec, PQRData, SolventModel, Solver, SolveResult
+from sashimi.protocol import (
+    FiniteDifferenceRequest,
+    PotentialGrid,
+    Solver,
+    SolveResult,
+)
 from tests.born_reference import born_solvation_energy
 
 pytestmark = pytest.mark.apbs
@@ -49,24 +54,19 @@ class Perturbed:
     looks right and produces a plausible grid with the wrong units.
     """
 
-    inner: Solver
+    inner: Solver[FiniteDifferenceRequest]
     energy_factor: float = 1.0
     potential_factor: float = 1.0
     spacing_factor: float = 1.0
 
-    def solve_lpbe(
-        self,
-        pqr: PQRData,
-        grid: GridSpec,
-        solvent: SolventModel = SolventModel(),  # noqa: B008 — frozen dataclass
-        *,
-        compute_energy: bool = False,
-    ) -> SolveResult:
-        result = self.inner.solve_lpbe(pqr, grid, solvent, compute_energy=compute_energy)
+    def solve(self, request: FiniteDifferenceRequest) -> SolveResult:
+        result = self.inner.solve(request)
         if result.energy_kj_mol is not None:
             result.energy_kj_mol *= self.energy_factor
-        result.potential.values = result.potential.values * self.potential_factor
-        result.potential.spacing = result.potential.spacing * self.spacing_factor
+        grid = result.potential
+        assert isinstance(grid, PotentialGrid)
+        grid.values = grid.values * self.potential_factor
+        grid.spacing = grid.spacing * self.spacing_factor
         return result
 
 
