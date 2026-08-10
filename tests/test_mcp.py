@@ -20,6 +20,7 @@ from sashimi.protocol import PotentialGrid
 FIXTURE_PDB = Path(__file__).parent / "data" / "ala-gly.pdb"
 
 EXPECTED_TOOLS = {
+    "sashimi_capabilities",
     "sashimi_compare_maps",
     "sashimi_potential_at",
     "sashimi_potential_extrema",
@@ -27,6 +28,7 @@ EXPECTED_TOOLS = {
     "sashimi_prepare_structure",
     "sashimi_residue_potentials",
     "sashimi_solve",
+    "sashimi_validate_inputs",
 }
 
 
@@ -55,6 +57,9 @@ class TestSurface:
         for tool in await client.list_tools():
             assert tool.description, f"{tool.name} has no description"
             props = (tool.inputSchema or {}).get("properties", {})
+            # sashimi_capabilities takes no arguments by design.
+            if tool.name == "sashimi_capabilities":
+                continue
             assert props, f"{tool.name} exposes no parameters"
             for name, schema in props.items():
                 assert schema.get("description"), f"{tool.name}.{name} is undocumented"
@@ -350,3 +355,77 @@ class TestDerivedQueries:
             )
         )
         assert "residues" in result
+
+
+class TestDiscoverySurface:
+    """Capabilities and dry-run validation, through the client."""
+
+    @staticmethod
+    def ion_pqr(tmp_path):
+        pqr = tmp_path / "ion.pqr"
+        pqr.write_text("ATOM      1  I   ION     1       0.000   0.000  0.000  1.00  3.00\n")
+        return pqr
+
+    async def test_capabilities_needs_no_arguments(self, client):
+        result = payload(await client.call_tool("sashimi_capabilities", {}))
+        assert "units" in result
+        assert result["units"]["potential"] == "kT/e"
+        assert "backend" in result["summary"]
+
+    async def test_capabilities_names_the_unsupported(self, client):
+        result = payload(await client.call_tool("sashimi_capabilities", {}))
+        assert any("nonlinear" in item for item in result["not_supported"])
+
+    async def test_validate_reports_cost_without_solving(self, client, tmp_path):
+        result = payload(
+            await client.call_tool(
+                "sashimi_validate_inputs",
+                {"pqr_path": str(self.ion_pqr(tmp_path)), "resolution": 0.5, "padding": 10.0},
+            )
+        )
+        assert result["ok"] is True
+        assert result["grid"]["dime"] == [65, 65, 65]
+        assert result["grid"]["estimated_map_mb"] > 0
+        # No map was written: this is arithmetic, not a solve.
+        assert not list(tmp_path.glob("*.dx"))
+
+    async def test_validate_blocks_an_impossible_grid(self, client, tmp_path):
+        result = payload(
+            await client.call_tool(
+                "sashimi_validate_inputs",
+                {
+                    "pqr_path": str(self.ion_pqr(tmp_path)),
+                    "resolution": 0.5,
+                    "padding": 80.0,
+                    "max_points": 1000,
+                },
+            )
+        )
+        assert result["ok"] is False
+        assert "Would not run" in result["summary"]
+
+    async def test_validate_rejects_an_unknown_surface_model(self, client, tmp_path):
+        with pytest.raises(ToolError, match="unknown surface_model"):
+            await client.call_tool(
+                "sashimi_validate_inputs",
+                {"pqr_path": str(self.ion_pqr(tmp_path)), "surface_model": "banana"},
+            )
+
+    @pytest.mark.apbs
+    async def test_validate_agrees_with_what_solve_actually_does(self, client, tmp_path):
+        """The prediction is worthless if it disagrees with the real thing."""
+        pqr = self.ion_pqr(tmp_path)
+        predicted = payload(
+            await client.call_tool(
+                "sashimi_validate_inputs",
+                {"pqr_path": str(pqr), "resolution": 1.0, "padding": 6.0},
+            )
+        )
+        actual = payload(
+            await client.call_tool(
+                "sashimi_solve",
+                {"pqr_path": str(pqr), "resolution": 1.0, "padding": 6.0},
+            )
+        )
+        assert predicted["grid"]["dime"] == actual["grid"]["shape"]
+        assert predicted["grid"]["resolution_relaxed"] == actual["grid"]["resolution_relaxed"]
