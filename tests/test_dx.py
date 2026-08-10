@@ -5,7 +5,7 @@ from sashimi.apbs.run import find_potential
 from sashimi.dx import parse_dx, read_dx, write_dx
 from sashimi.protocol import PotentialGrid
 
-# The header layout verified against APBS 3.4.1 output in Phase 0.
+# The header layout verified against APBS 3.4.1 output in phase 0.
 APBS_HEADER = """\
 # Data from APBS 3.4.1
 #

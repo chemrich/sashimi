@@ -48,7 +48,7 @@ asyncio_default_fixture_loop_scope = "function"
 line-length = 100
 target-version = "py313"
 src = ["src", "tests"]
-# Ruff formats Python blocks inside Markdown. PLAN.md's snippets are
+# Ruff formats Python blocks inside Markdown. ROADMAP.md's snippets are
 # illustrative and column-aligned for reading, not code to be normalized.
 extend-exclude = ["*.md"]
 
@@ -80,9 +80,9 @@ select = [
 ]
 ignore = [
     # solve_lpbe's parameters are the API; collapsing them into a config object
-    # is exactly what section 6 rejects for being harder for agents to call.
+    # is exactly what ROADMAP.md section 6 rejects as harder for agents to call.
     "PLR0913",
-    # PLAN.md section 5 names these exceptions: GridTooLarge, ConvergenceFailure,
+    # ROADMAP.md section 4.2 names these exceptions: GridTooLarge, ConvergenceFailure,
     # ApbsNotFound, ApbsCrash. They are the documented contract, so an -Error
     # suffix would put the linter ahead of the spec.
     "N818",

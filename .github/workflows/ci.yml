@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # linux-64 is the lab target; macos-latest is arm64, which phase 0
+        # linux-64 is the lab target; macos-latest is arm64, which ROADMAP.md phase 0
         # established as a first-class platform rather than a Rosetta fallback.
         os: [ubuntu-latest, macos-latest]
     steps:

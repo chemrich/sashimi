@@ -1,6 +1,6 @@
 """The golden corpus, and proof that it catches what it exists to catch.
 
-PLAN.md phase 3's exit criterion is that a deliberate unit-conversion bug is
+ROADMAP.md phase 3's exit criterion is that a deliberate unit-conversion bug is
 caught by `corpus verify`. That is what `TestCatchesUnitBugs` demonstrates: a
 solver wrapper that scales energies, potentials or lengths by a plausible wrong
 factor, and a verification pass that names the field that moved.

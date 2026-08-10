@@ -123,7 +123,7 @@ Scope is deliberately narrow: the `mg-auto` finite-difference path with the
 linearized PBE. The FEM, geoflow, BEM, PBAM and PBSAM solvers are not exposed,
 and there is no raw APBS-input passthrough — that would defeat the abstraction.
 
-See [PLAN.md](PLAN.md) for the full design and phasing.
+See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
 ## Status
 
@@ -152,5 +152,6 @@ Five cases, summaries in `tests/corpus/`. It is the regression net for the
 unpinned APBS today, and the acceptance gate for a second backend later —
 `sashimi corpus verify --backend debye` needs no APBS installed.
 
-See [ROADMAP.md](ROADMAP.md) for where this is all heading; PLAN.md is the
-narrower APBS implementation plan beneath it.
+See [ROADMAP.md](ROADMAP.md) for where this is all heading — it is the single
+planning document, covering the protocol, the multi-backend future, distribution
+and `debye`.

@@ -15,7 +15,7 @@ from tests.born_reference import born_potential, born_solvation_energy
 pytestmark = pytest.mark.apbs
 
 RADIUS = 3.0
-TOLERANCE = 0.01  # 1%; see PLAN.md section 7 for why not 0.5%
+TOLERANCE = 0.01  # 1%; see ROADMAP.md section 7 for why not 0.5%
 
 # Matches the classic Born setup: vacuum reference, no mobile ions.
 BORN_SOLVENT = SolventModel(

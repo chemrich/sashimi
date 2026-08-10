@@ -57,7 +57,7 @@ class TestSurface:
                 assert schema.get("description"), f"{tool.name}.{name} is undocumented"
 
     async def test_no_raw_apbs_passthrough_is_exposed(self, client):
-        """Section 6: a passthrough would defeat the abstraction."""
+        """ROADMAP.md section 6: a passthrough would defeat the abstraction."""
         blob = json.dumps([t.model_dump(mode="json") for t in await client.list_tools()])
         for leak in ("mg-auto", "cglen", "fglen", "dime", "fe-manual"):
             assert leak not in blob, f"APBS vocabulary {leak!r} leaked into the tool surface"

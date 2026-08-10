@@ -1,150 +1,362 @@
-# sashimi — Roadmap & Architecture Plan
+# sashimi — Roadmap and Implementation Plan
 
 > Thin, protocol-first wrapper around Poisson–Boltzmann electrostatics solvers,
 > exposed as an MCP server. APBS is the first backend; the protocol is designed
-> to outlive it. `debye` is the eventual clean-room solver implementation that
-> slots in behind the same interface.
+> to outlive it. `debye` is the eventual clean-room solver that slots in behind
+> the same interface.
 
-Status: planning / early implementation
+Status: phases 0–3 shipped; protocol hardening next.
 Last updated: 2026-08-10
+
+This is the single planning document. It supersedes the earlier split between
+ROADMAP.md (intent) and PLAN.md (APBS implementation), which had two
+incompatible phase numberings and had begun to disagree with each other and
+with the code. Where this document and the code disagree, **this document is
+the intent and the code is the debt** — §4 records exactly where that gap is.
 
 ---
 
-## 1. Thesis
+## 1. Thesis, goals, non-goals
 
 Every serious PB solver (APBS, DelPhi, TABI-PB, MIBPB, PBSA, …) is an academic
 C/Fortran code with its own input dialect, output format, packaging story, and
 sharp edges. Nobody has made them interchangeable. sashimi's bet:
 
-1. Define a small, stable protocol — `PQRData`, `GridSpec`, `PotentialGrid`,
-   `SolveResult` — that is **solver-shaped, not APBS-shaped**.
-2. Drive solvers as subprocesses behind that protocol (transport-agnostic:
-   the same types serve MCP, CLI, and library use).
-3. Make installation trivial (`pip install sashimi` eventually vendors the
-   solver binary in platform wheels).
-4. Use the multi-solver landscape as a *feature*: cross-solver validation is
-   both our test harness and a user-facing capability.
+1. Define a small, stable protocol — `PQRData`, `SolveResult`, and friends —
+   that is **solver-shaped, not APBS-shaped**.
+2. Drive solvers as subprocesses behind that protocol, transport-agnostically:
+   the same types serve MCP, CLI, and library use.
+3. Make installation trivial (eventually `pip install sashimi`, with the solver
+   binary vendored in platform wheels).
+4. Treat the multi-solver landscape as a *feature*: cross-solver validation is
+   both the test harness and a user-facing capability.
 5. When the protocol is proven, implement `debye` — a clean-room FD solver —
    validated against the ecosystem it abstracts.
 
-## 2. Protocol design principles
+The near-term product is narrower: a clean Python interface and FastMCP server
+computing electrostatic potential maps from structures, using a frozen APBS
+3.4.1 as backend, so that mcpymol and protean never touch APBS input files,
+temp directories, or OpenDX parsing directly.
 
-The FD/BEM split is the acid test for protocol generality:
+**Non-goals.** sashimi does not compile, vendor, or patch APBS *source*. It
+does not expose the FEM, geoflow, BEM, PBAM, or PBSAM solvers — only the
+`mg-auto` finite-difference path, which covers visualization-grade and standard
+solvation-energy work. It does not attempt nonlinear PBE in v1 (the API leaves
+room; LPBE is the contract debye will initially honor). It is not a general
+APBS input-file generator, and it deliberately exposes no raw-input passthrough:
+anyone who needs `fe-manual` needs APBS, not sashimi.
 
-- **FD solvers** (APBS mg-auto, DelPhi, PBSA): Eulerian 3D grid in, volumetric
-  potential out. `GridSpec` is meaningful as a *request* parameter.
+## 2. Architecture
+
+Three layers, strictly separated so the bottom one is replaceable:
+
+```
+┌─────────────────────────────────────────────┐
+│  sashimi.mcp        FastMCP server (stdio)   │   ← what mcpymol/protean connect to
+├─────────────────────────────────────────────┤
+│  sashimi.protocol   Types + Solver protocol  │   ← the debye contract; zero APBS knowledge
+├─────────────────────────────────────────────┤
+│  sashimi.apbs       Subprocess backend       │   ← input gen, execution, DX parsing
+│  sashimi.prep       pdb2pqr wrapper          │
+└─────────────────────────────────────────────┘
+```
+
+The protocol layer is the load-bearing decision. Everything above it speaks in
+physical terms (angstroms, molar ionic strength, dielectric constants);
+everything below speaks APBS (dime, cglen, fglen, chgm spl4). debye replaces
+only the bottom-left box.
+
+### The FD/BEM split is the acid test
+
+- **FD solvers** (APBS mg-auto, DelPhi, PBSA): Eulerian 3-D grid in, volumetric
+  potential out. A grid specification is meaningful as a *request* parameter.
 - **BEM solvers** (TABI-PB, PyGBe, AFMPB): surface mesh, not a volume grid;
-  native output is surface potential + normal derivative on the dielectric
-  interface. No natural `GridSpec`.
+  native output is surface potential and normal derivative on the dielectric
+  interface. There is no natural grid specification at all.
 
-Design consequences:
+Any protocol decision that assumes a volumetric grid forecloses half the
+landscape. That is the single most important constraint on §4.
 
-- `GridSpec` is an **FD-specific request detail**, not a top-level protocol
-  requirement. Model it as part of a solver-family-specific request payload.
-- Potential output should be representable as **either** a volumetric
-  `PotentialGrid` **or** surface samples. Consider
-  `SolveResult.potential: PotentialGrid | SurfacePotential | None` with
-  energies always present (solvation energy is the universal currency —
-  every solver produces it).
-- `SolveResult` carries **provenance**: solver name, exact version, binary
-  checksum, full resolved parameter set, wall time. This makes results
-  reproducible and makes cross-solver comparison first-class.
-- `PQRData` is the universal input (positions, charges, radii). Keep it
-  solver-neutral; per-solver quirks (dielectric models, surface definitions,
-  boundary conditions) live in a typed `SolverOptions` per backend with
-  sane cross-solver defaults.
-- Errors are structured: distinguish *input errors* (bad PQR, impossible
-  grid), *solver errors* (non-zero exit, convergence failure — parse stderr),
-  and *environment errors* (binary missing, wrong arch).
+## 3. Package layout
 
-## 3. Backend strategy
+```
+sashimi/
+├── pyproject.toml            # uv-managed; runtime deps: numpy, pdb2pqr, pydantic, fastmcp
+├── uv.lock                   # the single lockfile; APBS is a system prerequisite
+├── src/sashimi/
+│   ├── protocol.py           # PQRData, GridSpec, PotentialGrid, SolveResult, Solver
+│   ├── errors.py             # backend-neutral failure modes
+│   ├── pqr.py                # PQR read/write (own parser — trivial format, no deps)
+│   ├── dx.py                 # OpenDX read/write ↔ numpy + metadata
+│   ├── prep.py               # pdb2pqr subprocess wrapper (PDB → PQRData + warnings)
+│   ├── corpus.py             # golden-corpus manifest, build, verify
+│   ├── cli.py                # `sashimi corpus build|verify`
+│   ├── apbs/
+│   │   ├── backend.py        # ApbsSolver implements Solver
+│   │   ├── input.py          # grid + solvent → mg-auto input file (f-strings, no jinja)
+│   │   ├── grid.py           # physical grid intent → legal dime/cglen/fglen (psize logic)
+│   │   ├── run.py            # subprocess, tmpdir, timeout, stdout parsing, error mapping
+│   │   └── discover.py       # binary discovery: $SASHIMI_APBS_PATH → which() → conda env
+│   └── mcp/server.py         # FastMCP tools
+├── tests/
+│   ├── test_dx.py, test_pqr.py, test_grid.py, test_prep.py   # no binary required
+│   ├── test_mcp.py           # drives a real fastmcp.Client session
+│   ├── test_solver.py        # @pytest.mark.apbs — requires binary
+│   ├── test_analytic.py      # born ion vs closed form
+│   ├── test_corpus.py        # golden corpus + fault injection
+│   ├── data/                 # PQR/PDB fixtures
+│   └── corpus/               # checked-in golden summaries (JSON, not raw grids)
+└── .github/workflows/ci.yml  # micromamba installs apbs; uv does the rest
+```
 
-### Phase order
+## 4. The protocol — the debye contract
 
-| Phase | Backend | Why | Integration mode |
-|-------|---------|-----|------------------|
-| 1 | **APBS** (FD, mg-auto) | Community default, broadest features, conda-forge packaged | subprocess |
-| 2 | **DelPhi** | FD sibling; Gaussian dielectric, focusing workflows; cheap triangulation partner for cross-validation | subprocess |
-| 3 | **TABI-PB** | BEM; forces the protocol to handle surface potentials; already integrated into APBS but available standalone | subprocess |
-| 3b | **PyGBe** | BEM, Python-native → **in-process** backend; stress-tests transport-agnosticism of the protocol types | import |
-| 4 | **GB tier** (Amber GB / Bluues) | Fast approximation for high-throughput triage → PB refinement of top hits | subprocess |
-| — | **MIBPB** | Not a production backend; the *accuracy referee* (~0.4% relative error on binding tests, rigorous interface treatment) | validation harness only |
+Units are fixed at this boundary (Å, kT/e, kJ/mol) so debye never inherits
+APBS's unit conventions by accident.
 
-### Cross-solver validation as a feature
+```python
+@dataclass(frozen=True)
+class GridSpec:
+    """Grid intent in physical terms. Backends translate to their own constraints."""
+    resolution: float = 0.5        # target spacing, Å (fine grid)
+    padding: float = 10.0          # min distance, molecule surface → fine-grid edge, Å
+    max_points: int = 161**3       # memory guardrail; backend errors if unsatisfiable
 
-`sashimi validate`: run the same system through N backends, report solvation
-energy spread. Disagreement beyond discretization noise flags input-generation
-bugs (ours) or parameter sensitivity (the user's problem, surfaced honestly).
-Solvation energies are notoriously sensitive to surface definitions and grid
-parameters — making the spread visible is genuinely useful, and it doubles as
-our integration test suite.
+@dataclass(frozen=True)
+class SolventModel:
+    solvent_dielectric: float = 78.54
+    solute_dielectric: float = 2.0
+    ionic_strength: float = 0.150   # M, 1:1 salt
+    ion_radius: float = 2.0         # Å
+    temperature: float = 298.15     # K
+    surface_method: Literal["smol", "spl2", "mol"] = "smol"
+    surface_radius: float = 1.4     # solvent probe, Å
 
-## 4. APBS specifics (Phase 1)
+@dataclass
+class SolveResult:
+    potential: PotentialGrid
+    energy_kj_mol: float | None     # total polar solvation energy when requested
+    backend: str                    # "apbs-3.4.1" | "debye-x.y" — provenance travels
+    diagnostics: dict               # grid actually used, wall time, resolved path
+```
 
-### What we drive
+`GridSpec` deliberately has no `dime`: legal PMG dimensions (n = c·2^(l+1)+1,
+i.e. 33, 65, 97, 129, 161 …) are an APBS implementation detail computed in
+`apbs/grid.py`, which reimplements the essentials of the classic `psize.py`
+sizing — coarse grid for the focusing boundary, fine grid at extent + 2·padding,
+smallest legal dime meeting the resolution target, capped by `max_points`.
+`diagnostics` reports the grid actually used, so callers can detect when the
+resolution target was relaxed.
 
-Core finite-difference solver only (`mg-auto` / `mg-manual`). BEM
-(TABI), geoflow, PBAM/PBSAM components are out of scope for the wrapper —
-and disabled in any build we own (`-DENABLE_BEM=OFF -DENABLE_GEOFLOW=OFF
--DENABLE_PBAM=OFF`), which sidesteps the crustiest dependencies.
+### 4.1 As built vs. target — the known debt
+
+The protocol shipped in phases 1–2 is APBS-shaped in four specific ways. Each
+is a deliberate item for phase 4, not a settled design:
+
+| # | As built | Target | Why it matters |
+|---|---|---|---|
+| 1 | `GridSpec` is the second positional parameter of `Solver.solve_lpbe` | A solver-family-specific request payload; FD backends take a grid, BEM backends do not | A BEM backend cannot implement the current signature honestly |
+| 2 | `SolveResult.potential` is a required `PotentialGrid`; `energy_kj_mol` is optional | `potential: PotentialGrid \| SurfacePotential \| None`, energy **always** present | Solvation energy is the universal currency — every solver produces it; a volume grid is not |
+| 3 | Provenance is backend string + resolved path + wall time | Also binary checksum and the full resolved parameter set | Makes results reproducible and cross-solver comparison first-class |
+| 4 | Errors split backend-neutral vs APBS-specific | Split *input* / *solver* / *environment* | The current axis does not tell a caller whose fault it is or what to do |
+
+The migration cost is real and grows with every caller: today those are
+`sashimi.mcp.server`, `sashimi.corpus`, and the test suite. That is the argument
+for doing phase 4 before phase 5, not after.
+
+### 4.2 Error taxonomy
+
+Current, in `errors.py` with APBS-specific subclasses under `sashimi.apbs`:
+`SashimiError` → `SolverNotFound` (`ApbsNotFound`), `GridTooLarge`,
+`ConvergenceFailure`, `SolverCrash` (`ApbsCrash`); `PreparationFailed` for
+pdb2pqr. Every message carries the actionable next step — `GridTooLarge` states
+the achievable resolution, `ApbsNotFound` carries the install one-liner.
+
+Target taxonomy distinguishes **input errors** (bad PQR, impossible grid),
+**solver errors** (non-zero exit, convergence failure, parsed from stderr), and
+**environment errors** (binary missing, wrong architecture). These are the three
+things a caller can act on differently.
+
+## 5. APBS backend specifics
+
+**Input generation** targets one template: `mg-auto`, `lpbe`, `bcfl sdh`,
+`chgm spl4`, dielectric and ion declarations per `SolventModel`, `write pot dx`.
+
+Energy needs **two** `elec` blocks. A single block reports total electrostatic
+energy, dominated by point-charge self-energy — not what anyone means by
+solvation energy. The polar solvation energy is the difference between the
+solvated state and a uniform-dielectric, ion-free reference, which is what APBS
+prints as `Global net ELEC energy`.
+
+**Execution** (`run.py`): each solve runs in a fresh `TemporaryDirectory` —
+APBS writes `io.mc` and its DX output into the working directory, so anything
+less leaks files into the caller's cwd and lets concurrent solves collide.
+Success is verified **structurally, not by exit code**, because APBS exits 0 on
+several failures: the DX file must exist and parse, and stdout is scanned for
+error signatures. Failures raise typed exceptions carrying the tail of stdout.
+
+Two build-dependent behaviours, both found by cross-platform CI:
+
+- MPI-enabled builds (Debian's) name the output `potential-PE0.dx` — the
+  processing-element rank — where serial builds (conda-forge, Homebrew) write
+  `potential.dx`. `find_potential` accepts either.
+- Every invocation writes `io.mc` to cwd, `--version` included, so the version
+  probe runs inside a temp dir too.
+
+**DX I/O** (`dx.py`): own reader/writer rather than a gridData/MDAnalysis
+dependency — the format is trivial (header with counts/origin/deltas, then
+3 floats per line, C order) and owning it keeps the dependency tree small. The
+writer exists so any backend's output can be exported for PyMOL/ChimeraX.
+
+**Binary discovery**: `$SASHIMI_APBS_PATH` wins, then `shutil.which("apbs")`,
+then an active conda environment as a courtesy. APBS is compiled, so no Python
+installer can provide it and `which` is the normal answer. `SolveResult.backend`
+records the resolved path alongside the version, so which binary produced a
+result is always recoverable.
+
+**Structure prep** (`prep.py`): subprocess wrapper around pdb2pqr 3.7.1 — its
+Python API is not a stability contract, and process isolation means a pdb2pqr
+hang cannot take down the MCP server. Returns `PQRData` plus a structured
+summary of what was rebuilt (missing heavy atoms, debumped residues), which the
+MCP layer surfaces rather than buries: an agent should know three sidechains
+were rebuilt before trusting the energies.
 
 ### Binary availability (as of Aug 2026)
 
 - conda-forge `apbs` 3.4.1: `linux-64`, `osx-64`, `osx-arm64`, `win-64`.
-- **No `linux-aarch64` build exists** (conda-forge or upstream GitHub releases).
-- APBS releases essentially never; 3.4.1 has been current for years. Pinning
-  is safe and maintenance burden of owned builds is low.
+- **No `linux-aarch64` build exists**, conda-forge or upstream.
+- Debian/Ubuntu 24.04+ ships 3.4.1 (`apt install apbs`); Ubuntu 22.04 has 3.0.0.
+- macOS Homebrew has it only in the third-party `brewsci/bio` tap, which recent
+  Homebrew refuses to load without an explicit trust step. conda-forge is
+  preferred for provenance, and is what CI tests.
+- APBS releases essentially never; 3.4.1 has been current for years. Pinning is
+  safe and the maintenance burden of owned builds is low.
 
-### Consequences for dev/test environments
+## 6. FastMCP server
 
-- **Mac (Apple Silicon), local dev**: native `osx-arm64` APBS via
-  `micromamba install -c conda-forge apbs`. Fast iteration.
-- **Linux arm64 containers**: no prebuilt APBS → do **not** test the
-  subprocess layer here. Run protocol-layer tests only.
-- **Linux amd64 (the artifact users actually run)**:
-  - Day-to-day: OrbStack containers with `--platform linux/amd64` (Rosetta).
-    APBS is a plain CPU-bound FD solver; Rosetta handles it fine.
-  - Validation tier: Ubuntu VM on the Proxmox box (real amd64 hardware).
-    Required for anything timing-sensitive — Rosetta timings are not
-    representative, which matters for timeout handling and any timing
-    reported in `SolveResult`.
-  - CI: GitHub Actions `ubuntu-latest` (amd64); conda-forge APBS is a
-    one-liner. Full integration suite on every push.
+Tools are prefixed `sashimi_`, take flat physically-named parameters (agents
+handle those better than nested config objects), and return structured content
+plus a short human-readable summary.
 
-### Test partitioning
+`sashimi_prepare_structure(pdb_path, forcefield, ph, output_pqr)` — runs
+pdb2pqr; the returned warnings summary is the important part.
 
-- Protocol layer (PQRData/GridSpec/PotentialGrid/SolveResult, serialization,
-  MCP plumbing) is pure Python → test natively on every arch, no solver
-  required.
-- Subprocess integration tests gated behind `@pytest.mark.apbs` (and later
-  `@pytest.mark.delphi`, etc.). Only run where the real binary exists.
-- `debye` inverts this: pure implementation, whole suite runs natively
-  anywhere. That portability is itself a tested differentiator.
+`sashimi_solve(pqr_path, resolution, padding, ionic_strength, solute_dielectric,
+solvent_dielectric, compute_energy, output_dx)` — the workhorse. Returns grid
+stats, the DX path, energy when requested, backend provenance, and
+`resolution_relaxed` so a guardrail-relaxed grid is visible rather than silent.
 
-## 5. Distribution roadmap
+`sashimi_potential_at(dx_path, points)` — trilinear interpolation of a saved
+map. Out-of-grid points return null, never a clamped edge value, because a
+clamped number reads as a real measurement.
 
-### v1: conda-forge dependency
+`sashimi_compare_maps(dx_a, dx_b)` — RMSD, max absolute difference, correlation.
+Mismatched grids are refused rather than silently resampled. Useful for
+mutant-versus-wildtype now; doubles as solver-versus-solver validation later.
 
-Ship sashimi on PyPI; document `micromamba install -c conda-forge apbs` (or
-detect an `apbs` on PATH). Lowest effort, unblocks users today.
+Deliberately absent: a PDB-fetching tool (mcpymol owns structure acquisition)
+and raw APBS-input passthrough (defeats the abstraction). A test asserts no APBS
+vocabulary appears anywhere in the tool surface.
 
-### v2: vendored platform wheels ("pip install sashimi just works")
+Transport is stdio. Solves at default resolution on a ~300-residue protein run
+in seconds; no async job queue in v1, but a 300 s timeout with a clear error
+keeps a pathological grid from wedging the server.
 
-Repackage the APBS binary inside platform wheels — the `cmake`/`ruff`/`ninja`
-pattern: binary vendored in the wheel, resolved via an internal path, never
-PATH-dependent. Collapses install from conda-env choreography to one command.
-For an MCP server that agents spin up, removing the conda prerequisite is a
-major friction win. Wheel packaging is identical regardless of whose binary is
-inside — nothing in v1 forecloses this.
+Note: `sashimi_solve` exposes no `max_points`, so `GridTooLarge` is unreachable
+from the MCP surface — the guardrail can only relax a request, never reject it.
+That is the right default for an agent-facing tool, and `resolution_relaxed`
+keeps the relaxation visible.
 
-### Owned builds (enables v2 + fills the aarch64 gap)
+## 7. Testing and the golden corpus
 
-Build matrix in GitHub Actions: `linux-64`, `linux-aarch64`, `osx-arm64`,
-optionally `win-64`. Crib from the conda-forge feedstock's recipe — it encodes
-every patch and flag that makes APBS build on each platform; read it before
-the upstream docs. Trimmed configure (core FD only), mostly-static linking for
-a single portable, checksummable file. Contributing the `linux-aarch64` build
-upstream (feedstock migration or GitHub release) makes us the fix, not a fork.
+**Three tiers.** Pure unit tests (PQR parsing, DX round-trip, dime legality,
+psize math, structure prep, the whole MCP surface bar solving) run anywhere with
+no binary. Analytic tests solve the Born ion — a single +1 charge, 3 Å sphere —
+against the closed form. Integration tests exercise the real subprocess.
+
+**Analytic calibration**, both facts learned the hard way:
+
+- The APBS `examples/born` README states an analytic solvation energy of
+  −230.62 kJ/mol; the closed-form expression with current CODATA constants gives
+  **−228.61**. That 0.87% spread straddles a tight gate — measured against the
+  CODATA value `smol` errs 0.176% and `mol` 0.509%; against APBS's, 0.70% and
+  0.37%. So each reference fails a different variant. sashimi computes its own
+  value from named constants and asserts at **1%**.
+- **Probe only well outside the dielectric boundary.** At exactly r = a = 3 Å
+  the potential is off by 71% because the point sits on the smoothed
+  discontinuity, and the grid centre is the point-charge singularity. From
+  1.25 a outward, agreement is 0.5–1.1%.
+
+**The golden corpus is a first-class deliverable**, not a test artifact.
+`sashimi corpus build` runs a fixed manifest (structure + grid + solvent, seeds
+pinned) and writes per case a JSON summary: grid geometry, energy, potential
+min/max/mean/std, and the potential at 50 deterministically-placed probe points.
+Summaries are checked in; raw grids are reproducible on demand.
+`sashimi corpus verify --backend X` re-runs the manifest against any `Solver`
+and diffs within stated tolerances.
+
+Cases start from checked-in PQR, never PDB: preparation is pdb2pqr's business
+and carries its own version, so starting from PQR means a corpus diff implicates
+the solver rather than the prep pipeline.
+
+Day one this is the regression net for sashimi and for the system APBS that no
+lockfile pins any more. The day debye exists, `corpus verify --backend debye` is
+its acceptance test, with APBS ground truth baked in and no APBS installation
+required.
+
+**Test partitioning by architecture.** Protocol-layer tests are pure Python and
+run natively everywhere. Subprocess integration tests are gated behind
+`@pytest.mark.apbs` (later `@pytest.mark.delphi`, …) and only run where the real
+binary exists — which matters because there is no `linux-aarch64` APBS. debye
+inverts this: pure implementation, whole suite runs natively anywhere, and that
+portability is itself a tested differentiator.
+
+**CI**: GitHub Actions on `ubuntu-latest` and `macos-latest`, `uv sync --frozen`
+against the committed lockfile, with APBS installed from conda-forge via
+micromamba — whose only job is fetching that one binary. A single `ci-ok` gate
+job fronts the matrix so the required status-check name survives matrix changes.
+
+## 8. Backend strategy beyond APBS
+
+| Phase | Backend | Why | Integration |
+|-------|---------|-----|-------------|
+| 1 | **APBS** (FD, mg-auto) | Community default, broadest features, conda-forge packaged | subprocess |
+| 2 | **DelPhi** | FD sibling; Gaussian dielectric, focusing workflows; cheap triangulation partner | subprocess |
+| 3 | **TABI-PB** | BEM; forces the protocol to handle surface potentials | subprocess |
+| 3b | **PyGBe** | BEM, Python-native → **in-process**; stress-tests transport-agnosticism | import |
+| 4 | **GB tier** (Amber GB / Bluues) | Fast approximation for high-throughput triage → PB refinement | subprocess |
+| — | **MIBPB** | Not production; the *accuracy referee* (~0.4% relative error, rigorous interface treatment) | validation harness |
+
+**Cross-solver validation as a feature.** `sashimi validate`: run one system
+through N backends, report the solvation-energy spread. Disagreement beyond
+discretization noise flags input-generation bugs (ours) or parameter sensitivity
+(the user's problem, surfaced honestly). Solvation energies are notoriously
+sensitive to surface definitions and grid parameters; making the spread visible
+is genuinely useful, and it doubles as the integration suite.
+
+Relationship to `sashimi corpus`: the corpus verifies one backend against
+*recorded* numbers; `validate` compares N backends against *each other* live.
+The corpus is the regression net, `validate` is the product feature.
+
+## 9. Distribution and packaging
+
+**v1 — conda-forge dependency.** Ship sashimi on PyPI; document
+`micromamba install -c conda-forge apbs`, or detect an `apbs` on PATH. Lowest
+effort, unblocks users today.
+
+**v2 — vendored platform wheels.** Repackage the APBS binary inside platform
+wheels, the `cmake`/`ruff`/`ninja` pattern: binary vendored, resolved via an
+internal path, never PATH-dependent. Collapses install from conda-env
+choreography to one command. For an MCP server that agents spin up, removing the
+conda prerequisite is a major friction win. Nothing in v1 forecloses it.
+
+**Owned builds** (enables v2, fills the aarch64 gap). Build matrix in Actions:
+`linux-64`, `linux-aarch64`, `osx-arm64`, optionally `win-64`. Crib from the
+conda-forge feedstock recipe — it encodes every patch and flag that makes APBS
+build on each platform; read it before the upstream docs. Trimmed configure
+(core FD only: `-DENABLE_BEM=OFF -DENABLE_GEOFLOW=OFF -DENABLE_PBAM=OFF`),
+mostly-static linking, one portable checksummable file. Contributing the
+`linux-aarch64` build upstream makes us the fix, not a fork.
 
 ### Licensing obligations for redistribution
 
@@ -153,106 +365,169 @@ upstream (feedstock migration or GitHub release) makes us the fix, not a fork.
   packages it GPL-2.0-or-later; FETK components historically GPL** — terms
   depend on the exact FETK version vendored. Older APBS carried a special GPL
   exception for aggregation.
-- Redistribution is permitted either way. Obligations: ship license texts,
+- Redistribution is permitted either way. Obligations: ship license texts and
   provide corresponding source for copyleft components (a pinned build repo
-  satisfies this). If any linked component is GPL rather than LGPL, the
-  combined *binary* is GPL-distributable — fine for open-source sashimi;
-  only relevant if the binary were embedded in something proprietary.
-- sashimi invokes APBS as a **subprocess**, so copyleft stops at the binary.
+  satisfies this). If a linked component is GPL rather than LGPL, the combined
+  *binary* is GPL-distributable — fine for open-source sashimi, relevant only if
+  embedded in something proprietary.
+- sashimi invokes APBS as a **subprocess**, so copyleft stops at the binary;
   sashimi's own license is unconstrained.
 - Action item before v2 ships: read the actual license files in the exact
-  FETK/MALOC versions our build vendors. (Not legal advice; verify.)
+  FETK/MALOC versions the build vendors. (Not legal advice; verify.)
 
-## 6. debye — clean-room solver roadmap
+## 10. debye — clean-room solver
 
-### Ordering
+**Ordering.** FD solver first: linearized PB on a Cartesian grid, mirroring the
+mg-auto contract so it drops in behind the existing backend interface. BEM as
+the eventual second engine — the family that most rewards a clean modern
+implementation, since the incumbents are Fortran/C academic codes with exactly
+the packaging problems sashimi routes around.
 
-1. **FD solver first.** Linearized PB on a Cartesian grid; mirror the APBS
-   mg-auto contract so it's a drop-in behind the existing backend interface.
-2. **BEM as the eventual second engine.** The method family that most rewards
-   a clean modern implementation — incumbents are Fortran/C academic codes
-   with exactly the packaging problems sashimi routes around.
+**Validation ladder.**
 
-### Validation ladder
-
-1. **Analytic ground truth**: Born ion, Kirkwood dielectric sphere. Exact
-   answers; catches sign/units/BC bugs immediately.
-2. **APBS agreement**: same PQR + GridSpec through both; converge under grid
-   refinement.
-3. **Referee tier**: MIBPB (rigorous interface treatment) arbitrates when
-   debye and APBS disagree; DelPhi/PBSA as additional triangulation.
+1. **Analytic ground truth**: Born ion, Kirkwood dielectric sphere. Catches
+   sign, unit and boundary-condition bugs immediately.
+2. **APBS agreement**: same input through both; must converge under refinement.
+3. **Referee tier**: MIBPB arbitrates when debye and APBS disagree;
+   DelPhi/PBSA for additional triangulation.
 4. **Portability as a test**: full suite passes natively on osx-arm64,
-   linux-aarch64, linux-64 — the thing no incumbent can do.
+   linux-aarch64 and linux-64 — the thing no incumbent can do.
 
-APBS (pinned, checksummed, via owned builds) is debye's fixed reference
-implementation. Trimmed reproducible builds exist partly for this.
+**Handoff.** debye ships as a separate repo implementing `sashimi.protocol`'s
+solver interface (the types either stay importable from sashimi or graduate to a
+tiny shared `pb-protocol` package — decide when debye starts). Its acceptance
+gate is `sashimi corpus verify --backend debye` within tolerances. The MCP
+server grows a `backend` parameter defaulting to auto-selection, and
+`SolveResult.backend` provenance means every downstream artifact already records
+which solver produced it. Nothing in mcpymol or protean changes.
 
-## 7. Infrastructure notes
+APBS — pinned, checksummed, via owned builds — is debye's fixed reference. The
+trimmed reproducible builds exist partly for this.
 
-### Remote access to the amd64 validation VM
-
-- **Tailscale** on the Ubuntu VM (or LXC subnet router on Proxmox):
-  SSO login (YubiKey as second factor at the IdP), zero ports forwarded on
-  the UDM Pro. SSH + VS Code Remote / Claude Code rather than a desktop —
-  no RDP surface at all.
-- Alternatives considered: UniFi WireGuard (no true second factor),
-  Guacamole + TOTP or behind Cloudflare Access with a hardware-key policy
-  (most capable, most setup). Tailscale chosen for effort/benefit.
-
-### Environments summary
+## 11. Environments and infrastructure
 
 | Environment | Arch | APBS source | Role |
 |---|---|---|---|
 | Mac local | osx-arm64 | conda-forge native | dev loop, protocol tests |
 | OrbStack container | linux/amd64 (Rosetta) | conda-forge | subprocess integration tests |
 | Proxmox Ubuntu VM | linux-64 native | conda-forge / owned build | timing-sensitive validation, benchmarks |
-| GitHub Actions | linux-64 | conda-forge one-liner | full suite per push |
+| GitHub Actions | linux-64, osx-arm64 | conda-forge via micromamba | full suite per push |
 | (future) arm64 Linux | linux-aarch64 | owned build | once we ship it |
 
-## 8. Phased plan
+Rosetta handles APBS fine — it is a plain CPU-bound FD solver — but Rosetta
+timings are not representative, which matters for timeout handling and any
+timing reported in `SolveResult`. That is what the Proxmox VM is for.
 
-### Phase 0 — Protocol hardening (now)
-- [ ] Finalize `PQRData`, `SolveResult` as solver-neutral; demote `GridSpec`
-      to FD-family request detail
-- [ ] `PotentialGrid | SurfacePotential` output union
-- [ ] Structured error taxonomy (input / solver / environment)
-- [ ] Provenance fields in `SolveResult` (solver, version, checksum, params,
-      wall time)
-- [ ] Protocol test suite — pure Python, runs everywhere
+**Remote access to the amd64 validation VM.** Tailscale on the Ubuntu VM (or an
+LXC subnet router on Proxmox): SSO login with a hardware key as second factor at
+the IdP, zero ports forwarded on the UDM Pro, SSH + VS Code Remote / Claude Code
+rather than a desktop, so no RDP surface at all. Alternatives considered: UniFi
+WireGuard (no true second factor), Guacamole + TOTP or behind Cloudflare Access
+with a hardware-key policy (most capable, most setup). Tailscale chosen on
+effort/benefit.
 
-### Phase 1 — APBS backend, shippable
-- [ ] Subprocess driver: input-file generation, invocation, stdout/stderr/DX
-      parsing, exit-code handling
-- [ ] `@pytest.mark.apbs` integration suite; amd64 container + CI wiring
-- [ ] MCP server surface (solve, validate-inputs, capabilities)
-- [ ] PyPI release; conda-forge APBS documented as prerequisite
-- [ ] Proxmox VM stood up + Tailscale for benchmarks/timeouts work
+## 12. Phases
 
-### Phase 2 — Distribution
-- [ ] Owned APBS build matrix (trimmed, mostly-static; feedstock-derived)
-- [ ] linux-aarch64 build; offer upstream
-- [ ] License-file audit of vendored FETK/MALOC versions
-- [ ] Platform wheels with vendored binary; `pip install sashimi` end-to-end
+One sequence. Phases 0–3 are the delivered APBS wrapper; 4 onward is the
+roadmap that outlives it.
 
-### Phase 3 — Multi-backend
-- [ ] DelPhi backend + cross-validation harness (`sashimi validate`)
-- [ ] TABI-PB backend → forces SurfacePotential path to be real
-- [ ] PyGBe in-process backend → proves transport-agnosticism
-- [ ] Optional GB tier for triage→refine workflows
+**Phase 0 — Spike. ✅** uv/conda env with APBS 3.4.1 and pdb2pqr 3.7.1; the
+`examples/born` case reproduces published energies on osx-arm64 to seven
+significant figures. Confirmed the DX contract §5 assumes: 65³, uniform
+0.1875 Å spacing, C order, 3 floats per line, kT/e. Retired the project's
+stated main environmental risk — an `osx-arm64` APBS build exists.
 
-### Phase 4 — debye
-- [ ] FD solver vs analytic ladder (Born, Kirkwood)
-- [ ] APBS agreement under grid refinement; MIBPB referee harness
-- [ ] Drop-in behind backend interface; portability suite green on all arches
-- [ ] BEM engine (later)
+**Phase 1 — Core library. ✅** `protocol.py`, `pqr.py`, `dx.py`, `errors.py`,
+`apbs/`. Exit criterion met: the Born ion returns −230.03 / −228.87 / −228.56
+kJ/mol at 0.41 / 0.20 / 0.16 Å spacing against a closed form of −228.61 —
+0.62% → 0.11% → 0.02%, converging monotonically, which is what rules out a
+systematic unit error.
 
-## 9. Open questions
+**Phase 2 — MCP server. ✅** The four tools of §6, error mapping, and a
+`sashimi-mcp` stdio entry point. Validated programmatically rather than by MCP
+Inspector: the tests drive a real `fastmcp.Client`, so schema generation,
+argument validation and error translation are all exercised. Exit criterion met
+end to end — PDB → PQR → 97³ map at 0.31 Å, −209.660 kJ/mol → sampled at
+coordinates → compared against a 1 M-salt solve (RMSD 0.093 kT/e, correlation
+0.99989). *Registration alongside mcpymol is still outstanding.*
 
-- Nonlinear PB in the protocol: APBS/DelPhi support it, BEM mostly doesn't.
-  Capability flags per backend, or restrict v1 protocol to linearized PB?
-- Surface definition (SES vs Gaussian vs spline) is the biggest cross-solver
-  comparability confounder — how much do we normalize vs expose?
-- DX-format `PotentialGrid` payloads are large; MCP transport strategy
-  (inline vs file-reference vs downsampled) for volumetric results.
-- Does `sashimi validate` belong in core or as a separate tool that consumes
+**Phase 3 — Golden corpus. ✅** Five-case manifest with `sashimi corpus
+build|verify`, summaries checked in. Exit criterion demonstrated four ways: a
+`Solver` wrapper scaling energy by 4.184 (kJ↔kcal), potential by 25.693
+(kT/e↔mV), spacing by 10 (Å↔nm), or flipping the energy sign is caught, with the
+moved field named. Tolerances tested from both sides.
+
+**Phase 4 — Protocol hardening. ← next.** The four items in §4.1: demote the
+grid specification to an FD-family request detail; make potential a
+`PotentialGrid | SurfacePotential | None` union with energy always present; add
+binary checksum and resolved parameters to provenance; restructure errors into
+input / solver / environment. Plus the protocol test suite that runs everywhere
+with no binary. Exit criterion: a stub BEM backend returning surface potentials
+satisfies the protocol without a single APBS-shaped concession.
+
+**Phase 5 — Ship it.** PyPI release with conda-forge APBS documented as
+prerequisite; MCP capabilities/validate-inputs surface; register alongside
+mcpymol; Proxmox VM and Tailscale stood up for benchmark and timeout work.
+
+**Phase 6 — Distribution.** Owned APBS build matrix (trimmed, mostly static,
+feedstock-derived); `linux-aarch64` build offered upstream; license-file audit
+of the vendored FETK/MALOC versions; platform wheels so `pip install sashimi`
+works end to end.
+
+**Phase 7 — Multi-backend.** DelPhi backend and the `sashimi validate`
+cross-validation harness; TABI-PB, which forces the surface-potential path to be
+real; PyGBe in-process, which proves transport-agnosticism; optional GB tier for
+triage→refine workflows.
+
+**Phase 8 — debye.** The validation ladder of §10; drop-in behind the backend
+interface; portability suite green on all architectures; BEM engine later.
+
+**Phase 9 — Integration, ongoing.** mcpymol grows a convenience chaining
+`sashimi_solve` → load DX → surface coloring; protean consumes `SolveResult`.
+Sashimi itself should go quiet after this — a wrapper that needs constant
+attention has failed at its one job.
+
+### Numbering history
+
+The two superseded documents numbered phases differently. For reading old
+commits and comments:
+
+| This document | old PLAN.md | old ROADMAP.md |
+|---|---|---|
+| 0–3 (delivered) | 0–3 | part of Phase 1 |
+| 4 Protocol hardening | — | Phase 0 |
+| 5 Ship it | — | Phase 1 (remainder) |
+| 6 Distribution | — | Phase 2 |
+| 7 Multi-backend | — | Phase 3 |
+| 8 debye | Phase 10 (handoff) | Phase 4 |
+| 9 Integration | Phase 4 | — |
+
+## 13. Risks and mitigations
+
+The conda-forge APBS package going unbuildable on future platforms is the
+long-tail risk; the recipe is small and forkable, and the corpus makes a
+re-validated fork cheap to trust. The acute version — no `osx-arm64` build — was
+retired in phase 0.
+
+APBS's silent-failure modes (exit 0 on error) are handled by structural output
+verification rather than exit codes. pdb2pqr's opinionated rebuilding is
+surfaced, not hidden. Grid memory blowups are capped by `max_points` with an
+error stating the achievable resolution. The abandoned upstream `apbs` PyPI
+package sharing the import name is avoided by never depending on it.
+
+New since the split: APBS is no longer version-pinned by a lockfile, because
+uv cannot install a compiled binary. The corpus carries that weight — it asserts
+the version and re-checks the numbers, so drift fails loudly in kJ/mol.
+
+## 14. Open questions
+
+- **Nonlinear PB in the protocol**: APBS and DelPhi support it, BEM mostly does
+  not. Capability flags per backend, or restrict v1 to linearized PB?
+- **Surface definition** (SES vs Gaussian vs spline) is the biggest cross-solver
+  comparability confounder. How much do we normalize versus expose?
+- **Volumetric payloads over MCP**: DX grids are large (12 MB for a 97³ map).
+  Inline, file-reference, or downsampled?
+- **Does `sashimi validate` belong in core** or in a separate tool that consumes
   the protocol?
+- **Does the protocol graduate** to a standalone `pb-protocol` package when
+  debye starts, or stay importable from sashimi?
