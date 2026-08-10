@@ -17,13 +17,14 @@ dressed up as a solver problem.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import numpy as np
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from sashimi.analysis import potential_extrema, potential_in_sphere, residue_potentials
 from sashimi.apbs import ApbsSolver
 from sashimi.artifacts import content_address, describe_cleanup, map_path
 from sashimi.dx import read_dx
@@ -304,6 +305,164 @@ def sashimi_compare_maps(
             f"RMSD {rmsd:.4g} kT/e, max |diff| {max_abs:.4g} kT/e"
             + (f", correlation {correlation:.6f}" if correlation is not None else "")
             + f" over {a.values.size:,} grid points."
+        ),
+    }
+
+
+@mcp.tool
+def sashimi_potential_extrema(
+    *,
+    dx_path: Annotated[str, Field(description="Path to an OpenDX map.")],
+    n: Annotated[int, Field(description="How many peaks to return.", ge=1, le=50)] = 5,
+    sign: Annotated[
+        Literal["positive", "negative", "both"],
+        Field(description="Which extremes to report."),
+    ] = "both",
+    min_separation: Annotated[
+        float,
+        Field(
+            description=(
+                "Minimum angstroms between reported peaks. Without this you get "
+                "n neighbours of the same peak. Roughly a sidechain's reach by default."
+            ),
+            gt=0,
+        ),
+    ] = 5.0,
+    pqr_path: Annotated[
+        str | None,
+        Field(
+            description=(
+                "The structure the map came from. Strongly recommended: without it "
+                "the strongest values are the point-charge singularities at atom "
+                "centres, so the answer is 'at the atoms' rather than 'at the "
+                "binding sites'. Supplying it masks the solute interior."
+            )
+        ),
+    ] = None,
+) -> dict[str, Any]:
+    """Find where a map's strongest positive and negative patches are.
+
+    This is the "where should I look" question — an anion-binding pocket shows
+    up as a positive patch, a cation site as a negative one. Values very close
+    to an atom centre are dominated by that charge's own self-energy, so treat
+    the largest magnitudes with suspicion unless they sit away from the solute.
+    """
+    grid = _load_grid(dx_path)
+    structure = None
+    if pqr_path is not None:
+        try:
+            structure = read_pqr(Path(pqr_path).expanduser())
+        except (OSError, ValueError) as exc:
+            raise ToolError(f"could not read PQR {pqr_path}: {exc}") from exc
+
+    out: dict[str, Any] = {
+        "min_separation_a": min_separation,
+        "solute_masked": structure is not None,
+    }
+    described = []
+
+    if sign in ("positive", "both"):
+        peaks = potential_extrema(
+            grid, n=n, most_positive=True, min_separation=min_separation, exclude_near=structure
+        )
+        out["most_positive"] = [p.as_dict() for p in peaks]
+        if peaks:
+            described.append(f"most positive {peaks[0].value:+.3g} kT/e")
+    if sign in ("negative", "both"):
+        troughs = potential_extrema(
+            grid, n=n, most_positive=False, min_separation=min_separation, exclude_near=structure
+        )
+        out["most_negative"] = [p.as_dict() for p in troughs]
+        if troughs:
+            described.append(f"most negative {troughs[0].value:+.3g} kT/e")
+
+    caveat = "" if structure is not None else " (solute not masked — pass pqr_path)"
+    out["summary"] = (
+        f"{Path(dx_path).name}: " + ("; ".join(described) or "no extrema found") + caveat
+    )
+    return out
+
+
+@mcp.tool
+def sashimi_potential_in_sphere(
+    *,
+    dx_path: Annotated[str, Field(description="Path to an OpenDX map.")],
+    centre: Annotated[list[float], Field(description="Sphere centre [x, y, z] in angstroms.")],
+    radius: Annotated[float, Field(description="Sphere radius in angstroms.", gt=0)],
+) -> dict[str, Any]:
+    """Summarise the potential inside a sphere — a ligand pocket, say.
+
+    Check `n_points` before trusting the mean: a sphere smaller than the grid
+    spacing may contain almost nothing.
+    """
+    grid = _load_grid(dx_path)
+    try:
+        stats = potential_in_sphere(grid, np.asarray(centre, dtype=float), radius)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    if stats["n_points"] == 0:
+        stats["summary"] = (
+            f"No grid points inside a {radius} A sphere at {centre} — "
+            "is it outside the map, or smaller than the grid spacing?"
+        )
+    else:
+        stats["summary"] = (
+            f"{stats['n_points']:,} points: mean {stats['mean_kT_e']:+.3g} kT/e, "
+            f"range {stats['min_kT_e']:+.3g} to {stats['max_kT_e']:+.3g}."
+        )
+    return stats
+
+
+@mcp.tool
+def sashimi_residue_potentials(
+    *,
+    dx_path: Annotated[str, Field(description="Path to an OpenDX map.")],
+    pqr_path: Annotated[
+        str, Field(description="The PQR the map was computed from; supplies residue labels.")
+    ],
+    top: Annotated[
+        int | None,
+        Field(description="Return only the N most negative residues. Omit for all.", ge=1),
+    ] = None,
+    probe_offset: Annotated[
+        float,
+        Field(
+            description=(
+                "Angstroms outside each atom's radius to sample. Sampling at atom "
+                "centres would report the atom's own self-energy, not its environment."
+            ),
+            ge=0,
+        ),
+    ] = 2.0,
+) -> dict[str, Any]:
+    """Mean potential around each residue, most negative first.
+
+    Answers "which residues sit in negative potential" — the question behind
+    cation binding, electrostatic steering and charge-complementarity work,
+    without moving a grid anywhere.
+    """
+    grid = _load_grid(dx_path)
+    try:
+        structure = read_pqr(Path(pqr_path).expanduser())
+    except (OSError, ValueError) as exc:
+        raise ToolError(f"could not read PQR {pqr_path}: {exc}") from exc
+
+    try:
+        residues = residue_potentials(grid, structure, probe_offset=probe_offset, top=top)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    under_sampled = [r.label for r in residues if r.n_sampled < r.n_atoms]
+    note = f" {len(under_sampled)} residue(s) partly outside the grid." if under_sampled else ""
+    lead = residues[0] if residues else None
+    return {
+        "residues": [r.as_dict() for r in residues],
+        "under_sampled": under_sampled,
+        "summary": (
+            f"{len(residues)} residue(s)."
+            + (f" Most negative: {lead.label} at {lead.value:+.3g} kT/e." if lead else "")
+            + note
         ),
     }
 

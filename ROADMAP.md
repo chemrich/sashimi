@@ -552,9 +552,21 @@ one place that maps are never deleted and paths are local; and the corpus
 `verify_case`. Cross-solver validation now works end to end and only lacks its
 CLI.
 
-Remaining: the **derived-query tools** §6 argues are the real agent-facing
-value (extrema with coordinates, per-residue averages, potential over a
-selection); the MCP capabilities/validate-inputs surface; PyPI release, which
+Also done: the **derived-query tools** §6 argues are the real agent-facing
+value. `sashimi.analysis` is pure and binary-free; three MCP tools sit on it —
+`sashimi_potential_extrema` (strongest patches, with coordinates),
+`sashimi_potential_in_sphere` (statistics over a pocket) and
+`sashimi_residue_potentials` (per-residue means, most negative first).
+
+One finding worth carrying forward: the strongest values in any map are the
+point-charge self-energy singularities at the atom centres — ±500 kT/e on a
+dipeptide — so an unfiltered extrema search reliably answers "at the atoms",
+which is true and useless. Passing the structure masks the solute interior and
+the same query returns −1.82 kT/e at a solvent-side position instead. The tool
+says in its response when the solute was not masked, because an agent cannot
+otherwise tell the difference between a binding site and an atom.
+
+Remaining: the MCP capabilities/validate-inputs surface; PyPI release, which
 needs a distribution name — `sashimi` is taken on PyPI by a dormant saliency
 library, so the import name and the install name will differ; registration
 alongside mcpymol; and the Proxmox VM plus Tailscale for benchmark and timeout
