@@ -17,9 +17,9 @@ repos:
       - id: end-of-file-fixer
       - id: mixed-line-ending
       - id: trailing-whitespace
-        # Preserve the DX/PQR fixtures byte-for-byte; both formats are
-        # whitespace-sensitive and the tests assert on exact output.
-        exclude: ^tests/corpus/
+        # Preserve the fixtures byte-for-byte; PDB is column-oriented and
+        # DX/PQR are whitespace-sensitive, and the tests assert on exact output.
+        exclude: ^tests/(corpus|data)/
 
   - repo: local
     hooks:
