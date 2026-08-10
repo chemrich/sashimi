@@ -79,7 +79,11 @@ jobs:
           uv venv --python 3.12 .pydelphi
           uv pip install --python .pydelphi/bin/python \
             "pydelphi @ git+https://github.com/delphi001/pyDelPhi@ebc84cb0c7951274cf76cf0b00185f07999527a5"
-          .pydelphi/bin/pydelphi-static --version
+          # `--version` prints the version and then exits 1. Without the `|| true`
+          # this step "fails", the env var below never gets set, and the DelPhi
+          # tests skip while the run stays green — which is exactly how this was
+          # missed the first time. `discover.py` tolerates the same exit code.
+          .pydelphi/bin/pydelphi-static --version || true
 
       - name: Point sashimi at pyDelPhi
         if: steps.pydelphi.outcome == 'success'
@@ -101,6 +105,16 @@ jobs:
 
       - name: Test
         run: uv run --frozen pytest -q
+
+      # Guards the failure this workflow shipped with on its first run: pyDelPhi
+      # installed, the env var silently never got set, all eight DelPhi tests
+      # skipped, and CI stayed green. A skipped tier and a passing tier look
+      # identical in the summary line, so assert the distinction.
+      - name: Verify the DelPhi tier actually ran
+        if: steps.pydelphi.outcome == 'success'
+        run: |
+          test -n "$SASHIMI_DELPHI_PATH"
+          uv run --frozen pytest -q -m delphi
 
   # Single stable check name for the branch ruleset to require. Matrix job names
   # change whenever the matrix does; this one does not.

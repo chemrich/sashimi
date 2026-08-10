@@ -10,6 +10,7 @@ so the tests ask the binary what it is rather than assuming.
 from __future__ import annotations
 
 import dataclasses
+import os
 
 import numpy as np
 import pytest
@@ -34,9 +35,17 @@ pytestmark = pytest.mark.delphi
 
 @pytest.fixture(scope="module")
 def binary():
+    """The installed DelPhi, or a skip — but never a skip that hides a mistake.
+
+    Absent is the normal case and skipping is right. Being *pointed at* a DelPhi
+    that then fails to run is a broken installation, and skipping there would
+    report the same green result as a working one.
+    """
     try:
         return discover_delphi()
     except DelphiNotFound as exc:
+        if os.environ.get("SASHIMI_DELPHI_PATH"):
+            raise
         pytest.skip(str(exc))
 
 
