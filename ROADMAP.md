@@ -534,7 +534,11 @@ kJ/mol at 0.41 / 0.20 / 0.16 Å spacing against a closed form of −228.61 —
 systematic unit error.
 
 **Phase 2 — MCP server. ✅** The four tools of §6, error mapping, and a
-`sashimi-mcp` stdio entry point. Validated programmatically rather than by MCP
+`sashimi-mcp` stdio entry point. The exit criterion was finally satisfied
+*visually* in phase 5, not merely programmatically: hen lysozyme (1AKI) through
+prepare → solve → PyMOL, which loaded the DX (`2,679,201 data points`) and
+rendered a predominantly positive surface consistent with its net charge of
++8 e. Until then nothing had confirmed PyMOL could read our writer's output. Validated programmatically rather than by MCP
 Inspector: the tests drive a real `fastmcp.Client`, so schema generation,
 argument validation and error translation are all exercised. Exit criterion met
 end to end — PDB → PQR → 97³ map at 0.31 Å, −209.660 kJ/mol → sampled at
@@ -604,11 +608,28 @@ blocks, because the solve would still run and would say so. A test asserts the
 prediction matches what `sashimi_solve` actually does — a forecast that can
 disagree with the event is worse than none.
 
+Also done: packaging metadata (`authors`, `classifiers`, `urls`, `keywords`) and
+registration as an MCP server. And the first real end-to-end run, which earned
+its place immediately — see below.
+
 Remaining: the PyPI release itself. The distribution name is settled —
 **`sashimi-electro`**, since plain `sashimi` belongs to an unrelated dormant
 library — so the install name and the import name differ and the README says
 so. Still outstanding: `authors`, `classifiers` and `urls` in the manifest, and
-registration alongside mcpymol.
+nothing else: the manifest is complete and the server is registered.
+
+**What the first real protein found.** Everything worked, and the numbers were
+meaningful — pdb2pqr gave hen lysozyme its textbook net charge of +8 e with zero
+warnings, and the most negative residues included Asp52, one of its two
+catalytic residues. But `sashimi_potential_extrema` took **64 seconds**, three
+times longer than the 19-second solve it was analysing. `_solute_mask` evaluated
+every atom against the whole grid: 1,960 atoms against 2.7M points. Restricting
+each atom to its own bounding box is **50x faster** (1.28 s) for a bit-identical
+result, checked against the naive implementation as an oracle over random
+geometry, with a scale guard so the complexity cannot regress.
+
+No amount of dipeptide testing would have surfaced that. It is the argument for
+doing integration earlier rather than last.
 
 The Proxmox VM and Tailscale have moved to phase 8. §11 records why: CI is
 already native amd64 and runs the full suite, nothing consumes

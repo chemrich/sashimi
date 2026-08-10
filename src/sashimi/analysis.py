@@ -137,17 +137,37 @@ def potential_extrema(
 
 
 def _solute_mask(grid: PotentialGrid, structure: PQRData, margin: float) -> np.ndarray:
-    """True where a grid point lies inside any atom's radius plus `margin`."""
-    axes = [
-        grid.origin[axis] + np.arange(grid.values.shape[axis]) * grid.spacing[axis]
-        for axis in range(DIMENSIONS)
-    ]
-    xx, yy, zz = np.meshgrid(*axes, indexing="ij")
-    mask = np.zeros(grid.values.shape, dtype=bool)
+    """True where a grid point lies inside any atom's radius plus `margin`.
+
+    Each atom is tested only against the grid points inside its own bounding
+    box. The obvious implementation — evaluate every atom against the whole
+    grid — is O(atoms x grid points), which on real input means 1,960 atoms
+    against 2.7M points: measured at 64 s for hen lysozyme, three times longer
+    than the solve it was analysing. A cutoff sphere spans roughly a dozen cells
+    per axis, so restricting to that is ~1000x less arithmetic for an identical
+    result.
+    """
+    shape = grid.values.shape
+    origin, spacing = grid.origin, grid.spacing
+    mask = np.zeros(shape, dtype=bool)
+    upper = np.array(shape)
+
     for index in range(structure.n_atoms):
-        cx, cy, cz = structure.coords[index]
+        centre = structure.coords[index]
         cutoff = structure.radii[index] + margin
-        mask |= ((xx - cx) ** 2 + (yy - cy) ** 2 + (zz - cz) ** 2) <= cutoff**2
+
+        lo = np.maximum(np.floor((centre - cutoff - origin) / spacing).astype(int), 0)
+        hi = np.minimum(np.ceil((centre + cutoff - origin) / spacing).astype(int) + 1, upper)
+        if np.any(lo >= hi):
+            continue  # this atom's sphere misses the grid entirely
+
+        axes = [origin[a] + np.arange(lo[a], hi[a]) * spacing[a] for a in range(DIMENSIONS)]
+        xx, yy, zz = np.meshgrid(*axes, indexing="ij")
+        inside = (
+            (xx - centre[0]) ** 2 + (yy - centre[1]) ** 2 + (zz - centre[2]) ** 2
+        ) <= cutoff**2
+        mask[lo[0] : hi[0], lo[1] : hi[1], lo[2] : hi[2]] |= inside
+
     return mask
 
 
