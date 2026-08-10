@@ -1544,7 +1544,7 @@ wheels = [
 ]
 
 [[package]]
-name = "sashimi"
+name = "sashimi-electro"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
