@@ -579,11 +579,12 @@ blocks, because the solve would still run and would say so. A test asserts the
 prediction matches what `sashimi_solve` actually does — a forecast that can
 disagree with the event is worse than none.
 
-Remaining: PyPI release, which
-needs a distribution name — `sashimi` is taken on PyPI by a dormant saliency
-library, so the import name and the install name will differ; registration
-alongside mcpymol; and the Proxmox VM plus Tailscale for benchmark and timeout
-work.
+Remaining: the PyPI release itself. The distribution name is settled —
+**`sashimi-electro`**, since plain `sashimi` belongs to an unrelated dormant
+library — so the install name and the import name differ and the README says
+so. Still outstanding: `authors`, `classifiers` and `urls` in the manifest,
+registration alongside mcpymol, and the Proxmox VM plus Tailscale for benchmark
+and timeout work.
 
 **Phase 6 — Distribution.** Owned APBS build matrix (trimmed, mostly static,
 feedstock-derived); `linux-aarch64` build offered upstream; license-file audit

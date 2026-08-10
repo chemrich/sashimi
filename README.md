@@ -2,28 +2,36 @@
 
 *Thinly sliced Poisson: a maintained wrapper around APBS for biomolecular electrostatics.*
 
+Distributed as **`sashimi-electro`**; imported as **`sashimi`**. The plain
+`sashimi` name on PyPI belongs to an unrelated, dormant library.
+
 Computes electrostatic potential maps and polar solvation energies from charged
 structures, using the [APBS](https://www.poissonboltzmann.org/) 3.4.1 binary
 as its solver backend. APBS is never vendored, patched, or built from source —
 it comes from your system package manager.
 
 ```python
-import numpy as np
-from sashimi import GridSpec, PQRData, SolventModel
+from sashimi import FiniteDifferenceRequest, GridSpec, SolventModel
 from sashimi.apbs import ApbsSolver
 from sashimi.pqr import read_pqr
 
-result = ApbsSolver().solve_lpbe(
-    read_pqr("protein.pqr"),
-    GridSpec(resolution=0.5, padding=10.0),
-    SolventModel(ionic_strength=0.15),
-    compute_energy=True,
+result = ApbsSolver().solve(
+    FiniteDifferenceRequest(
+        structure=read_pqr("protein.pqr"),
+        solvent=SolventModel(ionic_strength=0.15),
+        grid=GridSpec(resolution=0.5, padding=10.0),
+    )
 )
 
-print(result.energy_kj_mol, result.backend)   # -1234.5 kJ/mol, apbs-3.4.1
-result.potential.to_dx("potential.dx")        # load in PyMOL / ChimeraX
+print(result.energy_kj_mol)              # -1234.5 (kJ/mol)
+print(result.provenance.summary())       # apbs-3.4.1 sha256:83acdfb0818a
+result.potential.to_dx("potential.dx")   # load in PyMOL / ChimeraX
 result.potential.value_at([[12.0, 3.4, -1.0]])
 ```
+
+The request type is per solver family: a `FiniteDifferenceRequest` carries a
+grid, a `BoundaryElementRequest` carries a mesh density and no grid at all, so a
+request a backend cannot honor is unrepresentable rather than merely rejected.
 
 ## Install
 
@@ -71,8 +79,7 @@ against — but unlike a lockfile, neither *holds* it there. `tests/test_corpus.
 is what replaces that pin: it asserts the discovered version and re-solves the
 Born ion against checked-in energies and probe values. If a `brew upgrade`
 moves APBS underneath you, that test tells you in kJ/mol. Regenerate the corpus
-deliberately with `uv run python scripts/build_corpus.py` — never to turn a red
-test green.
+deliberately with `sashimi corpus build --force` — never to turn a red test green.
 
 ## Development
 
@@ -127,21 +134,34 @@ See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
 ## Status
 
-Phases 0–2 are done. The core library is validated against the closed-form
-Born ion, converging monotonically as the grid refines (0.62% → 0.11% → 0.02%
-at 0.41 / 0.20 / 0.16 Å spacing), and a slice of phase 3's golden corpus is in
-place early to guard the unpinned APBS.
+Phases 0–4 are done and phase 5 is nearly so. The core library is validated
+against the closed-form Born ion, converging monotonically as the grid refines
+(0.62% → 0.11% → 0.02% at 0.41 / 0.20 / 0.16 Å spacing). The protocol admits a
+boundary-element backend without APBS-shaped concessions, proven by a stub that
+returns surface potentials through the same `SolveResult`.
 
-The MCP server exposes four tools — `sashimi_prepare_structure`,
-`sashimi_solve`, `sashimi_potential_at`, `sashimi_compare_maps`. Run it over
-stdio with `sashimi-mcp`, or register it:
+The MCP server exposes nine tools over stdio:
+
+| Tool | Question it answers |
+|---|---|
+| `sashimi_capabilities` | what can this installation do? |
+| `sashimi_validate_inputs` | would this solve work, and what would it cost? |
+| `sashimi_prepare_structure` | PDB → PQR, and what did pdb2pqr rebuild? |
+| `sashimi_solve` | the potential map and solvation energy |
+| `sashimi_potential_at` | the potential at these coordinates |
+| `sashimi_potential_extrema` | where are the strongest patches? |
+| `sashimi_potential_in_sphere` | what is the field in this pocket? |
+| `sashimi_residue_potentials` | which residues sit in negative potential? |
+| `sashimi_compare_maps` | how do two maps differ? |
+
+Run it with `sashimi-mcp`, or register it:
 
 ```json
 { "mcpServers": { "sashimi": { "command": "uv",
     "args": ["run", "--project", "/path/to/sashimi", "sashimi-mcp"] } } }
 ```
 
-Phase 3 adds the golden corpus as a real feature:
+The golden corpus is a first-class feature:
 
 ```sh
 sashimi corpus verify              # re-solve the manifest, diff against record
@@ -152,6 +172,6 @@ Five cases, summaries in `tests/corpus/`. It is the regression net for the
 unpinned APBS today, and the acceptance gate for a second backend later —
 `sashimi corpus verify --backend debye` needs no APBS installed.
 
-See [ROADMAP.md](ROADMAP.md) for where this is all heading — it is the single
-planning document, covering the protocol, the multi-backend future, distribution
-and `debye`.
+Not yet released to PyPI. See [ROADMAP.md](ROADMAP.md) for where this is
+heading — it is the single planning document, covering the protocol, the
+multi-backend future, distribution and `debye`.
