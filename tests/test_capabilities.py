@@ -10,7 +10,28 @@ import pytest
 from sashimi.apbs import discover
 from sashimi.apbs.options import ApbsOptions
 from sashimi.capabilities import UNITS, describe_capabilities, validate_request
+from sashimi.delphi import discover as delphi_discover
 from sashimi.protocol import Equation, GridSpec, PQRData, SolventModel, SurfaceModel
+
+
+@pytest.fixture
+def hide_backends(monkeypatch):
+    """Make every backend undiscoverable, whatever this machine has installed.
+
+    Both discovery layers cache, and both read the environment directly, so the
+    caches have to be cleared on the way in *and* out — otherwise a test that
+    hides APBS poisons the lookup for every test after it.
+    """
+    caches = (discover._discover_cached, delphi_discover._discover_cached)
+    for cache in caches:
+        cache.cache_clear()
+    monkeypatch.setenv("SASHIMI_APBS_PATH", "/nonexistent/apbs")
+    monkeypatch.setenv("SASHIMI_DELPHI_PATH", "/nonexistent/delphi")
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    yield
+    for cache in caches:
+        cache.cache_clear()
 
 
 def ion(radius: float = 3.0) -> PQRData:
@@ -50,20 +71,32 @@ class TestCapabilities:
         assert "nonlinear" in unsupported
         assert "passthrough" in unsupported
 
-    def test_a_missing_backend_is_a_report_not_an_exception(self, monkeypatch):
+    @pytest.mark.usefixtures("hide_backends")
+    def test_a_missing_backend_is_a_report_not_an_exception(self):
         """This tool must survive exactly the situation it exists to explain."""
-        discover._discover_cached.cache_clear()
-        monkeypatch.setenv("SASHIMI_APBS_PATH", "/nonexistent/apbs")
-        monkeypatch.delenv("CONDA_PREFIX", raising=False)
-        monkeypatch.setattr("shutil.which", lambda _: None)
-        try:
-            caps = describe_capabilities()
-            assert caps["available_backends"] == []
-            assert caps["backends"][0]["available"] is False
-            assert "brew install apbs" in caps["backends"][0]["detail"]
-            assert "0/1 backend" in caps["summary"]
-        finally:
-            discover._discover_cached.cache_clear()
+        caps = describe_capabilities()
+
+        assert caps["available_backends"] == []
+        assert all(backend["available"] is False for backend in caps["backends"])
+        assert "brew install apbs" in caps["backends"][0]["detail"]
+        # Every backend must explain its own absence, not just the first one.
+        assert "compbio.clemson.edu" in caps["backends"][1]["detail"]
+        assert "0/2 backend" in caps["summary"]
+
+    def test_reports_both_finite_difference_backends(self):
+        names = [backend["name"] for backend in describe_capabilities()["backends"]]
+        assert names == ["apbs", "delphi"]
+
+    @pytest.mark.usefixtures("hide_backends")
+    def test_comparable_surface_models_are_reported(self):
+        """Which models two backends share decides whether they can be compared.
+
+        With nothing installed the honest answer is an empty list, and an empty
+        list is a real answer here rather than a missing one — APBS and pyDelPhi
+        genuinely share no surface model.
+        """
+        models = describe_capabilities()["surface_models"]
+        assert models["comparable_across_available_backends"] == []
 
 
 class TestValidateRequest:

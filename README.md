@@ -130,6 +130,37 @@ Scope is deliberately narrow: the `mg-auto` finite-difference path with the
 linearized PBE. The FEM, geoflow, BEM, PBAM and PBSAM solvers are not exposed,
 and there is no raw APBS-input passthrough — that would defeat the abstraction.
 
+`sashimi.delphi` is the second backend, and the test of whether that boundary
+was real. It required no protocol change at all, absorbing a cubic grid, a
+Gaussian-cube map in Bohr, energies in kT and a temperature parameter in
+*Celsius* below the same `Solver` interface.
+
+### Using DelPhi
+
+Neither DelPhi flavour has a package, so both are opt-in and neither is a
+dependency:
+
+```bash
+# the C++ reference build — compile from the Clemson tarball, then:
+export SASHIMI_DELPHI_PATH=/path/to/delphicpp_release
+
+# or the same lab's pure-Python reimplementation, which installs anywhere
+uv venv --python 3.12 .pydelphi
+uv pip install --python .pydelphi/bin/python git+https://github.com/delphi001/pyDelPhi
+export SASHIMI_DELPHI_PATH="$PWD/.pydelphi/bin/pydelphi-static"
+```
+
+pyDelPhi is driven as a subprocess and never imported: it is AGPL-3.0 where
+sashimi is MIT, and it pins `numpy<2.3` and `python<3.13`. Both reasons point
+the same way, and it is the boundary APBS already sits behind.
+
+**The two backends do not agree about what a surface model is**, and that is
+the most useful thing this backend surfaces. `sashimi_capabilities` reports
+which models the installed backends actually share — often none — because a
+spread computed across mismatched surface definitions is a modelling difference
+misreported as a solver disagreement. On the models they do share, APBS and
+DelPhi agree to 2.4% on hen lysozyme.
+
 See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
 ## Status
