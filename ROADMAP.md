@@ -471,25 +471,50 @@ trimmed reproducible builds exist partly for this.
 
 ## 11. Environments and infrastructure
 
-| Environment | Arch | APBS source | Role |
-|---|---|---|---|
-| Mac local | osx-arm64 | conda-forge native | dev loop, protocol tests |
-| OrbStack container | linux/amd64 (Rosetta) | conda-forge | subprocess integration tests |
-| Proxmox Ubuntu VM | linux-64 native | conda-forge / owned build | timing-sensitive validation, benchmarks |
-| GitHub Actions | linux-64, osx-arm64 | conda-forge via micromamba | full suite per push |
-| (future) arm64 Linux | linux-aarch64 | owned build | once we ship it |
+| Environment | Arch | APBS source | Role | Status |
+|---|---|---|---|---|
+| Mac local | osx-arm64 | conda-forge native | dev loop, protocol tests | in use |
+| GitHub Actions | linux-64, osx-arm64 | conda-forge via micromamba | **full suite per push, both platforms** | in use |
+| OrbStack container | linux/amd64 (Rosetta) | conda-forge | local linux reproduction when CI is too slow a loop | optional |
+| Proxmox Ubuntu VM | linux-64 native | conda-forge / owned build | stable timings for benchmarking | **deferred to phase 8** |
+| (future) arm64 Linux | linux-aarch64 | owned build | the platform gap of §9 | phase 6 |
 
-Rosetta handles APBS fine — it is a plain CPU-bound FD solver — but Rosetta
-timings are not representative, which matters for timeout handling and any
-timing reported in `SolveResult`. That is what the Proxmox VM is for.
+### Why the benchmark VM is deferred
 
-**Remote access to the amd64 validation VM.** Tailscale on the Ubuntu VM (or an
-LXC subnet router on Proxmox): SSO login with a hardware key as second factor at
-the IdP, zero ports forwarded on the UDM Pro, SSH + VS Code Remote / Claude Code
+This section originally justified a native amd64 VM on the grounds that Rosetta
+timings are unrepresentative, "which matters for timeout handling and any timing
+reported in `SolveResult`". That was written when the linux-64 test environment
+was a Rosetta container and CI was an afterthought. It no longer holds:
+
+- **CI is native amd64.** `ubuntu-latest` runs the full suite, APBS-marked tests
+  included, on every push. "Validated on real amd64 hardware" is already true and
+  automatic.
+- **Nothing consumes a timing.** `Provenance.wall_seconds` is recorded and read
+  by no test and no branch. It is informational metadata; an accurate number
+  would make it prettier, not the code more correct.
+- **The timeout needs no calibration.** Measured: the `max_points` cap of 161³
+  solves in 9.9 s, and 225³ — a grid the guardrail refuses to produce — in
+  33.9 s. Against a 300 s default that is 30× and 9× headroom. Rosetta being
+  2–3× slower does not threaten a 30× margin, so there is no question here that
+  measurement on any machine fails to answer.
+
+What the VM would genuinely buy is *stable* timings, which CI cannot give at any
+architecture because its runners are shared and noisy. Nothing needs that until
+**debye makes a performance claim against APBS (phase 8)** — that is the trigger
+to revisit, and the honest one: the first time a decision depends on a timing
+number.
+
+Worth being clear about what it would *not* buy: the `linux-aarch64` gap is the
+real platform debt (§9), and an x86 VM does nothing for it. That needs arm64
+Linux — GitHub's arm64 runners, or different hardware.
+
+**Remote access, when the VM exists.** Tailscale on the Ubuntu VM (or an LXC
+subnet router on Proxmox): SSO login with a hardware key as second factor at the
+IdP, zero ports forwarded on the UDM Pro, SSH + VS Code Remote / Claude Code
 rather than a desktop, so no RDP surface at all. Alternatives considered: UniFi
 WireGuard (no true second factor), Guacamole + TOTP or behind Cloudflare Access
 with a hardware-key policy (most capable, most setup). Tailscale chosen on
-effort/benefit.
+effort/benefit. Deferred with the VM — it exists only to reach it.
 
 ## 12. Phases
 
@@ -582,9 +607,14 @@ disagree with the event is worse than none.
 Remaining: the PyPI release itself. The distribution name is settled —
 **`sashimi-electro`**, since plain `sashimi` belongs to an unrelated dormant
 library — so the install name and the import name differ and the README says
-so. Still outstanding: `authors`, `classifiers` and `urls` in the manifest,
-registration alongside mcpymol, and the Proxmox VM plus Tailscale for benchmark
-and timeout work.
+so. Still outstanding: `authors`, `classifiers` and `urls` in the manifest, and
+registration alongside mcpymol.
+
+The Proxmox VM and Tailscale have moved to phase 8. §11 records why: CI is
+already native amd64 and runs the full suite, nothing consumes
+`Provenance.wall_seconds`, and the 300 s timeout has 30× headroom over the
+largest grid the guardrail permits. The VM's remaining value is stable timings,
+which nothing needs until debye makes a performance claim.
 
 **Phase 6 — Distribution.** Owned APBS build matrix (trimmed, mostly static,
 feedstock-derived); `linux-aarch64` build offered upstream; license-file audit
@@ -598,6 +628,11 @@ triage→refine workflows.
 
 **Phase 8 — debye.** The validation ladder of §10; drop-in behind the backend
 interface; portability suite green on all architectures; BEM engine later.
+
+This is where benchmark infrastructure finally earns its place. A performance
+claim against APBS is the first decision in the project that depends on a timing
+number, and CI cannot supply one — its runners are shared and noisy at every
+architecture. The Proxmox VM and Tailscale (§11) belong here, not in phase 5.
 
 **Phase 9 — Integration, ongoing.** mcpymol grows a convenience chaining
 `sashimi_solve` → load DX → surface coloring; protean consumes `SolveResult`.
@@ -652,9 +687,12 @@ summarised here.
 
 ### Still open
 
-- **Is `max_points = 161³` the right guardrail?** It is sized for memory, but it
-  also permits a 56 MB artifact per solve. Now that maps are content-addressed
-  and accumulate, disk and hand-around-ability may be the binding constraint.
+- **Is `max_points = 161³` the right guardrail?** It is sized for memory, but
+  memory turns out not to be the constraint: APBS peaks at 122 MB high-water on
+  a 161³ grid. The real costs are wall time and disk — 161³ is 9.9 s and 56 MB,
+  225³ is 33.9 s and 154 MB. The current cap happens to sit in a defensible
+  place for both, so this is now a question of whether to *document* that
+  reasoning rather than whether to change the number.
 - **Does `validate` become an MCP tool?** An agent asking "is this energy
   trustworthy?" is a good capability, but it needs N backends installed, so it is
   CLI-first regardless. Revisit in phase 7.
