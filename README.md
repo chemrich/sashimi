@@ -145,14 +145,16 @@ dependency:
 export SASHIMI_DELPHI_PATH=/path/to/delphicpp_release
 
 # or the same lab's pure-Python reimplementation, which installs anywhere
-uv venv --python 3.12 .pydelphi
-uv pip install --python .pydelphi/bin/python git+https://github.com/delphi001/pyDelPhi
+uv venv --python 3.13 .pydelphi
+uv pip install --python .pydelphi/bin/python git+https://github.com/shaileshp51/pyDelPhi
 export SASHIMI_DELPHI_PATH="$PWD/.pydelphi/bin/pydelphi-static"
 ```
 
 pyDelPhi is driven as a subprocess and never imported: it is AGPL-3.0 where
-sashimi is MIT, and it pins `numpy<2.3` and `python<3.13`. Both reasons point
-the same way, and it is the boundary APBS already sits behind.
+sashimi is MIT, and that is the boundary APBS already sits behind. Note that it
+supports **neither** of the surface models APBS does, so it cannot be
+cross-validated against APBS — it exercises the backend, not the physics. The
+C++ build is the one that can.
 
 **The two backends do not agree about what a surface model is**, and that is
 the most useful thing this backend surfaces. `sashimi_capabilities` reports

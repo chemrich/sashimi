@@ -716,6 +716,17 @@ and **2.44% on hen lysozyme**, 1,960 atoms, at 0.5 Å. On the Born ion, where a
 closed form exists, DelPhi lands on **−228.609 kJ/mol against −228.611** while
 APBS is 2.36% off at the same nominal resolution.
 
+**Cross-validation in CI.** `tests/test_cross_validation.py` runs the spread
+check on every push, gated on `comparable_surface_models()` being non-empty, so
+it exercises itself only where a comparison is legitimate. CI builds the C++
+DelPhi from the Clemson tarball on the Linux leg — measured at 40 s under
+emulation on Ubuntu 24.04 with g++ 13.3, ~13 s natively, needing only boost
+headers — and runs pyDelPhi on macOS, so both flavours are covered per push and
+the comparable one is where the comparison happens. The Linux-built binary
+reproduces the Born ion to the last printed digit of the macOS arm64 build
+(−92.22 kT), which is the evidence that a build from that tarball is a
+reproducible artifact rather than a local accident.
+
 Remaining in this phase: the `sashimi validate` CLI; TABI-PB, which forces the
 surface-potential path to be real; PyGBe in-process, which proves
 transport-agnosticism; optional GB tier for triage→refine workflows.

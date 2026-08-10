@@ -13,7 +13,10 @@ including the `linux-aarch64` gap ROADMAP.md section 9 calls the real platform
 debt, so it is the flavour CI can actually exercise. Both are driven as
 subprocesses, never imported — the same boundary section 9 draws around APBS,
 which for pyDelPhi also keeps its AGPL-3.0 licence on its own side of a process
-boundary and its `numpy<2.3` pin out of sashimi's environment.
+boundary. (Its dependency pins were a second reason at v0.2.0, which required
+`numpy<2.3` and `python<3.13` against sashimi's own resolution; v0.3.0 moved to
+`python>=3.13` and `numpy>=2.3.5` and no longer conflicts. The licence argument
+stands on its own.)
 
 Serves ROADMAP.md phase 7.
 """

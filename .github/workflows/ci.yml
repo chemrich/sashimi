@@ -58,36 +58,83 @@ jobs:
         with:
           enable-cache: true
 
-      # DelPhi, in the only form CI can have it. The C++ reference build has to
-      # be compiled from a Clemson tarball with boost and a makefile that
-      # hardcodes x86 flags, so no CI job installs it; pyDelPhi is the same lab's
-      # Python/numba reimplementation and needs nothing but a Python.
+      # DelPhi: the C++ reference build on Linux, pyDelPhi on macOS.
       #
-      # In its own virtualenv, for three separate reasons, any one of which
-      # would be sufficient: it pins numpy<2.3 and python<3.13 against sashimi's
-      # own resolution, and it is AGPL-3.0 where sashimi is MIT — so it is
-      # driven as a subprocess and never imported, which is the boundary
-      # ROADMAP.md section 9 already draws around APBS.
+      # One flavour per runner, because they cover different things and neither
+      # covers both. The C++ build supports `molecular` and `van-der-waals` —
+      # the only surface models it shares with APBS — so it is what makes
+      # cross-solver validation possible at all, and `tests/test_cross_validation.py`
+      # runs only where it is present. pyDelPhi supports neither and so can
+      # validate nothing, but it installs anywhere and exercises the backend's
+      # plumbing. Splitting them across the matrix covers both per push.
       #
-      # Pinned to a commit because pyDelPhi has no release on PyPI, and allowed
-      # to fail: if a third party's git host is down, the DelPhi tests should
-      # skip rather than turn sashimi's CI red.
-      - name: Install pyDelPhi
-        id: pydelphi
+      # Both are driven as subprocesses and never imported: DelPhi ships no
+      # licence text at all and pyDelPhi is AGPL-3.0 where sashimi is MIT, which
+      # is the boundary ROADMAP.md section 9 already draws around APBS.
+
+      - name: Cache the DelPhi build
+        if: runner.os == 'Linux'
+        id: delphi-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/delphi
+          # Bump the trailing version to force a rebuild; the digest is the
+          # upstream tarball's, so a silently re-cut release also invalidates it.
+          key: delphi-cpp-8.5.0-51f3e2ac-${{ runner.os }}-v1
+
+      # Measured at 40 s under emulation on Ubuntu 24.04 (g++ 13.3, boost 1.83)
+      # and ~13 s natively, so the cache is a convenience rather than a
+      # necessity. Only boost *headers* are needed; nothing is linked.
+      #
+      # CXXFLAGS is overridden to drop the upstream `-march=native`, which would
+      # otherwise tune the link line to whichever runner built it. Allowed to
+      # fail: if Clemson's host is down, the DelPhi tests should skip rather
+      # than turn sashimi's CI red.
+      - name: Build DelPhi (C++ reference build)
+        id: delphi_cpp
+        if: runner.os == 'Linux' && steps.delphi-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         run: |
-          uv venv --python 3.12 .pydelphi
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libboost-dev
+          curl -sSLO https://compbio.clemson.edu/lab/media/releasefiles/Delphicpp_v8.5.0_Linux.tar.gz
+          echo "51f3e2acceac1730a0dc72562300f3dc072f968b557e6bc25148013ab578cedf  Delphicpp_v8.5.0_Linux.tar.gz" \
+            | sha256sum -c -
+          tar xzf Delphicpp_v8.5.0_Linux.tar.gz
+          make -C Delphicpp_v8.5.0_Linux/Release -j"$(nproc)" CXXFLAGS='-O2 -w -std=c++11 -DNDEBUG'
+          mkdir -p ~/.local/delphi
+          cp Delphicpp_v8.5.0_Linux/Release/delphicpp_release ~/.local/delphi/
+
+      # Pinned to the v0.3.0 tag on the author's repository, which is the one
+      # pyDelPhi's own pyproject names. The delphi001 org copy is a stale mirror
+      # (v0.2.0, last pushed 2025-11) with issues disabled.
+      - name: Install pyDelPhi
+        id: pydelphi
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          uv venv --python 3.13 .pydelphi
           uv pip install --python .pydelphi/bin/python \
-            "pydelphi @ git+https://github.com/delphi001/pyDelPhi@ebc84cb0c7951274cf76cf0b00185f07999527a5"
+            "pydelphi @ git+https://github.com/shaileshp51/pyDelPhi@e8531243b9537c6996a477004131e808c773340a"
           # `--version` prints the version and then exits 1. Without the `|| true`
           # this step "fails", the env var below never gets set, and the DelPhi
           # tests skip while the run stays green — which is exactly how this was
           # missed the first time. `discover.py` tolerates the same exit code.
           .pydelphi/bin/pydelphi-static --version || true
 
-      - name: Point sashimi at pyDelPhi
-        if: steps.pydelphi.outcome == 'success'
-        run: echo "SASHIMI_DELPHI_PATH=$PWD/.pydelphi/bin/pydelphi-static" >> "$GITHUB_ENV"
+      - name: Point sashimi at DelPhi
+        id: delphi_path
+        run: |
+          if [ -x "$HOME/.local/delphi/delphicpp_release" ]; then
+            found="$HOME/.local/delphi/delphicpp_release"
+          elif [ -x "$PWD/.pydelphi/bin/pydelphi-static" ]; then
+            found="$PWD/.pydelphi/bin/pydelphi-static"
+          else
+            echo "No DelPhi available; its tests will skip." && exit 0
+          fi
+          echo "SASHIMI_DELPHI_PATH=$found" >> "$GITHUB_ENV"
+          echo "found=true" >> "$GITHUB_OUTPUT"
 
       - name: Install
         # --frozen: fail if uv.lock is out of date with pyproject.toml, rather
@@ -109,12 +156,11 @@ jobs:
       # Guards the failure this workflow shipped with on its first run: pyDelPhi
       # installed, the env var silently never got set, all eight DelPhi tests
       # skipped, and CI stayed green. A skipped tier and a passing tier look
-      # identical in the summary line, so assert the distinction.
+      # identical in the summary line, so assert the distinction whenever a
+      # DelPhi was actually found.
       - name: Verify the DelPhi tier actually ran
-        if: steps.pydelphi.outcome == 'success'
-        run: |
-          test -n "$SASHIMI_DELPHI_PATH"
-          uv run --frozen pytest -q -m delphi
+        if: steps.delphi_path.outputs.found == 'true'
+        run: uv run --frozen pytest -q -m delphi
 
   # Single stable check name for the branch ruleset to require. Matrix job names
   # change whenever the matrix does; this one does not.

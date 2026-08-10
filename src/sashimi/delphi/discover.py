@@ -50,8 +50,9 @@ _INSTALL_HINT = (
     "DelPhi has no package: build the C++ release from the Clemson tarball "
     "(https://compbio.clemson.edu/lab/delphicpp_release/) and point "
     "$SASHIMI_DELPHI_PATH at the executable, or `pip install "
-    "git+https://github.com/delphi001/pyDelPhi` for the pure-Python flavour, "
-    "which needs no compiler and runs on every platform."
+    "git+https://github.com/shaileshp51/pyDelPhi` for the pure-Python flavour, "
+    "which needs no compiler and runs on every platform but supports neither of "
+    "the surface models APBS does."
 )
 
 

@@ -47,6 +47,9 @@ UNITS = {
 # tested code path produces it, and refusing beats returning untested numbers.
 IMPLEMENTED_EQUATIONS = (Equation.LINEAR,)
 
+# A spread needs two things to spread between.
+MIN_BACKENDS_TO_COMPARE = 2
+
 
 @dataclass(frozen=True)
 class BackendReport:
@@ -150,15 +153,21 @@ def _delphi_report() -> BackendReport:
 
 
 def comparable_surface_models() -> list[str]:
-    """Surface models every *available* backend can run.
+    """Surface models on which two or more installed backends could be compared.
 
     The precondition for a cross-solver spread being a solver disagreement
-    rather than a modelling one (ROADMAP.md section 8). It is frequently empty:
-    APBS and pyDelPhi have no surface model in common at all.
+    rather than a modelling one (ROADMAP.md section 8). It is frequently empty,
+    for two quite different reasons: APBS and pyDelPhi have no surface model in
+    common at all, and a single backend has nothing to be compared *with*.
+
+    The second case is why this needs two backends rather than intersecting
+    whatever is present. A lone APBS trivially "shares" all three of its models
+    with itself, and reporting those as comparable would tell a caller that
+    cross-validation is available when nothing is installed to validate against.
     """
     reports = [_apbs_report(), _delphi_report()]
     available = [set(r.surface_models) for r in reports if r.available]
-    if not available:
+    if len(available) < MIN_BACKENDS_TO_COMPARE:
         return []
     common: set[str] = set.intersection(*available)
     return sorted(common)

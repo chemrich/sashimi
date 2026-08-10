@@ -9,7 +9,12 @@ import pytest
 
 from sashimi.apbs import discover
 from sashimi.apbs.options import ApbsOptions
-from sashimi.capabilities import UNITS, describe_capabilities, validate_request
+from sashimi.capabilities import (
+    UNITS,
+    comparable_surface_models,
+    describe_capabilities,
+    validate_request,
+)
 from sashimi.delphi import discover as delphi_discover
 from sashimi.protocol import Equation, GridSpec, PQRData, SolventModel, SurfaceModel
 
@@ -86,6 +91,25 @@ class TestCapabilities:
     def test_reports_both_finite_difference_backends(self):
         names = [backend["name"] for backend in describe_capabilities()["backends"]]
         assert names == ["apbs", "delphi"]
+
+    def test_one_backend_is_comparable_with_nothing(self, monkeypatch):
+        """A lone backend trivially shares every model with itself.
+
+        Reporting those as comparable would tell a caller cross-validation is
+        available when there is nothing installed to validate against — which is
+        exactly what `tests/test_cross_validation.py` tripped over.
+        """
+
+        def which_but_no_delphi(name: str) -> str | None:
+            return None if "delphi" in name else f"/usr/bin/{name}"
+
+        delphi_discover._discover_cached.cache_clear()
+        monkeypatch.setenv("SASHIMI_DELPHI_PATH", "/nonexistent/delphi")
+        monkeypatch.setattr("shutil.which", which_but_no_delphi)
+        try:
+            assert comparable_surface_models() == []
+        finally:
+            delphi_discover._discover_cached.cache_clear()
 
     @pytest.mark.usefixtures("hide_backends")
     def test_comparable_surface_models_are_reported(self):
