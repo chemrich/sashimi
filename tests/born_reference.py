@@ -3,7 +3,7 @@
 The APBS `examples/born` README states an analytic solvation energy of
 -230.62 kJ/mol; the expression below with current CODATA constants gives
 -228.61. That 0.87% spread straddles a tight tolerance, so sashimi pins its own
-value from named constants and asserts at 1%. See PLAN.md section 7.
+value from named constants and asserts at 1%. See ROADMAP.md section 7.
 """
 
 from __future__ import annotations
