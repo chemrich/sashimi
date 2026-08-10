@@ -27,8 +27,10 @@ import numpy as np
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
     DIMENSIONS,
+    FiniteDifferenceRequest,
     FloatArray,
     GridSpec,
+    PotentialGrid,
     PQRData,
     SolventModel,
     Solver,
@@ -70,6 +72,17 @@ class Case:
     grid: GridSpec
     solvent: SolventModel
     compute_energy: bool = True
+
+    def request(self) -> FiniteDifferenceRequest:
+        """The case as a solver request. Every case is finite-difference today;
+        a BEM case would build a `BoundaryElementRequest` here instead."""
+        return FiniteDifferenceRequest(
+            structure=self.structure(),
+            solvent=self.solvent,
+            grid=self.grid,
+            want_energy=self.compute_energy,
+            want_potential=True,
+        )
 
     def structure(self) -> PQRData:
         if self.source == "born-ion":
@@ -165,12 +178,15 @@ def probe_points(origin: FloatArray, spacing: FloatArray, shape: tuple[int, ...]
     return np.asarray(centre + offsets, dtype=np.float64)
 
 
-def build_case(solver: Solver, case: Case) -> dict[str, Any]:
+def build_case(solver: Solver[FiniteDifferenceRequest], case: Case) -> dict[str, Any]:
     """Solve one case and reduce it to a checkable summary."""
-    result = solver.solve_lpbe(
-        case.structure(), case.grid, case.solvent, compute_energy=case.compute_energy
-    )
+    result = solver.solve(case.request())
     grid = result.potential
+    if not isinstance(grid, PotentialGrid):
+        raise TypeError(
+            f"corpus case {case.name!r} expected a volumetric potential, got "
+            f"{type(grid).__name__}. A surface-returning backend needs its own case shape."
+        )
     points = probe_points(grid.origin, grid.spacing, grid.shape)
     stats = grid.stats()
 
@@ -178,13 +194,14 @@ def build_case(solver: Solver, case: Case) -> dict[str, Any]:
         "name": case.name,
         "description": case.description,
         "source": case.source,
-        "backend": result.backend,
+        "backend": result.provenance.backend,
         "grid_spec": {
             "resolution": case.grid.resolution,
             "padding": case.grid.padding,
             "max_points": case.grid.max_points,
         },
         "solvent_model": _solvent_dict(case.solvent),
+        "resolved_parameters": result.provenance.resolved_parameters,
         "geometry": {
             "shape": list(grid.shape),
             "origin": [float(v) for v in grid.origin],
@@ -207,7 +224,7 @@ def _solvent_dict(solvent: SolventModel) -> dict[str, Any]:
         "ionic_strength": solvent.ionic_strength,
         "ion_radius": solvent.ion_radius,
         "temperature": solvent.temperature,
-        "surface_method": solvent.surface_method,
+        "surface_model": solvent.surface_model.value,
         "surface_radius": solvent.surface_radius,
     }
 
@@ -230,7 +247,7 @@ def load_summary(case: Case, directory: Path | None = None) -> dict[str, Any]:
 
 
 def build_manifest(
-    solver: Solver,
+    solver: Solver[FiniteDifferenceRequest],
     cases: tuple[Case, ...] = MANIFEST,
     directory: Path | None = None,
 ) -> list[Path]:
@@ -243,7 +260,7 @@ def build_manifest(
 
 
 def verify_case(
-    solver: Solver,
+    solver: Solver[FiniteDifferenceRequest],
     case: Case,
     recorded: dict[str, Any],
     tolerances: Tolerances = Tolerances(),  # noqa: B008 — frozen dataclass
@@ -329,7 +346,7 @@ def _verify_probes(
 
 
 def verify_manifest(
-    solver: Solver,
+    solver: Solver[FiniteDifferenceRequest],
     cases: tuple[Case, ...] = MANIFEST,
     tolerances: Tolerances = Tolerances(),  # noqa: B008 — frozen dataclass
     directory: Path | None = None,

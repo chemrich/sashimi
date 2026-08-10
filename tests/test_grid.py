@@ -3,8 +3,9 @@ import pytest
 
 from sashimi.apbs.grid import CFAC, LEGAL_DIME, legal_dime, size_grid
 from sashimi.apbs.input import build_input
-from sashimi.errors import GridTooLarge
-from sashimi.protocol import GridSpec, PQRData, SolventModel
+from sashimi.apbs.options import ApbsOptions
+from sashimi.errors import GridTooLarge, UnsupportedRequest
+from sashimi.protocol import Equation, GridSpec, PQRData, SolventModel, SurfaceModel
 
 
 def ion(radius=3.0):
@@ -116,3 +117,68 @@ def test_reference_block_has_no_mobile_ions():
 def test_zero_ionic_strength_emits_no_ion_lines():
     text = build_input(size_grid(ion(), GridSpec()), SolventModel(ionic_strength=0.0))
     assert "ion charge" not in text
+
+
+class TestSurfaceMapping:
+    """The portable enum maps onto APBS, and refuses what APBS cannot do."""
+
+    def test_smoothed_molecular_maps_to_smol(self):
+        text = build_input(
+            size_grid(ion(), GridSpec()),
+            SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
+        )
+        assert "srfm smol" in text
+
+    def test_molecular_maps_to_mol(self):
+        text = build_input(
+            size_grid(ion(), GridSpec()), SolventModel(surface_model=SurfaceModel.MOLECULAR)
+        )
+        assert "srfm mol" in text
+
+    def test_van_der_waals_collapses_the_probe(self):
+        """APBS has no vdW srfm; it is the molecular surface with srad 0."""
+        text = build_input(
+            size_grid(ion(), GridSpec()),
+            SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS, surface_radius=1.4),
+        )
+        assert "srfm mol" in text
+        assert "srad 0.0000" in text
+
+    def test_gaussian_is_refused_with_an_actionable_message(self):
+        """DelPhi's model has no APBS equivalent; guessing would be worse."""
+        with pytest.raises(UnsupportedRequest, match="no equivalent"):
+            build_input(
+                size_grid(ion(), GridSpec()),
+                SolventModel(surface_model=SurfaceModel.GAUSSIAN),
+            )
+
+    def test_spline_surfaces_are_reachable_only_by_asking_for_them(self):
+        """spl2 is for forces; using it for energy moved a dipeptide by 25%."""
+        default = build_input(size_grid(ion(), GridSpec()), SolventModel())
+        assert "spl2" not in default
+
+        explicit = build_input(
+            size_grid(ion(), GridSpec()),
+            SolventModel(),
+            ApbsOptions(srfm_override="spl2"),
+        )
+        assert "srfm spl2" in explicit
+
+    def test_no_surface_model_maps_to_a_spline_by_default(self):
+        for model in (SurfaceModel.MOLECULAR, SurfaceModel.SMOOTHED_MOLECULAR):
+            text = build_input(size_grid(ion(), GridSpec()), SolventModel(surface_model=model))
+            assert "srfm spl" not in text
+
+
+class TestEquation:
+    def test_linear_emits_lpbe(self):
+        text = build_input(size_grid(ion(), GridSpec()), SolventModel(), equation=Equation.LINEAR)
+        assert "\n    lpbe" in text
+        assert "npbe" not in text
+
+    def test_nonlinear_is_expressible_in_the_template(self):
+        """Representable: the mapping exists even though the backend declines."""
+        text = build_input(
+            size_grid(ion(), GridSpec()), SolventModel(), equation=Equation.NONLINEAR
+        )
+        assert "\n    npbe" in text

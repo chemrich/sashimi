@@ -29,7 +29,13 @@ from sashimi.dx import read_dx
 from sashimi.errors import SashimiError
 from sashimi.pqr import read_pqr
 from sashimi.prep import ForceField, prepare_structure
-from sashimi.protocol import GridSpec, PotentialGrid, SolventModel
+from sashimi.protocol import (
+    FiniteDifferenceRequest,
+    GridSpec,
+    PotentialGrid,
+    SolventModel,
+    SurfaceModel,
+)
 
 __all__ = ["mcp"]
 
@@ -119,6 +125,17 @@ def sashimi_solve(
     compute_energy: Annotated[
         bool, Field(description="Also compute total polar solvation energy.")
     ] = False,
+    surface_model: Annotated[
+        str,
+        Field(
+            description=(
+                "Dielectric boundary definition. This is the single largest modelling "
+                "choice in the calculation \u2014 it moves solvation energies by tens of "
+                "percent \u2014 so it is recorded with every result. One of: "
+                "molecular, smoothed-molecular, van-der-waals."
+            )
+        ),
+    ] = "smoothed-molecular",
     output_dx: Annotated[
         str | None, Field(description="Where to write the OpenDX map. Defaults next to the PQR.")
     ] = None,
@@ -137,24 +154,32 @@ def sashimi_solve(
         raise ToolError(f"could not read PQR {source}: {exc}") from exc
 
     try:
-        result = ApbsSolver().solve_lpbe(
-            pqr,
-            GridSpec(resolution=resolution, padding=padding),
-            SolventModel(
-                solvent_dielectric=solvent_dielectric,
-                solute_dielectric=solute_dielectric,
-                ionic_strength=ionic_strength,
-            ),
-            compute_energy=compute_energy,
+        result = ApbsSolver().solve(
+            FiniteDifferenceRequest(
+                structure=pqr,
+                solvent=SolventModel(
+                    solvent_dielectric=solvent_dielectric,
+                    solute_dielectric=solute_dielectric,
+                    ionic_strength=ionic_strength,
+                    surface_model=SurfaceModel(surface_model),
+                ),
+                grid=GridSpec(resolution=resolution, padding=padding),
+                want_energy=compute_energy,
+                want_potential=True,
+            )
         )
     except SashimiError as exc:
         raise _fail(exc) from exc
 
+    potential = result.potential
+    if not isinstance(potential, PotentialGrid):  # pragma: no cover — APBS is volumetric
+        raise ToolError(f"expected a volumetric map, got {type(potential).__name__}")
+
     destination = Path(output_dx).expanduser() if output_dx else source.with_suffix(".dx")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    result.potential.to_dx(destination)
+    potential.to_dx(destination)
 
-    stats = result.potential.stats()
+    stats = potential.stats()
     energy = (
         f" Polar solvation energy {result.energy_kj_mol:.3f} kJ/mol."
         if result.energy_kj_mol is not None
@@ -166,7 +191,8 @@ def sashimi_solve(
     return {
         "dx_path": str(destination),
         "energy_kj_mol": result.energy_kj_mol,
-        "backend": result.backend,
+        "backend": result.provenance.summary(),
+        "resolved_parameters": result.provenance.resolved_parameters,
         "grid": {
             "shape": stats["shape"],
             "origin": stats["origin"],
@@ -183,7 +209,7 @@ def sashimi_solve(
         "summary": (
             f"Solved {source.name} on a {'x'.join(str(n) for n in stats['shape'])} grid "
             f"at {result.diagnostics['spacing_achieved'][0]:.3f} A.{energy}{note} "
-            f"Map written to {destination.name} ({result.backend})."
+            f"Map written to {destination.name} ({result.provenance.backend})."
         ),
     }
 

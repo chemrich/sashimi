@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sashimi.errors import MalformedStructure
 from sashimi.protocol import DIMENSIONS, PQRData
 
 __all__ = ["format_pqr", "parse_pqr", "read_pqr", "write_pqr"]
@@ -36,17 +37,17 @@ def parse_pqr(text: str) -> PQRData:
             continue
         tok = raw.split()
         if len(tok) < _MIN_FIELDS:
-            raise ValueError(
+            raise MalformedStructure(
                 f"line {lineno}: expected at least {_MIN_FIELDS} fields, got {len(tok)}: {raw!r}"
             )
         try:
             x, y, z, q, r = (float(v) for v in tok[-5:])
         except ValueError as exc:
-            raise ValueError(
+            raise MalformedStructure(
                 f"line {lineno}: non-numeric coordinate/charge/radius: {raw!r}"
             ) from exc
         if r < 0:
-            raise ValueError(f"line {lineno}: negative radius {r}")
+            raise MalformedStructure(f"line {lineno}: negative radius {r}")
         coords.append((x, y, z))
         charges.append(q)
         radii.append(r)
@@ -55,7 +56,7 @@ def parse_pqr(text: str) -> PQRData:
         labels.append(f"{res_name} {res_seq} {atom_name}".strip())
 
     if not coords:
-        raise ValueError("no ATOM/HETATM records found")
+        raise MalformedStructure("no ATOM/HETATM records found")
 
     return PQRData(
         coords=np.array(coords, dtype=float),

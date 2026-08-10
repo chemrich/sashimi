@@ -14,8 +14,53 @@
     "ionic_strength": 0.15,
     "ion_radius": 2.0,
     "temperature": 298.15,
-    "surface_method": "smol",
+    "surface_model": "smoothed-molecular",
     "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "equation": "linear",
+    "surface_model": "smoothed-molecular",
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_radius": 1.4,
+    "apbs": {
+      "equation_keyword": "lpbe",
+      "srfm": "smol",
+      "srad": 1.4,
+      "swin": 0.3,
+      "chgm": "spl4",
+      "bcfl": "sdh",
+      "sdens": 10.0,
+      "dime": [
+        65,
+        65,
+        65
+      ],
+      "cglen": [
+        50.8337,
+        47.7941,
+        43.5625
+      ],
+      "fglen": [
+        29.9022,
+        28.1142,
+        25.625
+      ],
+      "center": [
+        2.0791,
+        1.0031,
+        0.1275
+      ],
+      "spacing_achieved": [
+        0.467222,
+        0.439284,
+        0.400391
+      ],
+      "n_points": 274625
+    }
   },
   "geometry": {
     "shape": [

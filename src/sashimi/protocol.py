@@ -1,16 +1,24 @@
 """The solver contract.
 
 Everything here speaks physics — angstroms, molar ionic strength, dielectric
-constants, kT/e, kJ/mol. Nothing here knows APBS exists. A future native solver
-(debye) implements `Solver` and slots in underneath without any client change,
-so no APBS concept (dime, cglen, fglen, chgm, srfm) may leak into this module.
+constants, kT/e, kJ/mol. Nothing here knows APBS exists, and
+`tests/test_protocol_boundary.py` enforces that rather than trusting it.
+
+The shape is driven by the FD/BEM split (ROADMAP.md §2). Finite-difference
+solvers take a grid and return a volume; boundary-element solvers take a mesh
+and return values on a surface. What both families share lives in
+`SolveRequest`; what only one family has lives in its own request type, so a
+request a backend cannot honor is unrepresentable rather than merely rejected.
+That is why `GridSpec` and the choice of equation sit on
+`FiniteDifferenceRequest` and not here.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from enum import StrEnum
+from typing import Any, Protocol, TypeVar
 
 import numpy as np
 import numpy.typing as npt
@@ -27,15 +35,59 @@ Diagnostics = dict[str, Any]
 
 __all__ = [
     "DIMENSIONS",
+    "BoundaryElementRequest",
     "Diagnostics",
+    "Equation",
+    "FiniteDifferenceRequest",
     "FloatArray",
     "GridSpec",
     "PQRData",
+    "Potential",
     "PotentialGrid",
+    "Provenance",
+    "SolveRequest",
     "SolveResult",
     "SolventModel",
     "Solver",
+    "SurfaceModel",
+    "SurfacePotential",
 ]
+
+
+class Equation(StrEnum):
+    """Which Poisson-Boltzmann equation to solve.
+
+    Lives on the finite-difference request only. BEM formulations are built on
+    the linearized operator's Green function, so a nonlinear BEM request is not
+    something to reject — it is something that cannot be written down.
+    """
+
+    LINEAR = "linear"
+    NONLINEAR = "nonlinear"
+
+
+class SurfaceModel(StrEnum):
+    """How the dielectric boundary between solute and solvent is defined.
+
+    Solver-neutral by design: physical descriptions, not any backend's keywords.
+    Backends map them, and raise `UnsupportedRequest` for members they have no
+    equivalent of.
+
+    This is the single largest modelling confounder in the field — on this code,
+    varying only this moves a dipeptide's solvation energy across 25.7%
+    (ROADMAP.md §5). It therefore travels in provenance, and cross-solver
+    comparison refuses to proceed across a mismatch.
+
+    Spline-smoothed surfaces are deliberately absent: they exist to give smooth
+    derivatives for force calculations, and using one for solvation energy is a
+    misuse that accounts for most of that 25.7%. They stay reachable through
+    backend-specific options, where the choice has to be made explicitly.
+    """
+
+    MOLECULAR = "molecular"  # solvent-excluded (Connolly) surface
+    SMOOTHED_MOLECULAR = "smoothed-molecular"  # harmonically averaged
+    VAN_DER_WAALS = "van-der-waals"  # union of atomic spheres, no probe
+    GAUSSIAN = "gaussian"  # density-based smooth dielectric, no sharp boundary
 
 
 @dataclass(frozen=True)
@@ -49,7 +101,7 @@ class PQRData:
 
     def __post_init__(self) -> None:
         n = len(self.charges)
-        if self.coords.shape != (n, 3):
+        if self.coords.shape != (n, DIMENSIONS):
             raise ValueError(f"coords must be (N, 3) to match {n} charges, got {self.coords.shape}")
         if self.radii.shape != (n,):
             raise ValueError(f"radii must be (N,) to match {n} charges, got {self.radii.shape}")
@@ -82,7 +134,7 @@ class PQRData:
 
 @dataclass(frozen=True)
 class GridSpec:
-    """Grid intent in physical terms. Backends translate to their own constraints.
+    """Grid intent in physical terms. Finite-difference backends only.
 
     Deliberately has no `dime`: legal multigrid dimensions are an APBS
     implementation detail. A grid-flexible backend honors `resolution` and
@@ -109,7 +161,7 @@ class SolventModel:
     ionic_strength: float = 0.150  # M, 1:1 salt
     ion_radius: float = 2.0  # A
     temperature: float = 298.15  # K
-    surface_method: Literal["smol", "spl2", "mol"] = "smol"
+    surface_model: SurfaceModel = SurfaceModel.SMOOTHED_MOLECULAR
     surface_radius: float = 1.4  # solvent probe, A
 
     def __post_init__(self) -> None:
@@ -119,11 +171,61 @@ class SolventModel:
             raise ValueError(f"ionic_strength must be non-negative, got {self.ionic_strength}")
         if self.temperature <= 0:
             raise ValueError(f"temperature must be positive, got {self.temperature}")
+        if self.surface_radius < 0:
+            raise ValueError(f"surface_radius must be non-negative, got {self.surface_radius}")
+
+
+# --- requests ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SolveRequest:
+    """What every solver family needs, and nothing more.
+
+    `want_potential` is a request rather than a promise: a backend may decline
+    to produce a field it cannot represent. `want_energy` is honored by every
+    backend, because solvation energy is the one quantity all of them compute.
+    """
+
+    structure: PQRData
+    solvent: SolventModel = SolventModel()
+    want_energy: bool = True
+    want_potential: bool = True
+
+    def __post_init__(self) -> None:
+        if not (self.want_energy or self.want_potential):
+            raise ValueError("a request that wants neither energy nor potential does nothing")
+
+
+@dataclass(frozen=True)
+class FiniteDifferenceRequest(SolveRequest):
+    """A request for a grid-based solver: APBS, DelPhi, PBSA, debye v1."""
+
+    grid: GridSpec = GridSpec()
+    equation: Equation = Equation.LINEAR
+
+
+@dataclass(frozen=True)
+class BoundaryElementRequest(SolveRequest):
+    """A request for a surface-based solver: TABI-PB, PyGBe.
+
+    No grid and no equation choice, by construction — see `Equation`.
+    """
+
+    mesh_density: float = 1.0  # triangles per A^2 of molecular surface
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.mesh_density <= 0:
+            raise ValueError(f"mesh_density must be positive, got {self.mesh_density}")
+
+
+# --- results ----------------------------------------------------------------
 
 
 @dataclass
 class PotentialGrid:
-    """A uniform scalar field of electrostatic potential in kT/e."""
+    """A uniform volumetric scalar field of electrostatic potential, kT/e."""
 
     values: FloatArray  # (nx, ny, nz), kT/e
     origin: FloatArray  # (3,), A — position of values[0, 0, 0]
@@ -132,8 +234,8 @@ class PotentialGrid:
     def __post_init__(self) -> None:
         if self.values.ndim != DIMENSIONS:
             raise ValueError(f"values must be 3-D, got shape {self.values.shape}")
-        self.origin = np.asarray(self.origin, dtype=float).reshape(3)
-        self.spacing = np.asarray(self.spacing, dtype=float).reshape(3)
+        self.origin = np.asarray(self.origin, dtype=float).reshape(DIMENSIONS)
+        self.spacing = np.asarray(self.spacing, dtype=float).reshape(DIMENSIONS)
         if np.any(self.spacing <= 0):
             raise ValueError(f"spacing must be positive, got {self.spacing}")
 
@@ -188,6 +290,7 @@ class PotentialGrid:
     def stats(self) -> Diagnostics:
         v = self.values
         return {
+            "kind": "volume",
             "shape": list(v.shape),
             "origin": self.origin.tolist(),
             "spacing": self.spacing.tolist(),
@@ -199,21 +302,108 @@ class PotentialGrid:
 
 
 @dataclass
+class SurfacePotential:
+    """Potential sampled on the dielectric interface, kT/e.
+
+    What a boundary-element solver natively produces. No shipped backend emits
+    one yet; it exists so the result type does not have to change when one does,
+    and so `tests/test_bem_contract.py` can prove the protocol admits it.
+    """
+
+    vertices: FloatArray  # (M, 3), A
+    values: FloatArray  # (M,), kT/e
+    normals: FloatArray | None = None  # (M, 3), unit outward normals
+    triangles: npt.NDArray[np.int64] | None = None  # (T, 3) vertex indices
+
+    def __post_init__(self) -> None:
+        m = len(self.values)
+        if self.vertices.shape != (m, DIMENSIONS):
+            raise ValueError(f"vertices must be (M, 3) to match {m} values")
+        if self.normals is not None and self.normals.shape != (m, DIMENSIONS):
+            raise ValueError(f"normals must be (M, 3) to match {m} values")
+        if m == 0:
+            raise ValueError("SurfacePotential needs at least one vertex")
+
+    @property
+    def n_vertices(self) -> int:
+        return len(self.values)
+
+    def stats(self) -> Diagnostics:
+        v = self.values
+        return {
+            "kind": "surface",
+            "n_vertices": self.n_vertices,
+            "min": float(v.min()),
+            "max": float(v.max()),
+            "mean": float(v.mean()),
+            "std": float(v.std()),
+        }
+
+
+Potential = PotentialGrid | SurfacePotential
+
+
+@dataclass(frozen=True)
+class Provenance:
+    """Everything needed to know what produced a number, and to reproduce it.
+
+    `resolved_parameters` is the parameter set the backend actually used — not
+    what was asked for. It is what makes a relaxed grid, a mapped surface model
+    or a defaulted tolerance visible after the fact, and it is what cross-solver
+    comparison checks before reporting a spread.
+    """
+
+    backend: str  # "apbs-3.4.1" | "debye-x.y"
+    binary_path: str | None = None
+    binary_sha256: str | None = None
+    resolved_parameters: Diagnostics = field(default_factory=dict)
+    wall_seconds: float | None = None
+
+    def summary(self) -> str:
+        checksum = f" sha256:{self.binary_sha256[:12]}" if self.binary_sha256 else ""
+        return f"{self.backend}{checksum}"
+
+
+@dataclass
 class SolveResult:
-    potential: PotentialGrid
-    energy_kj_mol: float | None = None  # total polar solvation energy when requested
-    backend: str = ""  # "apbs-3.4.1" | "debye-x.y" — provenance travels
+    """Energy is the universal currency; a field is not.
+
+    Every solver family computes a solvation energy, so `energy_kj_mol` is
+    populated whenever the request asked for it. `potential` is optional and
+    polymorphic: a volume from an FD backend, a surface from a BEM backend, or
+    nothing when it was not requested.
+    """
+
+    provenance: Provenance
+    energy_kj_mol: float | None = None  # total polar solvation energy
+    potential: Potential | None = None
     diagnostics: Diagnostics = field(default_factory=dict)
 
+    @property
+    def backend(self) -> str:
+        """Shorthand for `provenance.backend`, which is what most callers want."""
+        return self.provenance.backend
 
-class Solver(Protocol):
-    def solve_lpbe(
-        self,
-        pqr: PQRData,
-        grid: GridSpec,
-        # B008 is about mutable defaults; SolventModel is a frozen dataclass, and
-        # spelling the default inline is what documents the physics at the call site.
-        solvent: SolventModel = SolventModel(),  # noqa: B008
-        *,
-        compute_energy: bool = False,
-    ) -> SolveResult: ...
+    def check_satisfies(self, request: SolveRequest) -> None:
+        """Assert the backend delivered what was asked. Backends call this."""
+        if request.want_energy and self.energy_kj_mol is None:
+            raise ValueError("request asked for energy but the result carries none")
+        if request.want_potential and self.potential is None:
+            raise ValueError("request asked for potential but the result carries none")
+
+
+# --- the contract -----------------------------------------------------------
+
+RequestT_contra = TypeVar("RequestT_contra", bound=SolveRequest, contravariant=True)
+
+
+class Solver(Protocol[RequestT_contra]):
+    """A Poisson-Boltzmann solver.
+
+    Generic in its request type, so `Solver[FiniteDifferenceRequest]` and
+    `Solver[BoundaryElementRequest]` are distinct types and a checker rejects
+    handing one family's request to the other's backend. Use `Solver[Any]` for
+    heterogeneous collections such as a backend registry.
+    """
+
+    def solve(self, request: RequestT_contra) -> SolveResult: ...

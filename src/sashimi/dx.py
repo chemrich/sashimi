@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sashimi.errors import MalformedStructure
 from sashimi.protocol import PotentialGrid
 
 __all__ = ["parse_dx", "read_dx", "write_dx"]
@@ -59,7 +60,9 @@ def _parse_header(lines: list[str]) -> _Header:
             break
 
     if counts is None or origin is None or len(deltas) < _AXES or data_start is None:
-        raise ValueError("malformed DX header: missing counts, origin, deltas, or data marker")
+        raise MalformedStructure(
+            "malformed DX header: missing counts, origin, deltas, or data marker"
+        )
     return _Header(counts, origin, deltas, n_items, data_start)
 
 
@@ -72,10 +75,10 @@ def parse_dx(text: str) -> PotentialGrid:
     d = np.array(header.deltas[:_AXES], dtype=float)
     off_diagonal = d - np.diag(np.diag(d))
     if np.any(np.abs(off_diagonal) > _SKEW_TOLERANCE):
-        raise ValueError("non-axis-aligned DX grids are not supported")
+        raise MalformedStructure("non-axis-aligned DX grids are not supported")
     spacing = np.diag(d)
     if np.any(spacing <= 0):
-        raise ValueError(f"DX deltas must be positive, got {spacing}")
+        raise MalformedStructure(f"DX deltas must be positive, got {spacing}")
 
     expected = counts[0] * counts[1] * counts[2]
     values: list[float] = []
@@ -91,9 +94,11 @@ def parse_dx(text: str) -> PotentialGrid:
             break
 
     if len(values) < expected:
-        raise ValueError(f"DX truncated: expected {expected} values, found {len(values)}")
+        raise MalformedStructure(f"DX truncated: expected {expected} values, found {len(values)}")
     if n_items is not None and n_items != expected:
-        raise ValueError(f"DX header inconsistent: items={n_items} but counts imply {expected}")
+        raise MalformedStructure(
+            f"DX header inconsistent: items={n_items} but counts imply {expected}"
+        )
 
     grid = np.array(values[:expected], dtype=float).reshape(counts)  # C order
     return PotentialGrid(values=grid, origin=origin, spacing=spacing)

@@ -17,6 +17,7 @@ Every APBS invocation writes an `io.mc` log into the working directory,
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -26,7 +27,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from sashimi.errors import SolverNotFound
+from sashimi.errors import BackendUnavailable
 
 __all__ = ["ApbsBinary", "ApbsNotFound", "discover_apbs"]
 
@@ -37,7 +38,7 @@ _INSTALL_HINT = (
 )
 
 
-class ApbsNotFound(SolverNotFound):
+class ApbsNotFound(BackendUnavailable):
     """The APBS binary could not be located, or is not runnable."""
 
 
@@ -48,8 +49,28 @@ class ApbsBinary:
 
     @property
     def label(self) -> str:
-        """Provenance string for `SolveResult.backend`."""
+        """Provenance string for `Provenance.backend`."""
         return f"apbs-{self.version}"
+
+    @property
+    def sha256(self) -> str:
+        """Checksum of the binary that produced a result.
+
+        Version alone is not provenance: distributions patch, and conda-forge,
+        Debian and Homebrew all ship builds calling themselves 3.4.1 that differ
+        observably (ROADMAP.md section 5). Cached per resolved path, since the
+        file cannot change under us without the path resolving elsewhere.
+        """
+        return _checksum(str(self.path))
+
+
+@lru_cache(maxsize=8)
+def _checksum(path: str) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _candidates() -> list[Path]:

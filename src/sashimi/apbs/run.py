@@ -54,7 +54,7 @@ class ApbsCrash(SolverCrash):
 
 @dataclass
 class ApbsRun:
-    potential: PotentialGrid
+    potential: PotentialGrid | None
     energy_kj_mol: float | None
     stdout: str
     wall_seconds: float
@@ -96,6 +96,7 @@ def run_apbs(
     input_text: str,
     timeout: float = DEFAULT_TIMEOUT,
     expect_energy: bool = False,
+    expect_potential: bool = True,
 ) -> ApbsRun:
     with tempfile.TemporaryDirectory(prefix="sashimi-solve-") as tmp:
         work = Path(tmp)
@@ -140,8 +141,9 @@ def run_apbs(
                     f"Last output:\n{_tail(combined)}"
                 )
 
+        potential = None
         dx_path = find_potential(work)
-        if dx_path is None:
+        if dx_path is None and expect_potential:
             # Name what the run *did* leave behind. A build that writes the grid
             # under another name, or writes nothing at all, are different faults
             # and the message should not make the caller guess which happened.
@@ -152,10 +154,11 @@ def run_apbs(
                 f"Files in the working directory: {produced}\n"
                 f"Last output:\n{_tail(combined)}"
             )
-        try:
-            potential = read_dx(dx_path)
-        except ValueError as exc:
-            raise ApbsCrash(f"APBS wrote an unparseable {dx_path.name}: {exc}") from exc
+        if dx_path is not None:
+            try:
+                potential = read_dx(dx_path)
+            except ValueError as exc:
+                raise ApbsCrash(f"APBS wrote an unparseable {dx_path.name}: {exc}") from exc
 
         energy: float | None = None
         if expect_energy:
