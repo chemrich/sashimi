@@ -159,6 +159,12 @@ is a deliberate item for phase 4, not a settled design:
 | 2 | `SolveResult.potential` is a required `PotentialGrid`; `energy_kj_mol` is optional | `potential: PotentialGrid \| SurfacePotential \| None`, energy **always** present | Solvation energy is the universal currency — every solver produces it; a volume grid is not |
 | 3 | Provenance is backend string + resolved path + wall time | Also binary checksum and the full resolved parameter set | Makes results reproducible and cross-solver comparison first-class |
 | 4 | Errors split backend-neutral vs APBS-specific | Split *input* / *solver* / *environment* | The current axis does not tell a caller whose fault it is or what to do |
+| 5 | `SolventModel.surface_method` is `Literal["smol", "spl2", "mol"]` | A solver-neutral surface enum; native values behind per-backend options | Those are APBS `srfm` *values* sitting two layers above the backend. DelPhi's Gaussian dielectric is not a member, and a BEM mesh density is not on the list at all |
+
+Item 5 was found while resolving §14's open questions and is guarded by
+`tests/test_protocol_boundary.py`, which marks it a strict `xfail` — the marker
+fails once the debt is paid, so it cannot outlive it. That file also asserts the
+protocol seam of §10.
 
 The migration cost is real and grows with every caller: today those are
 `sashimi.mcp.server`, `sashimi.corpus`, and the test suite. That is the argument
@@ -202,6 +208,20 @@ Two build-dependent behaviours, both found by cross-platform CI:
   `potential.dx`. `find_potential` accepts either.
 - Every invocation writes `io.mc` to cwd, `--version` included, so the version
   probe runs inside a temp dir too.
+
+**Surface definition** is the dominant modelling confounder, measured on this
+code at 0.4 Å resolution: holding structure, radii and grid fixed and varying
+only `srfm` moves the ALA-GLY solvation energy across a **25.7%** range
+(`mol` −212.13, `smol` −209.66, `spl2` −268.84 kJ/mol); even the Born ion, a
+single sphere with no reentrant surface, spans 8.3%. For scale, the radii set
+spans 16% (AMBER −209.66, PARSE −243.40, CHARMM −210.36) and the probe radius
+5%. The corpus gates numerical drift at 0.01%, so a legal parameter change moves
+the answer 2,500× the tolerance we treat as "the solver moved".
+
+`spl2` is most of that spread and is a trap: spline surfaces exist to give
+smooth derivatives for *force* calculations, and using one for solvation energy
+is a known misuse. Per §14's decision it moves behind APBS-specific options
+rather than sitting as a peer of `mol` and `smol` in the protocol.
 
 **DX I/O** (`dx.py`): own reader/writer rather than a gridData/MDAnalysis
 dependency — the format is trivial (header with counts/origin/deltas, then
@@ -262,6 +282,21 @@ Transport is stdio. Solves at default resolution on a ~300-residue protein run
 in seconds; no async job queue in v1, but a 300 s timeout with a clear error
 keeps a pathological grid from wedging the server.
 
+**Volumetric delivery.** Inlining a grid is arithmetically impossible, not a
+tradeoff: 97³ is 12.3 MB of DX (~3.1M tokens), 161³ — the `max_points` cap — is
+56.4 MB. Downsampling to a 25k-token budget means a 19³ grid at ~3 Å spacing,
+which is below the resolution where a molecular surface means anything. Tools
+therefore return a **path**, and per §14 that path becomes content-addressed
+from the resolved-parameter hash (so re-solving cannot silently overwrite), with
+a documented cleanup contract and an explicit local-filesystem assumption. MCP
+Resources (`sashimi://maps/<id>`) are the correct answer for a non-local
+transport and are deferred until one exists.
+
+The complementary half is **derived queries** — an agent cannot use a grid, only
+answers about one. `sashimi_potential_at` is the first of that family; extrema
+with coordinates, per-residue averages and potential over a selection follow in
+phase 5. That is where the product value is, rather than in moving bytes.
+
 Note: `sashimi_solve` exposes no `max_points`, so `GridTooLarge` is unreachable
 from the MCP surface — the guardrail can only relax a request, never reject it.
 That is the right default for an agent-facing tool, and `resolution_relaxed`
@@ -298,6 +333,13 @@ and diffs within stated tolerances.
 Cases start from checked-in PQR, never PDB: preparation is pdb2pqr's business
 and carries its own version, so starting from PQR means a corpus diff implicates
 the solver rather than the prep pipeline.
+
+`verify_case` compares a fresh solve against a *reference dict*, and does not
+care where that dict came from — feeding it `build_case` output from a second
+backend is cross-solver validation with no new engine. Phase 4 makes that
+explicit by giving the reference a type (`RecordedReference` vs
+`BackendReference`), which is what turns §8's `sashimi validate` into a thin
+addition rather than a parallel implementation.
 
 Day one this is the regression net for sashimi and for the system APBS that no
 lockfile pins any more. The day debye exists, `corpus verify --backend debye` is
@@ -336,7 +378,16 @@ is genuinely useful, and it doubles as the integration suite.
 
 Relationship to `sashimi corpus`: the corpus verifies one backend against
 *recorded* numbers; `validate` compares N backends against *each other* live.
-The corpus is the regression net, `validate` is the product feature.
+The corpus is the regression net, `validate` is the product feature — but they
+are **one engine with two reference kinds**, and `validate` lives in core for
+that reason (§14). Additional backends ship as optional extras
+(`sashimi[delphi]`) so core stays lean and no dependency cycle forms.
+
+`validate` **refuses to report a spread across mismatched surface models**
+unless explicitly overridden. Given the 25.7% measured in §5, a spread computed
+across differing surface definitions would not be a solver disagreement at all —
+it would be a modelling difference misreported as one, which is worse than no
+number. This is why resolved parameters must reach provenance (§4.1 item 3).
 
 ## 9. Distribution and packaging
 
@@ -394,8 +445,19 @@ the packaging problems sashimi routes around.
    linux-aarch64 and linux-64 — the thing no incumbent can do.
 
 **Handoff.** debye ships as a separate repo implementing `sashimi.protocol`'s
-solver interface (the types either stay importable from sashimi or graduate to a
-tiny shared `pb-protocol` package — decide when debye starts). Its acceptance
+solver interface. Per §14 the types **graduate to a shared `pb-protocol`
+package when debye starts**, not before: `{protocol, dx, pqr, errors}` is
+already a closed set depending only on numpy, and `tests/test_protocol_boundary.py`
+holds it that way so the extraction stays mechanical. Extracting earlier would
+mean versioning a package with one consumer through phase 4's churn, and
+designing its API by guessing at debye's needs — the mistake §4.1 documents.
+
+The decisive argument is not leanness but cycles: if the types stay in sashimi,
+debye depends on sashimi while `sashimi[debye]` depends on debye. Note also that
+`Solver` is a `typing.Protocol`, so *interface* conformance is structural and
+free; the concrete dataclasses are what require sharing. Two things to settle at
+extraction time: the PyPI name, and that protocol changes become semver events
+with a migration window rather than internal refactors. Its acceptance
 gate is `sashimi corpus verify --backend debye` within tolerances. The MCP
 server grows a `backend` parameter defaulting to auto-selection, and
 `SolveResult.backend` provenance means every downstream artifact already records
@@ -457,17 +519,32 @@ build|verify`, summaries checked in. Exit criterion demonstrated four ways: a
 (kT/e↔mV), spacing by 10 (Å↔nm), or flipping the energy sign is caught, with the
 moved field named. Tolerances tested from both sides.
 
-**Phase 4 — Protocol hardening. ← next.** The four items in §4.1: demote the
+**Phase 4 — Protocol hardening. ← next.** The five items in §4.1: demote the
 grid specification to an FD-family request detail; make potential a
 `PotentialGrid | SurfacePotential | None` union with energy always present; add
 binary checksum and resolved parameters to provenance; restructure errors into
-input / solver / environment. Plus the protocol test suite that runs everywhere
-with no binary. Exit criterion: a stub BEM backend returning surface potentials
-satisfies the protocol without a single APBS-shaped concession.
+input / solver / environment; replace `surface_method` with a solver-neutral
+enum. Plus, from §14's decisions:
+
+- the PB equation (linear/nonlinear) as a field of the **FD-family** request
+  payload, so a BEM backend cannot be handed a nonlinear request — representable
+  but *not implemented*, no `npbe` code and no nonlinear corpus cases yet;
+- an explicit reference type in the corpus (`RecordedReference` /
+  `BackendReference`), which is what makes phase 7's `validate` thin;
+- content-addressed DX filenames derived from the resolved-parameter hash, plus
+  a documented cleanup contract and an explicit local-filesystem assumption;
+- the protocol test suite that runs everywhere with no binary, alongside the
+  existing `tests/test_protocol_boundary.py`.
+
+Exit criterion: a stub BEM backend returning surface potentials satisfies the
+protocol without a single APBS-shaped concession, and the strict `xfail` on
+`surface_method` has been removed because it passes.
 
 **Phase 5 — Ship it.** PyPI release with conda-forge APBS documented as
 prerequisite; MCP capabilities/validate-inputs surface; register alongside
-mcpymol; Proxmox VM and Tailscale stood up for benchmark and timeout work.
+mcpymol; Proxmox VM and Tailscale stood up for benchmark and timeout work. Plus
+the **derived-query tools** §6 argues are the real agent-facing value: extrema
+with coordinates, per-residue averages, potential over a selection.
 
 **Phase 6 — Distribution.** Owned APBS build matrix (trimmed, mostly static,
 feedstock-derived); `linux-aarch64` build offered upstream; license-file audit
@@ -519,15 +596,35 @@ New since the split: APBS is no longer version-pinned by a lockfile, because
 uv cannot install a compiled binary. The corpus carries that weight — it asserts
 the version and re-checks the numbers, so drift fails loudly in kJ/mol.
 
-## 14. Open questions
+## 14. Decisions and remaining questions
 
-- **Nonlinear PB in the protocol**: APBS and DelPhi support it, BEM mostly does
-  not. Capability flags per backend, or restrict v1 to linearized PB?
-- **Surface definition** (SES vs Gaussian vs spline) is the biggest cross-solver
-  comparability confounder. How much do we normalize versus expose?
-- **Volumetric payloads over MCP**: DX grids are large (12 MB for a 97³ map).
-  Inline, file-reference, or downsampled?
-- **Does `sashimi validate` belong in core** or in a separate tool that consumes
-  the protocol?
-- **Does the protocol graduate** to a standalone `pb-protocol` package when
-  debye starts, or stay importable from sashimi?
+The five questions this section used to pose were resolved on 2026-08-10. Each
+is recorded where it takes effect — §4.1, §5, §6, §7, §8, §10, §12 — and
+summarised here.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Nonlinear PB in the protocol? | **Representable, not implemented.** The equation is a field of the FD-family request payload, so BEM backends cannot receive one. No `npbe` code until a case needs it |
+| 2 | Normalize or expose surface definition? | **Curated solver-neutral enum**, native values behind per-backend options, resolved values in provenance, and `validate` refuses to compare across mismatched surface models |
+| 3 | Volumetric payloads over MCP? | **Never inline.** Content-addressed paths now with a cleanup contract; MCP Resources when a non-local transport exists; derived queries pulled forward to phase 5 |
+| 4 | Does `validate` belong in core? | **Core, unified with the corpus** — one engine, two reference kinds. Backends as optional extras |
+| 5 | Does the protocol graduate to `pb-protocol`? | **At debye, not before.** The seam is a closed set today and is guarded by a test so extraction stays mechanical |
+
+### Still open
+
+- **Is `max_points = 161³` the right guardrail?** It is sized for memory, but it
+  also permits a 56 MB artifact per solve. Now that maps are content-addressed
+  and accumulate, disk and hand-around-ability may be the binding constraint.
+- **Does `validate` become an MCP tool?** An agent asking "is this energy
+  trustworthy?" is a good capability, but it needs N backends installed, so it is
+  CLI-first regardless. Revisit in phase 7.
+- **NPBE-versus-LPBE energy comparability.** The total-energy integral differs
+  between the two equations, so the corpus and `validate` must compare like with
+  like once nonlinear is implemented. Needs a concrete rule before phase 7.
+- **`pb-protocol` naming and semver.** The PyPI name should be checked early
+  since it appears in every downstream dependency list, and graduation turns
+  protocol changes into major-version events with migration windows.
+- **Surface-model mapping table.** Which solver-neutral enum members exist, and
+  how each backend maps them, is phase 4 design work — DelPhi's Gaussian
+  dielectric has no APBS equivalent, so the enum cannot simply be APBS's set
+  renamed.
