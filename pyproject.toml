@@ -5,11 +5,13 @@ description = "Thinly sliced Poisson: an MCP-native wrapper around APBS for biom
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "fastmcp>=2.0",
     "numpy>=2.0",
     # Structure preparation. Pure Python, so PyPI is the whole story here —
     # unlike APBS, which uv cannot install and which comes from the system
     # package manager. See README "Install".
     "pdb2pqr==3.7.1",
+    "pydantic>=2.0",
 ]
 
 [dependency-groups]
@@ -17,8 +19,13 @@ dev = [
     "mypy>=1.18",
     "pre-commit>=4.0",
     "pytest>=8.0",
+    "pytest-asyncio>=1.0",
     "ruff>=0.14",
 ]
+
+[project.scripts]
+# stdio entry point, for registering alongside the rest of the FastMCP fleet.
+sashimi-mcp = "sashimi.mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -32,6 +39,9 @@ testpaths = ["tests"]
 markers = [
     "apbs: requires the APBS binary (deselect with '-m \"not apbs\"')",
 ]
+# The MCP tests drive a real client session, which is async throughout.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100

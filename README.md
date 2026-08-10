@@ -127,8 +127,18 @@ See [PLAN.md](PLAN.md) for the full design and phasing.
 
 ## Status
 
-Phases 0 and 1 are done: the core library solves and is validated against the
-closed-form Born ion, converging monotonically as the grid refines
-(0.62% → 0.11% → 0.02% at 0.41 / 0.20 / 0.16 Å spacing). A slice of phase 3's
-golden corpus is in place early, guarding the unpinned APBS. The FastMCP server
-(phase 2) is next.
+Phases 0–2 are done. The core library is validated against the closed-form
+Born ion, converging monotonically as the grid refines (0.62% → 0.11% → 0.02%
+at 0.41 / 0.20 / 0.16 Å spacing), and a slice of phase 3's golden corpus is in
+place early to guard the unpinned APBS.
+
+The MCP server exposes four tools — `sashimi_prepare_structure`,
+`sashimi_solve`, `sashimi_potential_at`, `sashimi_compare_maps`. Run it over
+stdio with `sashimi-mcp`, or register it:
+
+```json
+{ "mcpServers": { "sashimi": { "command": "uv",
+    "args": ["run", "--project", "/path/to/sashimi", "sashimi-mcp"] } } }
+```
+
+Next: phase 3, the full corpus CLI and manifest.

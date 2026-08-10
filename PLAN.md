@@ -146,7 +146,9 @@ Because APBS is no longer version-pinned by a lockfile, `tests/test_corpus.py` c
 
 One structural note: `GridTooLarge` and `ConvergenceFailure` are backend-neutral and live in `sashimi/errors.py`, while `ApbsNotFound` and `ApbsCrash` subclass them under `sashimi.apbs`. A native solver hits the first pair too; only the second pair is APBS's business. §5's four exception names all exist, just split across that boundary.
 
-**Phase 2 — MCP server (1–2 days).** The four tools, error mapping, MCP Inspector pass, registration in your Claude config alongside mcpymol. Exit criterion: from a chat session, prepare a PDB and produce a DX that PyMOL renders as a sane surface potential.
+**Phase 2 — MCP server (1–2 days). ✅ Done (registration pending).** The four tools, error mapping, and a `sashimi-mcp` stdio entry point. Validation is programmatic rather than by MCP Inspector: `tests/test_mcp.py` drives a real `fastmcp.Client` session, so schema generation, argument validation and error translation are all exercised — including a guard that no APBS vocabulary (`mg-auto`, `cglen`, `dime`) leaks into the tool surface. Exit criterion met end to end: `ala-gly.pdb` → PQR (1 warning: rebuilt OXT) → 97³ map at 0.31 Å, −209.660 kJ/mol → sampled at coordinates → compared against a 1 M-salt solve (RMSD 0.093 kT/e, correlation 0.99989, salt screening as expected).
+
+One thing the plan did not anticipate: `sashimi_solve` exposes no `max_points`, so `GridTooLarge` is unreachable from the MCP surface — the guardrail can only relax the request, never reject it. That is the right default for an agent-facing tool, and `resolution_relaxed` in the response is what keeps the relaxation visible.
 
 **Phase 3 — corpus + CI (1–2 days).** Corpus manifest, build/verify commands, checked-in summaries, GitHub Actions green. Exit criterion: a deliberate unit-conversion bug is caught by `corpus verify`.
 
