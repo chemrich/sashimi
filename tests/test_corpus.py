@@ -17,6 +17,8 @@ from sashimi.apbs import ApbsSolver, discover_apbs
 from sashimi.cli import main
 from sashimi.corpus import (
     MANIFEST,
+    BackendReference,
+    RecordedReference,
     Tolerances,
     build_case,
     load_summary,
@@ -224,3 +226,36 @@ def test_cases_are_frozen():
     """Mutating a case mid-run would decouple the summary from what was solved."""
     with pytest.raises(Exception, match=r"frozen|immutable|cannot assign"):
         replace(CHEAP, name="x").name = "y"  # type: ignore[misc]
+
+
+class TestReferenceKinds:
+    """One comparison engine, two reference kinds — ROADMAP.md sections 7 and 8."""
+
+    def test_recorded_reference_reads_the_checked_in_summary(self, recorded):
+        assert RecordedReference().summary_for(CHEAP) == recorded
+
+    def test_backend_reference_solves_live(self, solver):
+        fresh = BackendReference(solver).summary_for(CHEAP)
+        assert fresh["name"] == CHEAP.name
+        assert fresh["energy_kj_mol"] is not None
+
+    def test_verifying_a_backend_against_itself_is_clean(self, solver):
+        """Cross-solver validation, with the two solvers being the same one."""
+        assert verify_case(solver, CHEAP, BackendReference(solver)) == []
+
+    def test_a_disagreeing_backend_is_caught_live(self, solver):
+        """No recorded file involved: this is `sashimi validate` in embryo."""
+        drifted = Perturbed(solver, energy_factor=1.008)
+        found = verify_case(drifted, CHEAP, BackendReference(solver, "apbs"))
+        assert any(d.field == "energy_kj_mol" for d in found)
+
+    def test_verify_manifest_accepts_a_backend_reference(self, solver):
+        assert verify_manifest(solver, cases=(CHEAP,), reference=BackendReference(solver)) == []
+
+    def test_a_bare_dict_still_works(self, solver, recorded):
+        """The comparison needs a summary, not a wrapper; keep ad-hoc use simple."""
+        assert verify_case(solver, CHEAP, recorded) == []
+
+    def test_references_label_themselves(self, solver):
+        assert RecordedReference().label == "recorded corpus"
+        assert BackendReference(solver, "delphi-8.5").label == "delphi-8.5"

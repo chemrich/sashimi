@@ -538,15 +538,27 @@ bit-identical across it, to the last recorded digit. The only diffs in the
 recorded summaries are `surface_method: "smol"` becoming
 `surface_model: "smoothed-molecular"` and the new `resolved_parameters` block.
 
-Deferred to phase 5, having grown out of scope here: content-addressed DX
-filenames and the corpus reference type. Both are additive and neither blocks
-shipping.
+Content-addressed DX filenames and the corpus reference type landed in phase
+5 rather than here, as additive follow-ups.
 
-**Phase 5 — Ship it.** PyPI release with conda-forge APBS documented as
-prerequisite; MCP capabilities/validate-inputs surface; register alongside
-mcpymol; Proxmox VM and Tailscale stood up for benchmark and timeout work. Plus
-the **derived-query tools** §6 argues are the real agent-facing value: extrema
-with coordinates, per-residue averages, potential over a selection.
+**Phase 5 — Ship it. ◐ in progress.**
+
+Done: MIT licence; content-addressed DX filenames, so re-solving with different
+parameters can no longer silently overwrite an earlier map and an identical
+request reuses its file; the artifact contract (`sashimi.artifacts`) stating in
+one place that maps are never deleted and paths are local; and the corpus
+`Reference` protocol — `RecordedReference` answers "has this backend changed?",
+`BackendReference` answers "do these two agree right now?", through the same
+`verify_case`. Cross-solver validation now works end to end and only lacks its
+CLI.
+
+Remaining: the **derived-query tools** §6 argues are the real agent-facing
+value (extrema with coordinates, per-residue averages, potential over a
+selection); the MCP capabilities/validate-inputs surface; PyPI release, which
+needs a distribution name — `sashimi` is taken on PyPI by a dormant saliency
+library, so the import name and the install name will differ; registration
+alongside mcpymol; and the Proxmox VM plus Tailscale for benchmark and timeout
+work.
 
 **Phase 6 — Distribution.** Owned APBS build matrix (trimmed, mostly static,
 feedstock-derived); `linux-aarch64` build offered upstream; license-file audit
