@@ -141,4 +141,16 @@ stdio with `sashimi-mcp`, or register it:
     "args": ["run", "--project", "/path/to/sashimi", "sashimi-mcp"] } } }
 ```
 
-Next: phase 3, the full corpus CLI and manifest.
+Phase 3 adds the golden corpus as a real feature:
+
+```sh
+sashimi corpus verify              # re-solve the manifest, diff against record
+sashimi corpus build --force       # re-record, deliberately
+```
+
+Five cases, summaries in `tests/corpus/`. It is the regression net for the
+unpinned APBS today, and the acceptance gate for a second backend later —
+`sashimi corpus verify --backend debye` needs no APBS installed.
+
+See [ROADMAP.md](ROADMAP.md) for where this is all heading; PLAN.md is the
+narrower APBS implementation plan beneath it.
