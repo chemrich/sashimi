@@ -150,7 +150,9 @@ One structural note: `GridTooLarge` and `ConvergenceFailure` are backend-neutral
 
 One thing the plan did not anticipate: `sashimi_solve` exposes no `max_points`, so `GridTooLarge` is unreachable from the MCP surface — the guardrail can only relax the request, never reject it. That is the right default for an agent-facing tool, and `resolution_relaxed` in the response is what keeps the relaxation visible.
 
-**Phase 3 — corpus + CI (1–2 days).** Corpus manifest, build/verify commands, checked-in summaries, GitHub Actions green. Exit criterion: a deliberate unit-conversion bug is caught by `corpus verify`.
+**Phase 3 — corpus + CI (1–2 days). ✅ Done.** `src/sashimi/corpus.py` holds a 5-case manifest (three Born-ion variants, two peptide) with a `sashimi corpus build` / `sashimi corpus verify --backend X` CLI; summaries are checked into `tests/corpus/`. Exit criterion met four ways: a solver wrapper that scales energy by 4.184 (kJ↔kcal), potential by 25.693 (kT/e↔mV), spacing by 10 (Å↔nm), or flips the energy sign is caught by `verify_case`, which names the field that moved. Tolerance boundaries are tested from both sides, so the gate is neither decorative nor brittle.
+
+Cases start from checked-in PQR, never PDB: preparation is pdb2pqr's business and carries its own version, so starting from PQR means a corpus diff implicates the solver rather than the prep pipeline.
 
 **Phase 4 — integration (ongoing, small).** mcpymol grows a convenience that chains `sashimi_solve` → load DX → `ramp_new`/surface coloring; protean consumes `SolveResult` for whatever energetics it needs. Sashimi itself should go quiet after this — a wrapper that needs constant attention has failed at its one job.
 

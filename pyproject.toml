@@ -24,6 +24,7 @@ dev = [
 ]
 
 [project.scripts]
+sashimi = "sashimi.cli:main"
 # stdio entry point, for registering alongside the rest of the FastMCP fleet.
 sashimi-mcp = "sashimi.mcp.server:main"
 
@@ -46,7 +47,7 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["src", "tests", "scripts"]
+src = ["src", "tests"]
 # Ruff formats Python blocks inside Markdown. PLAN.md's snippets are
 # illustrative and column-aligned for reading, not code to be normalized.
 extend-exclude = ["*.md"]
@@ -88,6 +89,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# A command-line entry point exists to write to stdout; T201 is there to catch
+# stray debug prints in library code, which is everything else.
+"src/sashimi/cli.py" = ["T201"]
 "tests/**" = [
     "PLR2004", # magic numbers are the point of a test
     "ARG001",  # pytest fixtures arrive as unused-looking arguments
@@ -97,11 +101,11 @@ ignore = [
 ban-relative-imports = "all"
 
 [tool.ruff.lint.isort]
-known-first-party = ["sashimi", "scripts", "tests"]
+known-first-party = ["sashimi", "tests"]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["src", "tests", "scripts"]
+files = ["src", "tests"]
 strict = true
 warn_unreachable = true
 enable_error_code = [
