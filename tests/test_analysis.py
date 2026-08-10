@@ -5,10 +5,13 @@ are known by construction. That is the point of the module — the questions an
 agent actually asks are cheap and testable anywhere.
 """
 
+import time
+
 import numpy as np
 import pytest
 
 from sashimi.analysis import (
+    _solute_mask,
     potential_extrema,
     potential_in_sphere,
     residue_potentials,
@@ -204,3 +207,87 @@ class TestResiduePotentials:
         near = residue_potentials(grid, atom, probe_offset=0.0)[0].value
         far = residue_potentials(grid, atom, probe_offset=4.0)[0].value
         assert near > far, "moving the probe outward must leave the peak behind"
+
+
+class TestSoluteMask:
+    """The mask is an optimisation, so it needs an oracle and a scale guard.
+
+    On hen lysozyme the naive form — every atom against the whole grid — took
+    64 s, three times longer than the solve it was analysing. Restricting each
+    atom to its own bounding box is ~50x faster in practice and must produce a
+    bit-identical result.
+    """
+
+    @staticmethod
+    def naive_mask(grid: PotentialGrid, structure: PQRData, margin: float) -> np.ndarray:
+        """The obvious implementation, kept as an oracle."""
+        axes = [
+            grid.origin[axis] + np.arange(grid.values.shape[axis]) * grid.spacing[axis]
+            for axis in range(3)
+        ]
+        xx, yy, zz = np.meshgrid(*axes, indexing="ij")
+        mask = np.zeros(grid.values.shape, dtype=bool)
+        for index in range(structure.n_atoms):
+            cx, cy, cz = structure.coords[index]
+            cutoff = structure.radii[index] + margin
+            mask |= ((xx - cx) ** 2 + (yy - cy) ** 2 + (zz - cz) ** 2) <= cutoff**2
+        return mask
+
+    @pytest.mark.parametrize("margin", [0.0, 1.4, 6.0])
+    @pytest.mark.parametrize("seed", range(4))
+    def test_matches_the_naive_implementation(self, margin, seed):
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(1, 25))
+        grid = PotentialGrid(
+            values=np.zeros((17, 19, 23)),
+            origin=rng.uniform(-5, 5, 3),
+            spacing=rng.uniform(0.3, 1.2, 3),
+        )
+        structure = PQRData(
+            coords=rng.uniform(-8, 8, (n, 3)),
+            charges=rng.normal(size=n),
+            radii=rng.uniform(0.5, 3.0, n),
+        )
+        np.testing.assert_array_equal(
+            _solute_mask(grid, structure, margin),
+            self.naive_mask(grid, structure, margin),
+        )
+
+    def test_atoms_entirely_off_the_grid_are_skipped_not_wrapped(self):
+        """A negative index slice would silently mask the wrong corner."""
+        grid = grid_with_peaks({(10, 10, 10): 1.0})
+        far = PQRData(
+            coords=np.array([[-500.0, -500.0, -500.0]]),
+            charges=np.array([1.0]),
+            radii=np.array([2.0]),
+        )
+        assert not _solute_mask(grid, far, 1.4).any()
+
+    def test_scales_to_a_real_protein(self):
+        """Catches a return to O(atoms x grid points).
+
+        Sized like hen lysozyme: ~2,000 atoms on a 129x161x129 grid. The naive
+        form takes ~64 s; this budget is 8x the optimised time, so it is loose
+        against a noisy CI runner and still an order of magnitude under the
+        behaviour it exists to prevent.
+        """
+        rng = np.random.default_rng(1)
+        n_atoms = 2000
+        grid = PotentialGrid(
+            values=np.zeros((129, 161, 129)),
+            origin=np.zeros(3),
+            spacing=np.full(3, 0.475),
+        )
+        structure = PQRData(
+            coords=rng.uniform(5, 55, (n_atoms, 3)),
+            charges=rng.normal(size=n_atoms),
+            radii=np.full(n_atoms, 1.9),
+        )
+        started = time.monotonic()
+        mask = _solute_mask(grid, structure, 1.4)
+        elapsed = time.monotonic() - started
+        assert mask.any(), "a protein-sized structure must mask something"
+        assert elapsed < 10.0, (
+            f"masking took {elapsed:.1f}s for {n_atoms} atoms; the per-atom bounding "
+            "box has probably been lost and this is O(atoms x grid points) again"
+        )
