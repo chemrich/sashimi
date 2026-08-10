@@ -25,6 +25,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from sashimi.apbs import ApbsSolver
+from sashimi.artifacts import content_address, describe_cleanup, map_path
 from sashimi.dx import read_dx
 from sashimi.errors import SashimiError
 from sashimi.pqr import read_pqr
@@ -47,7 +48,7 @@ mcp: FastMCP[Any] = FastMCP(
         "rebuilt sidechains change the energies), then sashimi_solve for a "
         "potential map and optional solvation energy, then sashimi_potential_at "
         "to query the saved map without re-solving. Potentials are kT/e, "
-        "energies kJ/mol, distances angstroms."
+        "energies kJ/mol, distances angstroms. " + describe_cleanup()
     ),
 )
 
@@ -137,7 +138,14 @@ def sashimi_solve(
         ),
     ] = "smoothed-molecular",
     output_dx: Annotated[
-        str | None, Field(description="Where to write the OpenDX map. Defaults next to the PQR.")
+        str | None,
+        Field(
+            description=(
+                "Where to write the OpenDX map. Defaults to a content-addressed "
+                "name next to the PQR, so re-solving with different parameters "
+                "never overwrites an earlier map."
+            )
+        ),
     ] = None,
 ) -> dict[str, Any]:
     """Solve the linearized Poisson-Boltzmann equation for a prepared structure.
@@ -146,6 +154,8 @@ def sashimi_solve(
     can load, the solvation energy when requested, and which backend produced
     it. Note `spacing_achieved`: the memory guardrail may relax the requested
     resolution, and the response says so rather than hiding it.
+
+    Maps are files, not inline data — a default-resolution grid is megabytes.
     """
     source = Path(pqr_path).expanduser()
     try:
@@ -175,7 +185,11 @@ def sashimi_solve(
     if not isinstance(potential, PotentialGrid):  # pragma: no cover — APBS is volumetric
         raise ToolError(f"expected a volumetric map, got {type(potential).__name__}")
 
-    destination = Path(output_dx).expanduser() if output_dx else source.with_suffix(".dx")
+    # Content-addressed by default: two solves that differ in anything that
+    # changes the answer get different files, so re-solving cannot silently
+    # overwrite a previous map. An explicit output_dx is honored as given.
+    address = content_address(pqr, result.provenance.resolved_parameters)
+    destination = Path(output_dx).expanduser() if output_dx else map_path(source, address)
     destination.parent.mkdir(parents=True, exist_ok=True)
     potential.to_dx(destination)
 
@@ -190,6 +204,7 @@ def sashimi_solve(
 
     return {
         "dx_path": str(destination),
+        "content_address": address,
         "energy_kj_mol": result.energy_kj_mol,
         "backend": result.provenance.summary(),
         "resolved_parameters": result.provenance.resolved_parameters,

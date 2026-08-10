@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -38,8 +38,11 @@ from sashimi.protocol import (
 
 __all__ = [
     "MANIFEST",
+    "BackendReference",
     "Case",
     "Discrepancy",
+    "RecordedReference",
+    "Reference",
     "Tolerances",
     "build_case",
     "build_manifest",
@@ -108,6 +111,58 @@ class Tolerances:
     potential_atol: float = 1e-4
     stats_rtol: float = 1e-3
     geometry_atol: float = 1e-9
+
+
+class Reference(Protocol):
+    """Where the numbers a case is checked against come from.
+
+    `verify_case` never cared whether its reference was loaded from disk or
+    produced by another backend — the comparison is identical either way. Making
+    that explicit is what turns cross-solver validation (ROADMAP.md §8) into a
+    second implementation of this protocol rather than a second comparison
+    engine.
+    """
+
+    @property
+    def label(self) -> str:
+        """How this reference names itself in a discrepancy report."""
+        ...
+
+    def summary_for(self, case: Case) -> dict[str, Any]:
+        """The recorded or freshly-computed summary for `case`."""
+        ...
+
+
+@dataclass(frozen=True)
+class RecordedReference:
+    """The checked-in golden summaries. Answers "has this backend changed?"."""
+
+    directory: Path | None = None
+
+    @property
+    def label(self) -> str:
+        return "recorded corpus"
+
+    def summary_for(self, case: Case) -> dict[str, Any]:
+        return load_summary(case, self.directory)
+
+
+@dataclass(frozen=True)
+class BackendReference:
+    """Another live solver. Answers "do these two backends agree right now?".
+
+    This is `sashimi validate` in embryo; phase 7 adds the CLI around it.
+    """
+
+    solver: Solver[FiniteDifferenceRequest]
+    name: str = "reference backend"
+
+    @property
+    def label(self) -> str:
+        return self.name
+
+    def summary_for(self, case: Case) -> dict[str, Any]:
+        return build_case(self.solver, case)
 
 
 @dataclass
@@ -262,10 +317,15 @@ def build_manifest(
 def verify_case(
     solver: Solver[FiniteDifferenceRequest],
     case: Case,
-    recorded: dict[str, Any],
+    reference: Reference | dict[str, Any],
     tolerances: Tolerances = Tolerances(),  # noqa: B008 — frozen dataclass
 ) -> list[Discrepancy]:
-    """Re-solve a case and diff it against what was recorded."""
+    """Re-solve a case and diff it against a reference.
+
+    Accepts a bare summary dict as well as a `Reference`, because that is what
+    the comparison actually needs and it keeps ad-hoc use simple.
+    """
+    recorded = reference if isinstance(reference, dict) else reference.summary_for(case)
     found: list[Discrepancy] = []
     fresh = build_case(solver, case)
 
@@ -350,10 +410,17 @@ def verify_manifest(
     cases: tuple[Case, ...] = MANIFEST,
     tolerances: Tolerances = Tolerances(),  # noqa: B008 — frozen dataclass
     directory: Path | None = None,
+    reference: Reference | None = None,
 ) -> list[Discrepancy]:
+    """Verify every case against a reference, the recorded corpus by default.
+
+    Passing a `BackendReference` here is cross-solver validation over the whole
+    manifest — the same call, a different reference.
+    """
+    against = reference if reference is not None else RecordedReference(directory)
     found: list[Discrepancy] = []
     for case in cases:
-        found.extend(verify_case(solver, case, load_summary(case, directory), tolerances))
+        found.extend(verify_case(solver, case, against, tolerances))
     return found
 
 
