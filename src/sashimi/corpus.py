@@ -392,6 +392,115 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(solute_dielectric=4.0, ionic_strength=0.0),
         analytic=_born(3.0, 1.0, 4.0, rtol=0.015),  # measured 0.571%
     ),
+    # --- real chemistry -----------------------------------------------------
+    #
+    # Structures vendored from the APBS examples; see
+    # tests/data/apbs-examples/PROVENANCE.md for where each came from, why it is
+    # here, and why the energies APBS's own READMEs publish for them are a
+    # different quantity from the one sashimi reports.
+    #
+    # None carries an analytic reference — none has a closed form. What they add
+    # is the axis the Born sweep cannot cover at all: real charge distributions,
+    # real geometry, and the chance for a bug that only shows up above three
+    # atoms. Every genuine defect this project has found came from a structure
+    # like these rather than from the fixtures (section 12).
+    Case(
+        name="methanol",
+        description=(
+            "3-atom neutral, with a 0.2 A hydrogen — the smallest radius in the "
+            "corpus and the kind of atom Generalized Born cannot divide by."
+        ),
+        source="apbs-examples/methanol.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0, solvent_dielectric=78.00, ionic_strength=0.0, temperature=300.0
+        ),
+        tier=CaseTier.FAST,
+    ),
+    Case(
+        name="methoxide",
+        description="The methanol anion: a -1e solute of two atoms. Pairs with methanol.",
+        source="apbs-examples/methoxide.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0, solvent_dielectric=78.00, ionic_strength=0.0, temperature=300.0
+        ),
+        tier=CaseTier.FAST,
+    ),
+    Case(
+        name="acetic-acid",
+        description="Neutral acid, 8 atoms. With acetate this is an ionization pair.",
+        source="apbs-examples/acetic-acid.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(solute_dielectric=2.0, ionic_strength=0.0),
+        tier=CaseTier.FAST,
+    ),
+    Case(
+        name="acetate",
+        description="Its conjugate base at -1e; the charged half of the ionization pair.",
+        source="apbs-examples/acetate.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(solute_dielectric=2.0, ionic_strength=0.0),
+        tier=CaseTier.FAST,
+    ),
+    Case(
+        name="fas2",
+        description=(
+            "906 atoms, and the only non-integer net charge in the corpus "
+            "(+4.053 e) — which is what a real forcefield assignment looks like."
+        ),
+        source="apbs-examples/fas2.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="barstar",
+        description="1,403 atoms at -5e: the most negatively charged case here.",
+        source="apbs-examples/barstar.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="barnase",
+        description="Barstar's binding partner at +2e; a charge-complementary pair.",
+        source="apbs-examples/barnase.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="lysozyme",
+        description=(
+            "Hen lysozyme, 1,960 atoms at +8e. In the corpus at last: it is the "
+            "structure that surfaced the 64-second extrema scan, the DX writer's "
+            "first real consumer, and both Generalized Born mistakes."
+        ),
+        source="apbs-examples/2LZT-ASP66.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="protein-rna",
+        description=(
+            "2,065 atoms. The only nucleic acid in the corpus, so the only case "
+            "where phosphate backbone charges are exercised at all."
+        ),
+        source="apbs-examples/1a63.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="carbonic-anhydrase",
+        description="2,482 atoms, the largest case; 13 s, which is why it is not standard.",
+        source="apbs-examples/hca.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.FULL,
+    ),
 )
 
 

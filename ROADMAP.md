@@ -397,21 +397,57 @@ nightly or on demand). The split is cost, not importance.
 
 The target is **50 cases**. The axis that matters is what each is checked
 against, not the count — 50 self-recorded cases would be 50 change-detectors and
-a 50-line diff every time the physics legitimately moves. The intended mix:
+a 50-line diff every time the physics legitimately moves. 24 cases today: 11
+analytic, 10 vendored structures, 3 self-recorded.
 
-- **Analytic** — exact, no solver needed to state the answer. 11 cases today.
-- **Third-party anchored** — APBS ships its own `examples/` with per-version
-  reference values *and* independent UHBD numbers (methanol: −36.2486 APBS
-  against −35.595 UHBD). BSD-3-Clause, so vendorable with attribution. ~1%
-  anchors rather than 1e-4 references, because those inputs specify explicit
-  `cglen/fglen/dime` that `GridSpec` does not express.
-- **Cross-solver** — `BackendReference`, already built, over more structures.
+**The third-party anchored tier was planned and then abandoned, on measurement.**
+APBS ships `examples/` with per-version reference values and independent UHBD
+numbers, which looked like the richest source of external truth available. It is
+not usable: those examples compute their reference state with `sdie 1.00` — the
+solute's interior dielectric against *vacuum* — where sashimi's
+`EnergyTerm.POLAR_SOLVATION` is solvated minus a *uniform* dielectric, APBS's own
+convention in its `born` example and the one the protocol commits to. The gap is
+not subtle:
+
+| | APBS README | sashimi |
+|---|---|---|
+| methanol | −36.2486 | −25.16 |
+| methoxide | −390.4122 | −201.96 |
+
+Change that one keyword in their input and APBS returns −25.2538 and −201.5878,
+which sashimi reproduces to **0.37% and 0.18%**. So nothing is wrong with either
+code, the published numbers answer a different question, and using them as
+references would mean exposing the reference state as a knob — the raw-input
+passthrough §5 deliberately refuses. UHBD's numbers follow the same convention,
+so they go too. Recorded in `tests/data/apbs-examples/PROVENANCE.md`, where
+someone comparing sashimi against the APBS docs will find it before filing a bug.
+
+What remains, and what 50 will be made of:
+
+- **Analytic** — exact. The Born family is nearly exhausted at 11; a Kirkwood
+  sphere with off-centre charges is the next real one.
+- **Structural diversity** — no external number, but real charge distributions
+  and geometry. This is where the remaining budget goes, and it is where every
+  genuine defect in this project has come from.
+- **Cross-solver** — `BackendReference` over those structures: four backends
+  agreeing is weaker evidence than a closed form and much stronger than none.
 - **Self-recorded** — the original kind. Kept small and fast.
 
 73 example structures span 1 to 16,090 atoms. Cost is bounded by the existing
 `max_points` guardrail rather than by atom count: a 16,090-atom solute relaxes
 to the same 161³ grid as a 2,000-atom one, so the largest case is 14.5 s against
 lysozyme's 6.8 s, not hours.
+
+**What the first ten structures found immediately.** Generalized Born's
+deviation from APBS is 1.6–4.5% on proteins whose PQR carries AMBER
+Lennard-Jones radii, and 13–28% on methanol, 2LZT lysozyme and carbonic
+anhydrase. The cause is not the method: those three arrive with PARSE-like radii,
+and GB substitutes mbondi, so the two solvers are handed measurably different
+solutes. Handing GB the structure's own radii reverses it — and reverses it the
+other way on AMBER-like input, where `AS_GIVEN` reaches 55% and can return a
+*positive* solvation energy. Neither setting is universally right; mbondi is
+right for what `sashimi_prepare_structure` produces, which is why it stays the
+default. Six corpus cases could not have shown this and twenty-four did.
 
 **Test partitioning by architecture.** Protocol-layer tests are pure Python and
 run natively everywhere. Subprocess integration tests are gated behind
