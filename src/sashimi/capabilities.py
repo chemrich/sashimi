@@ -152,6 +152,50 @@ def _delphi_report() -> BackendReport:
     )
 
 
+def _tabipb_report() -> BackendReport:
+    """TABI-PB's state. The first backend that is not a grid.
+
+    Reported with `family: boundary-element`, which is the field that tells a
+    caller why it answers different questions: it returns potentials on the
+    dielectric interface, so there is no volume to interpolate and no map to
+    write for a viewer.
+    """
+    from sashimi.tabipb.discover import discover_tabipb  # noqa: PLC0415
+    from sashimi.tabipb.options import SUPPORTED_SURFACES  # noqa: PLC0415
+    from sashimi.tabipb.run import LOWEST_RELIABLE_MESH_DENSITY, MIN_ATOMS  # noqa: PLC0415
+
+    supported = tuple(sorted(m.value for m in SUPPORTED_SURFACES))
+    equations = tuple(e.value for e in IMPLEMENTED_EQUATIONS)
+    try:
+        binary = discover_tabipb()
+    except BackendUnavailable as exc:
+        return BackendReport(
+            name="tabipb",
+            available=False,
+            family="boundary-element",
+            detail=str(exc),
+            surface_models=supported,
+            equations=equations,
+        )
+
+    return BackendReport(
+        name="tabipb",
+        available=True,
+        family="boundary-element",
+        version=binary.mesher_version,
+        detail=f"resolved to {binary.path}, meshing with {binary.mesher_path.name}",
+        surface_models=supported,
+        equations=equations,
+        extras={
+            "binary_sha256": binary.sha256,
+            "mesher": binary.mesher_path.name,
+            "returns": "potential on the dielectric interface, not a volumetric map",
+            "min_atoms": MIN_ATOMS,
+            "lowest_reliable_mesh_density": LOWEST_RELIABLE_MESH_DENSITY,
+        },
+    )
+
+
 def comparable_surface_models() -> list[str]:
     """Surface models on which two or more installed backends could be compared.
 
@@ -165,7 +209,7 @@ def comparable_surface_models() -> list[str]:
     with itself, and reporting those as comparable would tell a caller that
     cross-validation is available when nothing is installed to validate against.
     """
-    reports = [_apbs_report(), _delphi_report()]
+    reports = [_apbs_report(), _delphi_report(), _tabipb_report()]
     available = [set(r.surface_models) for r in reports if r.available]
     if len(available) < MIN_BACKENDS_TO_COMPARE:
         return []
@@ -175,7 +219,7 @@ def comparable_surface_models() -> list[str]:
 
 def describe_capabilities() -> dict[str, Any]:
     """Everything a caller needs to plan a request without trial and error."""
-    backends = [_apbs_report(), _delphi_report()]
+    backends = [_apbs_report(), _delphi_report(), _tabipb_report()]
     usable = [b.name for b in backends if b.available]
     defaults = GridSpec()
 
@@ -204,7 +248,6 @@ def describe_capabilities() -> dict[str, Any]:
         "artifacts": describe_cleanup(),
         "not_supported": [
             "nonlinear Poisson-Boltzmann (representable in the request; no solver path yet)",
-            "boundary-element backends (protocol admits them; none shipped)",
             "raw solver input passthrough (deliberately absent)",
             "FEM, geoflow, BEM, PBAM, PBSAM solvers",
         ],

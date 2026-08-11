@@ -135,6 +135,18 @@ was real. It required no protocol change at all, absorbing a cubic grid, a
 Gaussian-cube map in Bohr, energies in kT and a temperature parameter in
 *Celsius* below the same `Solver` interface.
 
+`sashimi.tabipb` is the harder test. It is a **boundary-element** solver: no
+grid at all, and its answer is a potential on a triangulated dielectric
+interface rather than a volume. That is the split the protocol was shaped around
+— `BoundaryElementRequest` and `SurfacePotential` were designed in phase 4 for a
+solver that did not exist yet — and it too needed no change. Three solvers
+across two families agree on ALA-GLY to **2.08%**, with the boundary-element
+answer falling between the two finite-difference ones.
+
+A BEM backend answers different questions, and sashimi says so rather than
+pretending otherwise: there is no volume to interpolate, so `sashimi_potential_at`
+does not apply, and a single-sphere solute cannot be triangulated at all.
+
 ### Using DelPhi
 
 Neither DelPhi flavour has a package, so both are opt-in and neither is a

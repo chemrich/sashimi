@@ -6,7 +6,8 @@
 > the same interface.
 
 Status: phases 0–4 shipped, 5 bar the PyPI release; 6 (distribution) not
-started; 7 (multi-backend) in progress — the DelPhi backend has landed.
+started; 7 (multi-backend) in progress — DelPhi, `sashimi validate` and the
+TABI-PB boundary-element backend have landed.
 Last updated: 2026-08-11
 
 This is the single planning document. It supersedes the earlier split between
@@ -40,9 +41,11 @@ computing electrostatic potential maps from structures, using a frozen APBS
 temp directories, or OpenDX parsing directly.
 
 **Non-goals.** sashimi does not compile, vendor, or patch APBS *source*. It
-does not expose the FEM, geoflow, BEM, PBAM, or PBSAM solvers — only the
+does not expose *APBS's* FEM, geoflow, BEM, PBAM or PBSAM solvers — only its
 `mg-auto` finite-difference path, which covers visualization-grade and standard
-solvation-energy work. It does not attempt nonlinear PBE in v1 (the API leaves
+solvation-energy work. (Boundary-element solving itself is no longer a non-goal:
+phase 7 added TABI-PB as its own backend, which is a different thing from
+exposing APBS's bundled copy.) It does not attempt nonlinear PBE in v1 (the API leaves
 room; LPBE is the contract debye will initially honor). It is not a general
 APBS input-file generator, and it deliberately exposes no raw-input passthrough:
 anyone who needs `fe-manual` needs APBS, not sashimi.
@@ -368,7 +371,7 @@ job fronts the matrix so the required status-check name survives matrix changes.
 |-------|---------|-----|-------------|
 | 1 | **APBS** (FD, mg-auto) | Community default, broadest features, conda-forge packaged | subprocess |
 | 2 | **DelPhi** ✅ | FD sibling; Gaussian dielectric, focusing workflows; cheap triangulation partner | subprocess, two flavours |
-| 3 | **TABI-PB** | BEM; forces the protocol to handle surface potentials | subprocess |
+| 3 | **TABI-PB** ✅ | BEM; forces the protocol to handle surface potentials | subprocess + NanoShaper |
 | 3b | **PyGBe** | BEM, Python-native → **in-process**; stress-tests transport-agnosticism | import |
 | 4 | **GB tier** (Amber GB / Bluues) | Fast approximation for high-throughput triage → PB refinement | subprocess |
 | — | **MIBPB** | Not production; the *accuracy referee* (~0.4% relative error, rigorous interface treatment) | validation harness |
@@ -812,9 +815,49 @@ potential RMSD 4.29 kT/e over 200 shared points); 2.30% on the Born ion at
 grid refines, which is the behaviour that makes the agreement meaningful rather
 than coincidental.
 
-Remaining in this phase: TABI-PB, which forces the surface-potential path to be
-real; PyGBe in-process, which proves transport-agnosticism; optional GB tier for
-triage→refine workflows.
+### TABI-PB ✅ — the protocol's acid test, passed
+
+`sashimi.tabipb` implements `Solver[BoundaryElementRequest]` against TABI-PB 3.0
+(treecode-accelerated boundary integral, BSD-3-Clause, University of Michigan),
+which triangulates with NanoShaper and integrates over the surface.
+
+**The protocol needed no change.** §2 calls the FD/BEM split "the single most
+important constraint": a protocol assuming a volumetric grid forecloses half the
+landscape. Phase 4 built `BoundaryElementRequest` and `SurfacePotential` for a
+solver that did not exist and guarded them with `bem_stub`. This is the same
+types carrying a real solver's real answer — 1,034 vertices and 2,064 triangles
+on ALA-GLY, through the same `SolveResult` APBS uses.
+
+**Three solvers, two families, one number.** ALA-GLY, molecular surface, zero
+salt: APBS −213.70, DelPhi −209.25, TABI-PB −211.39 kJ/mol — a **2.08% spread**,
+with the boundary-element answer falling between the two finite-difference ones.
+TABI-PB's energy converges monotonically with mesh density (−221.57 → −216.84 →
+−212.96 → −211.39 kJ/mol at `sdens` 1.5 → 4.0), the BEM analogue of grid
+refinement, and it reports kJ/mol directly — the only backend needing no unit
+conversion.
+
+**What a BEM solver costs, stated rather than hidden.** It cannot answer
+`sashimi_potential_at`: there is no volume to interpolate. It cannot solve the
+Born ion at all, because NanoShaper will not triangulate fewer than four atoms —
+so the one case in this project with a closed-form answer is the one case this
+backend cannot be calibrated against. And `SMOOTHED_MOLECULAR` and `GAUSSIAN`
+are refused as *grid concepts* rather than missing features: they describe how a
+dielectric varies across a volume, which a surface solver does not have.
+
+Two traps, both silent: `tabipb` invokes `NanoShaper` **by bare name through a
+shell**, so an installed-but-not-on-PATH mesher dies with `command not found`
+inside an uncaught C++ exception — `run.py` therefore builds the subprocess PATH
+itself. And a `mesh_density` below 1.5 aborts the same way, which matters
+because `BoundaryElementRequest.mesh_density` **defaults to 1.0** — so the most
+obvious first call fails unintelligibly. The backend names the cause; whether
+the protocol default should move is recorded in §14.
+
+Remaining in this phase: PyGBe in-process, which proves transport-agnosticism;
+optional GB tier for triage→refine workflows. Also outstanding: `validate` still
+takes a single `FiniteDifferenceRequest` and hands it to every backend, so it
+cannot yet include TABI-PB. Cross-family comparison means building both request
+types from the shared `SolveRequest` core — which is exactly what that base class
+was for, and is a small addition rather than a redesign.
 
 **Phase 8 — debye.** The validation ladder of §10; drop-in behind the backend
 interface; portability suite green on all architectures; BEM engine later.
@@ -906,6 +949,11 @@ summarised here.
   is not APBS's set renamed. Every backend shipped here shares `MOLECULAR`;
   `SMOOTHED_MOLECULAR` is APBS-only and `GAUSSIAN` DelPhi-only, and the latter
   is not yet comparable even between the two DelPhi flavours.
+- **Does `BoundaryElementRequest.mesh_density` default too low?** It defaults to
+  1.0, and TABI-PB — the only BEM backend — aborts below 1.5 on a dipeptide. A
+  protocol default that no shipped backend can honor is a smell, but the right
+  value is solute-dependent and backend-specific, so raising it would be
+  trading one arbitrary number for another. The backend names the cause today.
 - **Does `SMOOTHED_MOLECULAR` belong as the default?** Phase 7 made it
   load-bearing in a way it was not before: sashimi's default surface model is
   supported by exactly one backend, so every DelPhi solve at defaults raises
