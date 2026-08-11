@@ -7,9 +7,11 @@ dependency, and the runtime tree stays at numpy/pydantic/fastmcp.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from sashimi.capabilities import comparable_surface_models
 from sashimi.corpus import (
@@ -24,7 +26,13 @@ from sashimi.corpus import (
 )
 from sashimi.errors import SashimiError
 from sashimi.protocol import FiniteDifferenceRequest, Solver, SurfaceModel
-from sashimi.validate import DEFAULT_ENERGY_TOLERANCE, validate, with_surface_model
+from sashimi.validate import (
+    DEFAULT_ENERGY_TOLERANCE,
+    Backend,
+    SolverFamily,
+    System,
+    validate_system,
+)
 
 __all__ = ["main"]
 
@@ -47,8 +55,24 @@ def _delphi_solver() -> Solver[FiniteDifferenceRequest]:
     return DelphiSolver()
 
 
+def _tabipb_solver() -> Solver[Any]:
+    from sashimi.tabipb import TabipbSolver  # noqa: PLC0415 — keeps `--help` binary-free
+
+    return TabipbSolver()
+
+
 BACKENDS["apbs"] = _apbs_solver
 BACKENDS["delphi"] = _delphi_solver
+BACKENDS["tabipb"] = _tabipb_solver
+
+# Which request family each backend speaks. `Solver` is generic in its request
+# type, so a checker already refuses to hand a boundary-element request to an FD
+# backend — but that guarantee is static, and dispatch here happens at runtime.
+FAMILIES: dict[str, SolverFamily] = {
+    "apbs": SolverFamily.FINITE_DIFFERENCE,
+    "delphi": SolverFamily.FINITE_DIFFERENCE,
+    "tabipb": SolverFamily.BOUNDARY_ELEMENT,
+}
 
 
 def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case, ...]:
@@ -61,8 +85,20 @@ def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case,
     return tuple(known[n] for n in names)
 
 
+def _fd_solver(name: str) -> Solver[FiniteDifferenceRequest]:
+    """A corpus backend. The corpus is finite-difference by construction — every
+    case records a grid — so a BEM backend cannot build or verify one."""
+    if FAMILIES[name] is not SolverFamily.FINITE_DIFFERENCE:
+        raise SystemExit(
+            f"{name} is a {FAMILIES[name].value} solver, and the corpus records grid "
+            "geometry for every case. Use `sashimi validate` to compare it against "
+            "the finite-difference backends."
+        )
+    return BACKENDS[name]()
+
+
 def _build(args: argparse.Namespace) -> int:
-    solver = BACKENDS[args.backend]()
+    solver = _fd_solver(args.backend)
     directory = Path(args.directory) if args.directory else None
     cases = _select(MANIFEST, args.case)
 
@@ -82,7 +118,7 @@ def _build(args: argparse.Namespace) -> int:
 
 
 def _verify(args: argparse.Namespace) -> int:
-    solver = BACKENDS[args.backend]()
+    solver = _fd_solver(args.backend)
     directory = Path(args.directory) if args.directory else None
     cases = _select(MANIFEST, args.case)
     tolerances = Tolerances(
@@ -163,19 +199,27 @@ def _validate(args: argparse.Namespace) -> int:
 
     model = _pick_surface_model(args.surface)
     cases = _select(MANIFEST, args.case)
-    solvers = {name: BACKENDS[name]() for name in names}
+    backends = [Backend(name, BACKENDS[name](), FAMILIES[name]) for name in names]
 
-    print(f"Comparing {', '.join(names)} on the {model.value} surface.\n")
+    families = {b.family.value for b in backends}
+    across = f" across {len(families)} solver families" if len(families) > 1 else ""
+    print(f"Comparing {', '.join(names)} on the {model.value} surface{across}.\n")
 
     disagreed: list[str] = []
     incomparable: list[str] = []
 
     for case in cases:
-        request = with_surface_model(case.request(), model)
+        system = System(
+            structure=case.structure(),
+            solvent=dataclasses.replace(case.solvent, surface_model=model),
+            grid=case.grid,
+            mesh_density=args.mesh_density,
+            want_energy=case.compute_energy,
+        )
         try:
-            comparison = validate(
-                solvers,
-                request,
+            comparison = validate_system(
+                system,
+                backends,
                 tolerance=args.tolerance,
                 allow_mismatch=args.allow_mismatched,
             )
@@ -260,6 +304,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--surface",
         choices=sorted(m.value for m in SurfaceModel),
         help="surface model to compare on (default: one the backends share)",
+    )
+    validator.add_argument(
+        "--mesh-density",
+        type=float,
+        default=2.0,
+        help=(
+            "vertices per square angstrom for boundary-element backends "
+            "(default: 2.0; below 1.5 TABI-PB will not solve)"
+        ),
     )
     validator.add_argument(
         "--tolerance",

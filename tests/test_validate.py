@@ -15,9 +15,11 @@ import numpy as np
 import pytest
 
 from sashimi.protocol import (
+    BoundaryElementRequest,
     EnergyTerm,
     Equation,
     FiniteDifferenceRequest,
+    GridSpec,
     PotentialGrid,
     PQRData,
     Provenance,
@@ -26,11 +28,15 @@ from sashimi.protocol import (
     SurfaceModel,
 )
 from sashimi.validate import (
+    Backend,
     BackendRun,
     Incomparable,
+    SolverFamily,
+    System,
     compare_results,
     overlap_probe_points,
     validate,
+    validate_system,
     with_surface_model,
 )
 
@@ -292,3 +298,79 @@ def test_missing_energies_are_reported_rather_than_guessed():
     assert comparison.energy_spread is None
     assert not comparison.agrees
     assert any("fewer than two" in note for note in comparison.notes)
+
+
+# --- cross-family comparison -------------------------------------------------
+
+
+def test_a_system_produces_either_familys_request():
+    """The seam `SolveRequest` was designed for, used for the first time.
+
+    One physical question, two dialects: the finite-difference request carries a
+    grid, the boundary-element one a mesh density, and neither can read the
+    other's.
+    """
+    system = System(structure=ion(), grid=GridSpec(resolution=0.4), mesh_density=3.0)
+
+    fd = system.request_for(SolverFamily.FINITE_DIFFERENCE)
+    be = system.request_for(SolverFamily.BOUNDARY_ELEMENT)
+
+    assert isinstance(fd, FiniteDifferenceRequest)
+    assert isinstance(be, BoundaryElementRequest)
+    assert fd.grid.resolution == pytest.approx(0.4)
+    assert be.mesh_density == pytest.approx(3.0)
+    # The physics is shared, which is what makes the comparison legitimate.
+    assert fd.structure is be.structure
+    assert fd.solvent == be.solvent
+
+
+def test_validate_system_compares_across_families():
+    """A grid solver and a surface solver, one question, one spread."""
+    from sashimi.bem_stub import StubBemSolver  # noqa: PLC0415
+
+    system = System(structure=ion(), solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR))
+    comparison = validate_system(
+        system,
+        [
+            Backend("grid", StubSolver(-100.0), SolverFamily.FINITE_DIFFERENCE),
+            Backend("surface", StubSolver(-104.0), SolverFamily.BOUNDARY_ELEMENT),
+        ],
+    )
+
+    assert comparison.agrees
+    assert comparison.energy_spread == pytest.approx(4.0 / 104.0)
+    assert [r.name for r in comparison.runs] == ["grid", "surface"]
+    assert StubBemSolver is not None  # the shipped stub still satisfies the protocol
+
+
+def test_a_boundary_element_request_is_linear_by_construction():
+    """`equation` lives on the FD request only, so the comparison must not
+    assume it is there — a nonlinear BEM request is unrepresentable, not
+    rejected."""
+    system = System(structure=ion())
+    comparison = validate_system(
+        system,
+        [
+            Backend("a", StubSolver(-100.0), SolverFamily.FINITE_DIFFERENCE),
+            Backend("b", StubSolver(-100.0), SolverFamily.BOUNDARY_ELEMENT),
+        ],
+    )
+
+    assert {r.equation for r in comparison.runs} == {Equation.LINEAR}
+
+
+def test_cross_family_still_refuses_a_mismatched_energy_term():
+    """Crossing families does not relax the rules; it only widens who can play."""
+    system = System(structure=ion(), solvent=SolventModel(ionic_strength=0.15))
+    with pytest.raises(Incomparable, match="mobile-ion contribution"):
+        validate_system(
+            system,
+            [
+                Backend("a", StubSolver(-100.0, term=EnergyTerm.POLAR_SOLVATION)),
+                Backend(
+                    "b",
+                    StubSolver(-101.0, term=EnergyTerm.REACTION_FIELD),
+                    SolverFamily.BOUNDARY_ELEMENT,
+                ),
+            ],
+        )

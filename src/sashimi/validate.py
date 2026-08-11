@@ -37,8 +37,9 @@ share. That is the one substantive difference between the two engines; the
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -46,12 +47,17 @@ import numpy as np
 from sashimi.errors import InputError
 from sashimi.protocol import (
     DIMENSIONS,
+    BoundaryElementRequest,
     EnergyTerm,
     Equation,
     FiniteDifferenceRequest,
     FloatArray,
+    GridSpec,
     PotentialGrid,
+    PQRData,
+    SolventModel,
     Solver,
+    SolveRequest,
     SolveResult,
     SurfaceModel,
 )
@@ -59,12 +65,16 @@ from sashimi.protocol import (
 __all__ = [
     "N_PROBES",
     "PROBE_SEED",
+    "Backend",
     "BackendRun",
     "Comparison",
     "Incomparable",
+    "SolverFamily",
+    "System",
     "compare_results",
     "overlap_probe_points",
     "validate",
+    "validate_system",
 ]
 
 N_PROBES = 200
@@ -77,6 +87,75 @@ PROBE_INSET = 0.5  # sample the middle 50% of the shared box, away from boundari
 # a van der Waals boundary. This is the line between "discretization" and
 # "someone has a bug", and it is deliberately generous.
 DEFAULT_ENERGY_TOLERANCE = 0.10
+
+
+class SolverFamily(StrEnum):
+    """Which request family a backend takes.
+
+    The `Solver` protocol is generic in its request type, so a type checker
+    already refuses to hand a `BoundaryElementRequest` to an FD backend. That
+    guarantee is static, and cross-family validation has to make the same
+    decision at runtime — hence an explicit declaration rather than
+    introspection, which cannot recover a type parameter.
+    """
+
+    FINITE_DIFFERENCE = "finite-difference"
+    BOUNDARY_ELEMENT = "boundary-element"
+
+
+@dataclass(frozen=True)
+class System:
+    """One physical system, expressible as either family's request.
+
+    This is the seam ROADMAP.md section 2 designed `SolveRequest` for and never
+    had to use until a boundary-element backend existed. Everything a solve
+    needs regardless of family — structure, solvent, what to compute — lives on
+    the base class; `GridSpec` and `mesh_density` are the family-specific parts,
+    and this holds both so that one physical question can be put to solvers that
+    cannot read each other's requests.
+
+    `want_potential` defaults to False because the two families do not return
+    comparable fields: a volume and a triangulated surface have no shared
+    representation, so a cross-family comparison rests on energies alone.
+    Same-family runs can still ask for potentials and get the pointwise
+    comparison.
+    """
+
+    structure: PQRData
+    # Frozen dataclasses, so a shared instance is safe; the protocol's own
+    # request types default the same way.
+    solvent: SolventModel = SolventModel()  # noqa: RUF009
+    grid: GridSpec = GridSpec()  # noqa: RUF009
+    mesh_density: float = 2.0
+    want_energy: bool = True
+    want_potential: bool = False
+
+    def request_for(self, family: SolverFamily) -> SolveRequest:
+        """The same physical question, in the dialect that family can read."""
+        if family is SolverFamily.FINITE_DIFFERENCE:
+            return FiniteDifferenceRequest(
+                structure=self.structure,
+                solvent=self.solvent,
+                want_energy=self.want_energy,
+                want_potential=self.want_potential,
+                grid=self.grid,
+            )
+        return BoundaryElementRequest(
+            structure=self.structure,
+            solvent=self.solvent,
+            want_energy=self.want_energy,
+            want_potential=self.want_potential,
+            mesh_density=self.mesh_density,
+        )
+
+
+@dataclass(frozen=True)
+class Backend:
+    """A solver, its name, and the request family it speaks."""
+
+    name: str
+    solver: Solver[Any]
+    family: SolverFamily = SolverFamily.FINITE_DIFFERENCE
 
 
 class Incomparable(InputError):
@@ -102,16 +181,17 @@ class BackendRun:
     wall_seconds: float | None = None
 
     @classmethod
-    def from_result(
-        cls, name: str, result: SolveResult, request: FiniteDifferenceRequest
-    ) -> BackendRun:
+    def from_result(cls, name: str, result: SolveResult, request: SolveRequest) -> BackendRun:
         potential = result.potential if isinstance(result.potential, PotentialGrid) else None
         return cls(
             name=name,
             energy_kj_mol=result.energy_kj_mol,
             energy_term=result.provenance.energy_term,
             surface_model=request.solvent.surface_model,
-            equation=request.equation,
+            # `equation` lives on the FD request only: BEM formulations are
+            # built on the linearized operator's Green function, so a nonlinear
+            # one is not something to reject but something unrepresentable.
+            equation=getattr(request, "equation", Equation.LINEAR),
             potential=potential,
             ionic_strength=request.solvent.ionic_strength,
             wall_seconds=result.provenance.wall_seconds,
@@ -316,6 +396,28 @@ def validate(
         BackendRun.from_result(name, solver.solve(request), request)
         for name, solver in solvers.items()
     ]
+    return compare_results(runs, tolerance=tolerance, allow_mismatch=allow_mismatch)
+
+
+def validate_system(
+    system: System,
+    backends: Sequence[Backend],
+    *,
+    tolerance: float = DEFAULT_ENERGY_TOLERANCE,
+    allow_mismatch: bool = False,
+) -> Comparison:
+    """Compare solvers that cannot read each other's requests.
+
+    Each backend is handed the request its family speaks, built from one
+    `System`, so "were they asked the same thing" stays true by construction
+    even across the FD/BEM divide. What is compared is the energy: a volumetric
+    map and a triangulated surface have no shared representation, and inventing
+    one would be the same category error `check_comparable` exists to refuse.
+    """
+    runs = []
+    for backend in backends:
+        request = system.request_for(backend.family)
+        runs.append(BackendRun.from_result(backend.name, backend.solver.solve(request), request))
     return compare_results(runs, tolerance=tolerance, allow_mismatch=allow_mismatch)
 
 
