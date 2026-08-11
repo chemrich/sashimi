@@ -27,6 +27,7 @@ from sashimi.corpus import (
 from sashimi.errors import SashimiError
 from sashimi.protocol import FiniteDifferenceRequest, Solver, SurfaceModel
 from sashimi.validate import (
+    DEFAULT_APPROXIMATION_TOLERANCE,
     DEFAULT_ENERGY_TOLERANCE,
     Backend,
     SolverFamily,
@@ -221,6 +222,7 @@ def _validate(args: argparse.Namespace) -> int:
                 system,
                 backends,
                 tolerance=args.tolerance,
+                approximation_tolerance=args.approximation_tolerance,
                 allow_mismatch=args.allow_mismatched,
             )
         except SashimiError as exc:
@@ -234,7 +236,11 @@ def _validate(args: argparse.Namespace) -> int:
             energy = (
                 f"{run.energy_kj_mol:12.3f}" if run.energy_kj_mol is not None else "          -"
             )
-            print(f"          {run.name:<10} {energy} kJ/mol  ({run.energy_term})")
+            deviation = comparison.approximation_deviation.get(run.name)
+            # Named on the row it belongs to: an approximation's distance from the
+            # reference is not part of the spread and must not read as if it were.
+            tier = f"  [{run.accuracy_tier}, {deviation:.2%} from reference]" if deviation else ""
+            print(f"          {run.name:<10} {energy} kJ/mol  ({run.energy_term}){tier}")
         for note in comparison.notes:
             print(f"          note: {note}")
         if not comparison.agrees:
@@ -319,6 +325,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_ENERGY_TOLERANCE,
         help=f"relative energy spread treated as agreement (default: {DEFAULT_ENERGY_TOLERANCE})",
+    )
+    validator.add_argument(
+        "--approximation-tolerance",
+        type=float,
+        default=DEFAULT_APPROXIMATION_TOLERANCE,
+        help=(
+            "how far an approximate backend may sit from the reference consensus "
+            f"before it is treated as broken (default: {DEFAULT_APPROXIMATION_TOLERANCE})"
+        ),
     )
     validator.add_argument(
         "--allow-mismatched",

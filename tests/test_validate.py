@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from sashimi.protocol import (
+    AccuracyTier,
     BoundaryElementRequest,
     EnergyTerm,
     Equation,
@@ -28,6 +29,7 @@ from sashimi.protocol import (
     SurfaceModel,
 )
 from sashimi.validate import (
+    DEFAULT_APPROXIMATION_TOLERANCE,
     Backend,
     BackendRun,
     Incomparable,
@@ -73,7 +75,7 @@ class StubSolver:
         )
 
 
-def run(  # noqa: PLR0917 — a builder for a 7-field record
+def run(  # noqa: PLR0917 — a builder for an 8-field record
     name="a",
     energy=-100.0,
     term=EnergyTerm.POLAR_SOLVATION,
@@ -81,6 +83,7 @@ def run(  # noqa: PLR0917 — a builder for a 7-field record
     equation=Equation.LINEAR,
     potential=None,
     ionic_strength=0.0,
+    tier=AccuracyTier.REFERENCE,
 ) -> BackendRun:
     return BackendRun(
         name=name,
@@ -90,7 +93,12 @@ def run(  # noqa: PLR0917 — a builder for a 7-field record
         equation=equation,
         potential=potential,
         ionic_strength=ionic_strength,
+        accuracy_tier=tier,
     )
+
+
+def approximation(name="gb", energy=-120.0, **kwargs) -> BackendRun:
+    return run(name, energy, tier=AccuracyTier.APPROXIMATE, **kwargs)
 
 
 def request(**kwargs) -> FiniteDifferenceRequest:
@@ -125,6 +133,102 @@ def test_the_spread_is_relative_to_the_largest_magnitude():
 def test_one_backend_is_not_a_comparison():
     with pytest.raises(Incomparable, match="at least two"):
         compare_results([run("a")])
+
+
+# --- accuracy tiers ----------------------------------------------------------
+#
+# An approximation is expected to disagree. The whole point of the partition is
+# that its disagreement is reported without either being excused or being
+# allowed to contaminate what the reference solvers said about each other.
+
+
+def test_an_approximation_does_not_widen_the_reference_spread():
+    """The number that would otherwise be destroyed by averaging."""
+    reference_only = compare_results([run("a", -100.0), run("b", -102.0)])
+    with_gb = compare_results([run("a", -100.0), run("b", -102.0), approximation("gb", -125.0)])
+
+    assert with_gb.energy_spread == reference_only.energy_spread
+    assert with_gb.energy_range_kj_mol == (-102.0, -100.0)
+    assert with_gb.tolerance == reference_only.tolerance
+
+
+def test_an_approximation_is_measured_against_the_reference_consensus():
+    comparison = compare_results([run("a", -100.0), run("b", -102.0), approximation("gb", -121.0)])
+
+    # Consensus is the mean of the reference energies, -101.0.
+    assert comparison.approximation_deviation == {"gb": pytest.approx(20.0 / 101.0)}
+    assert comparison.approximations_agree
+    assert comparison.agrees
+
+
+def test_an_approximation_beyond_its_own_tolerance_disagrees():
+    comparison = compare_results([run("a", -100.0), run("b", -100.0), approximation("gb", -200.0)])
+
+    assert comparison.approximation_deviation["gb"] == pytest.approx(1.0)
+    assert not comparison.approximations_agree
+    assert not comparison.agrees
+    # ...but the reference solvers still agreed, and that is still visible.
+    assert comparison.energy_spread == pytest.approx(0.0)
+
+
+def test_a_reference_disagreement_is_not_excused_by_a_well_behaved_approximation():
+    comparison = compare_results([run("a", -100.0), run("b", -160.0), approximation("gb", -130.0)])
+
+    assert not comparison.agrees
+    assert comparison.approximations_agree
+
+
+def test_a_lone_reference_still_calibrates_an_approximation():
+    comparison = compare_results([run("a", -100.0), approximation("gb", -110.0)])
+
+    assert comparison.energy_spread is None  # one backend has nothing to spread against
+    assert comparison.approximation_deviation == {"gb": pytest.approx(0.1)}
+    assert comparison.agrees
+    assert any("no reference spread" in note for note in comparison.notes)
+
+
+def test_approximations_alone_are_compared_but_not_called_accurate():
+    comparison = compare_results([approximation("gb", -100.0), approximation("gb2", -120.0)])
+
+    assert comparison.energy_spread == pytest.approx(20.0 / 120.0)
+    assert comparison.tolerance == DEFAULT_APPROXIMATION_TOLERANCE
+    assert comparison.agrees
+    assert any("establishes accuracy" in note for note in comparison.notes)
+
+
+def test_an_unstated_tier_is_a_reference_tier():
+    """Every backend predating the field discretizes the equation."""
+    assert (
+        BackendRun(
+            name="a",
+            energy_kj_mol=-100.0,
+            energy_term=EnergyTerm.POLAR_SOLVATION,
+            surface_model=SurfaceModel.MOLECULAR,
+            equation=Equation.LINEAR,
+            potential=None,
+        ).accuracy_tier
+        is AccuracyTier.REFERENCE
+    )
+    assert Provenance(backend="stub").accuracy_tier is AccuracyTier.REFERENCE
+
+
+def test_an_approximation_is_still_held_to_the_comparability_checks():
+    """Less accurate is allowed; answering a different question is not."""
+    with pytest.raises(Incomparable, match="surface models differ"):
+        compare_results(
+            [
+                run("a", surface=SurfaceModel.MOLECULAR),
+                approximation("gb", surface=SurfaceModel.VAN_DER_WAALS),
+            ]
+        )
+
+
+def test_the_summary_names_the_approximation_separately():
+    comparison = compare_results([run("a", -100.0), run("b", -102.0), approximation("gb", -121.0)])
+    summary = comparison.summary()
+
+    assert "2 backends agree" in summary  # the reference pair, not all three
+    assert "gb 19.80%" in summary
 
 
 # --- refusals ----------------------------------------------------------------

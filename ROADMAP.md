@@ -874,6 +874,41 @@ unrepresentable there rather than rejected.
 The corpus stays finite-difference by construction — every case records grid
 geometry — so `sashimi corpus --backend tabipb` refuses and points at `validate`.
 
+### Accuracy tiers — what `validate` needed before a GB backend could exist
+
+`AccuracyTier` in `Provenance`, the same shape of addition as `EnergyTerm` and
+for the level above it. `EnergyTerm` answers "what quantity is this";
+`AccuracyTier` answers "how was it obtained": a discretization of the equation,
+or an approximation to it. The distinction is invisible in the number and
+decides what a disagreement means.
+
+The forcing case is that `validate` has one tolerance and one verdict. A
+Generalized Born answer sits 10–30% from a PB one *by construction*, so on the
+existing machinery every GB comparison would report DISAGREE — true, and
+useless. The fix is a partition rather than a wider band: the headline spread
+stays a statement about the reference tier at 10%, and each approximation is
+reported separately as its distance from what that tier agreed on. Widening one
+tolerance to fit both would have cost the reference number too, since a real
+APBS/DelPhi regression fits comfortably inside 30%.
+
+It defaults where `EnergyTerm` is optional-and-refused, which is deliberate: an
+unstated energy term is a silently wrong comparison, while an unstated tier has
+one right answer for every backend that predates the field, and a mis-defaulted
+approximation merely gets the old behaviour — compared at 10% and loudly called
+a disagreement. Refuse the silent failure; default the loud one.
+
+**A latent bug surfaced while planning for it.**
+`comparable_surface_models()` promised "two or more installed backends" and
+computed the intersection across *all* of them. Harmless with three backends
+that share `molecular` — and fatal on the fourth: a GB tier supports only
+`van-der-waals`, which no surface solver can mesh, so the intersection would
+have emptied, and an empty list here stops `sashimi validate` and skips the
+whole cross-validation tier. Adding a backend must not be able to switch off
+the comparisons between the others. Counting backends per model, as the
+docstring always said, also revealed a comparison that was already legitimate
+and never run: APBS against DelPhi on `van-der-waals`, now exercised on every
+push at a measured 3.93% on ALA-GLY and 2.30% on the Born ion.
+
 Remaining in this phase: PyGBe in-process, which proves transport-agnosticism;
 optional GB tier for triage→refine workflows.
 

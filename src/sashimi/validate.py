@@ -23,6 +23,13 @@ Each is checked before a spread is computed, and each can be overridden only by
 saying so explicitly, which puts the caveat in the caller's hands rather than in
 a footnote.
 
+**One difference is partitioned rather than refused.** A backend that
+approximates the equation instead of discretizing it — `AccuracyTier` in
+provenance — is expected to disagree, by tens of percent, and neither refusing
+it nor averaging it in would be honest. The spread stays a statement about the
+reference tier, and each approximation is reported separately as its distance
+from what that tier agreed on.
+
 **Why this is not `corpus.verify_case`.** The corpus answers "has this backend
 changed?" against recorded numbers, and its first act is to compare grid shape
 and bail if it moved — correct there, useless here, because two backends have
@@ -47,6 +54,7 @@ import numpy as np
 from sashimi.errors import InputError
 from sashimi.protocol import (
     DIMENSIONS,
+    AccuracyTier,
     BoundaryElementRequest,
     EnergyTerm,
     Equation,
@@ -63,6 +71,8 @@ from sashimi.protocol import (
 )
 
 __all__ = [
+    "DEFAULT_APPROXIMATION_TOLERANCE",
+    "DEFAULT_ENERGY_TOLERANCE",
     "N_PROBES",
     "PROBE_SEED",
     "Backend",
@@ -87,6 +97,13 @@ PROBE_INSET = 0.5  # sample the middle 50% of the shared box, away from boundari
 # a van der Waals boundary. This is the line between "discretization" and
 # "someone has a bug", and it is deliberately generous.
 DEFAULT_ENERGY_TOLERANCE = 0.10
+
+# An approximation is not held to the tolerance above, because it is not trying
+# to meet it. Generalized Born reproduces PB solvation energies to roughly
+# 10-30% depending on the system, which is the method working as designed rather
+# than a defect. This is the line between "the approximation behaved as
+# documented" and "the approximation is broken or misconfigured".
+DEFAULT_APPROXIMATION_TOLERANCE = 0.30
 
 
 class SolverFamily(StrEnum):
@@ -179,6 +196,7 @@ class BackendRun:
     potential: PotentialGrid | None
     ionic_strength: float = 0.0  # M; decides whether differing terms coincide
     wall_seconds: float | None = None
+    accuracy_tier: AccuracyTier = AccuracyTier.REFERENCE
 
     @classmethod
     def from_result(cls, name: str, result: SolveResult, request: SolveRequest) -> BackendRun:
@@ -195,12 +213,20 @@ class BackendRun:
             potential=potential,
             ionic_strength=request.solvent.ionic_strength,
             wall_seconds=result.provenance.wall_seconds,
+            accuracy_tier=result.provenance.accuracy_tier,
         )
 
 
 @dataclass
 class Comparison:
-    """What the backends said, and whether it constitutes agreement."""
+    """What the backends said, and whether it constitutes agreement.
+
+    `energy_spread` is the spread across *reference-tier* backends only. An
+    approximation does not widen it; it is reported separately, in
+    `approximation_deviation`, as its distance from what the reference solvers
+    agreed on. Folding the two together would cost both numbers — see
+    `AccuracyTier`.
+    """
 
     runs: list[BackendRun]
     energy_spread: float | None = None  # max pairwise relative difference
@@ -210,12 +236,17 @@ class Comparison:
     n_probes: int = 0
     agrees: bool = False
     tolerance: float = DEFAULT_ENERGY_TOLERANCE
+    # Relative distance from the reference consensus, per approximate backend.
+    approximation_deviation: dict[str, float] = field(default_factory=dict)
+    approximation_tolerance: float = DEFAULT_APPROXIMATION_TOLERANCE
+    approximations_agree: bool = True
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "backends": [r.name for r in self.runs],
             "energies_kj_mol": {r.name: r.energy_kj_mol for r in self.runs},
+            "accuracy_tiers": {r.name: r.accuracy_tier.value for r in self.runs},
             "energy_spread": self.energy_spread,
             "energy_range_kj_mol": list(self.energy_range_kj_mol)
             if self.energy_range_kj_mol
@@ -224,13 +255,30 @@ class Comparison:
             "potential_max_abs_kt_e": self.potential_max_abs_kt_e,
             "n_probes": self.n_probes,
             "tolerance": self.tolerance,
+            "approximation_deviation": self.approximation_deviation,
+            "approximation_tolerance": self.approximation_tolerance,
+            "approximations_agree": self.approximations_agree,
             "agrees": self.agrees,
             "notes": self.notes,
         }
 
+    def approximation_summary(self) -> str:
+        """One line per approximate backend, or empty if there were none."""
+        if not self.approximation_deviation:
+            return ""
+        parts = ", ".join(
+            f"{name} {dev:.2%}" for name, dev in sorted(self.approximation_deviation.items())
+        )
+        verdict = "as documented" if self.approximations_agree else "OUTSIDE"
+        return (
+            f"approximations {verdict} from the reference: {parts} "
+            f"(tolerance {self.approximation_tolerance:.0%})"
+        )
+
     def summary(self) -> str:
+        approximations = self.approximation_summary()
         if self.energy_spread is None:
-            return "no energies to compare"
+            return approximations or "no energies to compare"
         lo, hi = self.energy_range_kj_mol or (float("nan"), float("nan"))
         verdict = "agree" if self.agrees else "DISAGREE"
         detail = ""
@@ -238,10 +286,13 @@ class Comparison:
             detail = (
                 f", potential RMSD {self.potential_rmsd_kt_e:.4f} kT/e over {self.n_probes} pts"
             )
-        return (
-            f"{len(self.runs)} backends {verdict}: {self.energy_spread:.2%} spread "
+        n_reference = sum(1 for r in self.runs if r.accuracy_tier is AccuracyTier.REFERENCE)
+        counted = n_reference if self.approximation_deviation else len(self.runs)
+        line = (
+            f"{counted} backends {verdict}: {self.energy_spread:.2%} spread "
             f"({lo:.3f} to {hi:.3f} kJ/mol, tolerance {self.tolerance:.0%}){detail}"
         )
+        return f"{line}; {approximations}" if approximations else line
 
 
 def check_comparable(runs: list[BackendRun], *, allow_mismatch: bool = False) -> list[str]:
@@ -331,10 +382,77 @@ def overlap_probe_points(grids: list[PotentialGrid]) -> FloatArray:
     return np.asarray(centre + offsets, dtype=np.float64)
 
 
+def _relative_spread(energies: list[float]) -> tuple[float, tuple[float, float]]:
+    """Range over the largest magnitude present, so a near-zero energy cannot blow it up."""
+    lo, hi = min(energies), max(energies)
+    scale = max(abs(v) for v in energies)
+    return ((hi - lo) / scale if scale else 0.0), (lo, hi)
+
+
+def _compare_energies(
+    comparison: Comparison, *, tolerance: float, approximation_tolerance: float
+) -> None:
+    """Spread across the reference tier; approximations measured against it.
+
+    The partition is what keeps both numbers meaningful. Two finite-difference
+    codes agreeing to 2.3% is evidence about *them*, and it disappears if a
+    Generalized Born answer 20% away is averaged in. Equally, calling that GB
+    answer a disagreement would report the method working as designed as though
+    it were a bug.
+    """
+    reference = [r for r in comparison.runs if r.accuracy_tier is AccuracyTier.REFERENCE]
+    approximate = [r for r in comparison.runs if r.accuracy_tier is AccuracyTier.APPROXIMATE]
+    ref_energies = [r.energy_kj_mol for r in reference if r.energy_kj_mol is not None]
+    approx_energies = [r.energy_kj_mol for r in approximate if r.energy_kj_mol is not None]
+
+    spread_ok: bool | None = None
+    consensus: float | None = None
+
+    if len(ref_energies) >= 2:  # noqa: PLR2004
+        comparison.energy_spread, comparison.energy_range_kj_mol = _relative_spread(ref_energies)
+        spread_ok = comparison.energy_spread <= tolerance
+        consensus = float(np.mean(ref_energies))
+    elif len(ref_energies) == 1:
+        consensus = ref_energies[0]
+        if approximate:
+            comparison.notes.append(
+                "one reference backend, so there is no reference spread; the "
+                "approximation is measured against it alone"
+            )
+    elif len(approx_energies) >= 2:  # noqa: PLR2004
+        # Nothing here establishes accuracy: two approximations agreeing means
+        # they implement the same approximation, not that either is right. The
+        # spread is still worth reporting, at the tolerance that applies to it.
+        comparison.tolerance = approximation_tolerance
+        comparison.energy_spread, comparison.energy_range_kj_mol = _relative_spread(approx_energies)
+        spread_ok = comparison.energy_spread <= approximation_tolerance
+        comparison.notes.append(
+            "no reference-tier backend ran, so this spread is between "
+            "approximations and nothing in it establishes accuracy"
+        )
+
+    for run in approximate:
+        if run.energy_kj_mol is None or not consensus:
+            continue
+        comparison.approximation_deviation[run.name] = abs(run.energy_kj_mol - consensus) / abs(
+            consensus
+        )
+    comparison.approximations_agree = all(
+        deviation <= approximation_tolerance
+        for deviation in comparison.approximation_deviation.values()
+    )
+
+    if spread_ok is None and not comparison.approximation_deviation:
+        comparison.notes.append("fewer than two backends returned an energy")
+    else:
+        comparison.agrees = spread_ok is not False and comparison.approximations_agree
+
+
 def compare_results(
     runs: list[BackendRun],
     *,
     tolerance: float = DEFAULT_ENERGY_TOLERANCE,
+    approximation_tolerance: float = DEFAULT_APPROXIMATION_TOLERANCE,
     allow_mismatch: bool = False,
 ) -> Comparison:
     """Reduce N backend answers to a spread, refusing when that would mislead."""
@@ -345,17 +463,15 @@ def compare_results(
         )
 
     notes = check_comparable(runs, allow_mismatch=allow_mismatch)
-    comparison = Comparison(runs=runs, tolerance=tolerance, notes=notes)
-
-    energies = [r.energy_kj_mol for r in runs if r.energy_kj_mol is not None]
-    if len(energies) >= 2:  # noqa: PLR2004
-        lo, hi = min(energies), max(energies)
-        scale = max(abs(v) for v in energies)
-        comparison.energy_range_kj_mol = (lo, hi)
-        comparison.energy_spread = (hi - lo) / scale if scale else 0.0
-        comparison.agrees = comparison.energy_spread <= tolerance
-    else:
-        comparison.notes.append("fewer than two backends returned an energy")
+    comparison = Comparison(
+        runs=runs,
+        tolerance=tolerance,
+        approximation_tolerance=approximation_tolerance,
+        notes=notes,
+    )
+    _compare_energies(
+        comparison, tolerance=tolerance, approximation_tolerance=approximation_tolerance
+    )
 
     grids = [r.potential for r in runs if r.potential is not None]
     if len(grids) >= 2:  # noqa: PLR2004
@@ -384,6 +500,7 @@ def validate(
     request: FiniteDifferenceRequest,
     *,
     tolerance: float = DEFAULT_ENERGY_TOLERANCE,
+    approximation_tolerance: float = DEFAULT_APPROXIMATION_TOLERANCE,
     allow_mismatch: bool = False,
 ) -> Comparison:
     """Solve one request with every backend and compare the answers.
@@ -396,7 +513,12 @@ def validate(
         BackendRun.from_result(name, solver.solve(request), request)
         for name, solver in solvers.items()
     ]
-    return compare_results(runs, tolerance=tolerance, allow_mismatch=allow_mismatch)
+    return compare_results(
+        runs,
+        tolerance=tolerance,
+        approximation_tolerance=approximation_tolerance,
+        allow_mismatch=allow_mismatch,
+    )
 
 
 def validate_system(
@@ -404,6 +526,7 @@ def validate_system(
     backends: Sequence[Backend],
     *,
     tolerance: float = DEFAULT_ENERGY_TOLERANCE,
+    approximation_tolerance: float = DEFAULT_APPROXIMATION_TOLERANCE,
     allow_mismatch: bool = False,
 ) -> Comparison:
     """Compare solvers that cannot read each other's requests.
@@ -418,7 +541,12 @@ def validate_system(
     for backend in backends:
         request = system.request_for(backend.family)
         runs.append(BackendRun.from_result(backend.name, backend.solver.solve(request), request))
-    return compare_results(runs, tolerance=tolerance, allow_mismatch=allow_mismatch)
+    return compare_results(
+        runs,
+        tolerance=tolerance,
+        approximation_tolerance=approximation_tolerance,
+        allow_mismatch=allow_mismatch,
+    )
 
 
 def with_surface_model(
