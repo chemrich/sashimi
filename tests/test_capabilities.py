@@ -17,6 +17,7 @@ from sashimi.capabilities import (
 )
 from sashimi.delphi import discover as delphi_discover
 from sashimi.protocol import Equation, GridSpec, PQRData, SolventModel, SurfaceModel
+from sashimi.tabipb import discover as tabipb_discover
 
 
 @pytest.fixture
@@ -27,11 +28,16 @@ def hide_backends(monkeypatch):
     caches have to be cleared on the way in *and* out — otherwise a test that
     hides APBS poisons the lookup for every test after it.
     """
-    caches = (discover._discover_cached, delphi_discover._discover_cached)
+    caches = (
+        discover._discover_cached,
+        delphi_discover._discover_cached,
+        tabipb_discover._discover_cached,
+    )
     for cache in caches:
         cache.cache_clear()
     monkeypatch.setenv("SASHIMI_APBS_PATH", "/nonexistent/apbs")
     monkeypatch.setenv("SASHIMI_DELPHI_PATH", "/nonexistent/delphi")
+    monkeypatch.setenv("SASHIMI_TABIPB_PATH", "/nonexistent/tabipb")
     monkeypatch.delenv("CONDA_PREFIX", raising=False)
     monkeypatch.setattr("shutil.which", lambda _: None)
     yield
@@ -86,11 +92,20 @@ class TestCapabilities:
         assert "brew install apbs" in caps["backends"][0]["detail"]
         # Every backend must explain its own absence, not just the first one.
         assert "compbio.clemson.edu" in caps["backends"][1]["detail"]
-        assert "0/2 backend" in caps["summary"]
+        assert "Treecodes/TABI-PB" in caps["backends"][2]["detail"]
+        assert "0/3 backend" in caps["summary"]
 
-    def test_reports_both_finite_difference_backends(self):
-        names = [backend["name"] for backend in describe_capabilities()["backends"]]
-        assert names == ["apbs", "delphi"]
+    def test_reports_every_backend_with_its_solver_family(self):
+        """The family is what tells a caller why TABI-PB answers different
+        questions: a boundary-element solve has no volume to interpolate."""
+        backends = describe_capabilities()["backends"]
+
+        assert [b["name"] for b in backends] == ["apbs", "delphi", "tabipb"]
+        assert [b["family"] for b in backends] == [
+            "finite-difference",
+            "finite-difference",
+            "boundary-element",
+        ]
 
     def test_one_backend_is_comparable_with_nothing(self, monkeypatch):
         """A lone backend trivially shares every model with itself.
@@ -100,16 +115,20 @@ class TestCapabilities:
         exactly what `tests/test_cross_validation.py` tripped over.
         """
 
-        def which_but_no_delphi(name: str) -> str | None:
-            return None if "delphi" in name else f"/usr/bin/{name}"
+        def which_apbs_only(name: str) -> str | None:
+            return f"/usr/bin/{name}" if name == "apbs" else None
 
-        delphi_discover._discover_cached.cache_clear()
+        caches = (delphi_discover._discover_cached, tabipb_discover._discover_cached)
+        for cache in caches:
+            cache.cache_clear()
         monkeypatch.setenv("SASHIMI_DELPHI_PATH", "/nonexistent/delphi")
-        monkeypatch.setattr("shutil.which", which_but_no_delphi)
+        monkeypatch.setenv("SASHIMI_TABIPB_PATH", "/nonexistent/tabipb")
+        monkeypatch.setattr("shutil.which", which_apbs_only)
         try:
             assert comparable_surface_models() == []
         finally:
-            delphi_discover._discover_cached.cache_clear()
+            for cache in caches:
+                cache.cache_clear()
 
     @pytest.mark.usefixtures("hide_backends")
     def test_comparable_surface_models_are_reported(self):
