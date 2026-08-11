@@ -2,7 +2,9 @@
   "name": "peptide-default",
   "description": "ALA-GLY dipeptide at physiological salt with sashimi's defaults.",
   "source": "ala-gly.pqr",
+  "tier": "fast",
   "backend": "apbs-3.4.1",
+  "analytic": null,
   "grid_spec": {
     "resolution": 0.5,
     "padding": 10.0,

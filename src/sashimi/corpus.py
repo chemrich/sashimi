@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
 
+from sashimi.analytic import born_solvation_energy
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
     DIMENSIONS,
@@ -38,14 +40,18 @@ from sashimi.protocol import (
 
 __all__ = [
     "MANIFEST",
+    "TIER_ORDER",
+    "AnalyticReference",
     "BackendReference",
     "Case",
+    "CaseTier",
     "Discrepancy",
     "RecordedReference",
     "Reference",
     "Tolerances",
     "build_case",
     "build_manifest",
+    "cases_for_tier",
     "load_summary",
     "summary_path",
     "verify_case",
@@ -60,9 +66,58 @@ CORPUS_DIR = Path(__file__).resolve().parent.parent.parent / "tests" / "corpus"
 # as a file so the canonical analytic case cannot drift on disk.
 BORN_ION_PQR = "ATOM      1  I   ION     1       0.000   0.000  0.000  1.00  3.00\n"
 
+
+def born_ion_pqr(radius: float, charge: float = 1.0) -> str:
+    """One sphere at the origin, as PQR text.
+
+    Generated rather than checked in, for the same reason `BORN_ION_PQR` is a
+    literal: the cases with closed forms are the only ones that can prove a
+    backend is *right* rather than merely unchanged, and a file on disk is a
+    thing that can drift out from under them.
+    """
+    return f"ATOM      1  I   ION     1       0.000   0.000  0.000 {charge:5.2f} {radius:5.2f}\n"
+
+
 N_PROBES = 50
 PROBE_SEED = 20260809  # pinned; probe placement must never move between builds
 PROBE_INSET = 0.6  # sample the middle 60% of the box, away from boundary effects
+
+
+class CaseTier(StrEnum):
+    """How much of the corpus to run, because not all of it can run every push.
+
+    Cumulative: `STANDARD` includes `FAST`, `FULL` includes both. The split is
+    wall time, not importance — a 16,000-atom solve is 15 s per backend per
+    platform, and a corpus that made every push wait for it would be a corpus
+    people turn off.
+    """
+
+    FAST = "fast"  # seconds in total; every push
+    STANDARD = "standard"  # ~2 minutes; every push
+    FULL = "full"  # tens of minutes; nightly or on demand
+
+
+TIER_ORDER: tuple[CaseTier, ...] = (CaseTier.FAST, CaseTier.STANDARD, CaseTier.FULL)
+
+
+@dataclass(frozen=True)
+class AnalyticReference:
+    """A closed-form answer for a case, where one exists.
+
+    The corpus's recorded summaries answer "has this backend changed?" to 1e-4.
+    They cannot answer "is it right?" — a backend can reproduce a wrong number
+    forever, and four of the five original cases had no independent check at all.
+    Where geometry admits a closed form, this carries it, and `verify_case`
+    checks both: tight against the recording, loose against the physics.
+
+    `rtol` is per-case because the gap is discretization, not arithmetic: it
+    shrinks as the grid refines, and a Born ion at 0.5 A is legitimately 2.4%
+    from exact where the same case at 0.125 A is 0.4%.
+    """
+
+    energy_kj_mol: float
+    rtol: float
+    source: str  # how the number was derived, for the summary
 
 
 @dataclass(frozen=True)
@@ -75,6 +130,8 @@ class Case:
     grid: GridSpec
     solvent: SolventModel
     compute_energy: bool = True
+    tier: CaseTier = CaseTier.FAST
+    analytic: AnalyticReference | None = None
 
     def request(self) -> FiniteDifferenceRequest:
         """The case as a solver request. Every case is finite-difference today;
@@ -88,8 +145,8 @@ class Case:
         )
 
     def structure(self) -> PQRData:
-        if self.source == "born-ion":
-            return parse_pqr(BORN_ION_PQR)
+        if self.source in SYNTHETIC:
+            return parse_pqr(SYNTHETIC[self.source])
         path = DATA_DIR / self.source
         if not path.is_file():
             raise FileNotFoundError(f"corpus case {self.name!r} needs {path}")
@@ -178,6 +235,32 @@ class Discrepancy:
         return f"{self.case}: {self.field} expected {self.expected}, got {self.actual}{suffix}"
 
 
+# Synthetic structures, keyed by the `source` a case names. Every one has a
+# closed-form answer; see `sashimi.analytic`.
+SYNTHETIC: dict[str, str] = {
+    "born-ion": BORN_ION_PQR,
+    **{f"born-ion-r{r:g}": born_ion_pqr(r) for r in (1.0, 2.0, 4.0, 6.0)},
+    "born-ion-negative": born_ion_pqr(3.0, -1.0),
+    "born-ion-divalent": born_ion_pqr(3.0, 2.0),
+}
+
+
+def _born(
+    radius: float, charge: float = 1.0, solute_dielectric: float = 1.0, *, rtol: float
+) -> AnalyticReference:
+    """A Born case's closed form, computed from CODATA constants rather than quoted.
+
+    `rtol` is measured, not chosen: it is roughly twice the discretization error
+    APBS 3.4.1 actually shows on that geometry. Loose enough to survive a
+    platform, tight enough that a unit error or a factor of two cannot hide.
+    """
+    return AnalyticReference(
+        energy_kj_mol=born_solvation_energy(radius, charge, solute_dielectric, 78.54),
+        rtol=rtol,
+        source=f"Born: q={charge:g}e, a={radius:g} A, eps_p={solute_dielectric:g}",
+    )
+
+
 MANIFEST: tuple[Case, ...] = (
     Case(
         name="born-ion-coarse",
@@ -185,6 +268,7 @@ MANIFEST: tuple[Case, ...] = (
         source="born-ion",
         grid=GridSpec(resolution=0.5, padding=10.0),
         solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(3.0, rtol=0.015),  # measured 0.619%
     ),
     Case(
         name="born-ion-fine",
@@ -192,6 +276,7 @@ MANIFEST: tuple[Case, ...] = (
         source="born-ion",
         grid=GridSpec(resolution=0.25, padding=10.0),
         solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(3.0, rtol=0.008),  # measured 0.278%; the pair's whole point
     ),
     Case(
         name="born-ion-salt",
@@ -199,6 +284,12 @@ MANIFEST: tuple[Case, ...] = (
         source="born-ion",
         grid=GridSpec(resolution=0.5, padding=10.0),
         solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.15),
+        # Deliberately no analytic reference. The Debye-Huckel screening term
+        # depends on an ion-exclusion convention the backends do not share:
+        # APBS's ionic contribution is -0.688 kJ/mol here and DelPhi's is
+        # -0.496, both reporting `polar-solvation`. Pinning either as "the"
+        # closed form would encode one code's convention as physics.
+        # `sashimi.analytic.screened_born_solvation_energy` records the details.
     ),
     Case(
         name="peptide-default",
@@ -214,7 +305,100 @@ MANIFEST: tuple[Case, ...] = (
         grid=GridSpec(resolution=0.6, padding=8.0),
         solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
     ),
+    # --- the analytic sweep -------------------------------------------------
+    #
+    # Every case below has an exact answer, so each one asks whether the solver
+    # is *right* rather than whether it has *changed*. Together they sweep the
+    # three parameters the Born expression depends on — radius, charge, solute
+    # dielectric — which turns a single agreeing number into a functional form
+    # that has to agree. A missing factor of two passes one case and fails eight.
+    Case(
+        name="born-ion-r1-coarse",
+        description=(
+            "1 A sphere at 0.5 A spacing: two grid points across the ion. The "
+            "case that documents where the discretization gives up — 5.1% off, "
+            "and the corpus says so rather than pretending otherwise."
+        ),
+        source="born-ion-r1",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(1.0, rtol=0.08),  # measured 5.086%
+    ),
+    Case(
+        name="born-ion-r1-fine",
+        description="The same undersized ion at 0.25 A: 5.1% becomes 3.2%, converging.",
+        source="born-ion-r1",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(1.0, rtol=0.055),  # measured 3.197%
+    ),
+    Case(
+        name="born-ion-r2",
+        description="2 A sphere. Error falls to 0.8% once the ion spans a few grid points.",
+        source="born-ion-r2",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(2.0, rtol=0.02),  # measured 0.796%
+    ),
+    Case(
+        name="born-ion-r4",
+        description="4 A sphere; with 3 A and 6 A this is the radius arm of the sweep.",
+        source="born-ion-r4",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(4.0, rtol=0.015),  # measured 0.601%
+    ),
+    Case(
+        name="born-ion-r6",
+        description="6 A sphere, the best-resolved of the sweep at 0.46%.",
+        source="born-ion-r6",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(6.0, rtol=0.015),  # measured 0.461%
+    ),
+    Case(
+        name="born-ion-negative",
+        description=(
+            "-1e on the same 3 A sphere. Solvation goes as q^2, so this must "
+            "return the +1e energy exactly; a sign handled wrongly anywhere in "
+            "the charge pipeline shows up here and nowhere else in the corpus."
+        ),
+        source="born-ion-negative",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(3.0, -1.0, rtol=0.015),  # measured 0.619%, same as +1e
+    ),
+    Case(
+        name="born-ion-divalent",
+        description="+2e: the q^2 scaling, which must be 4x the +1e energy and is.",
+        source="born-ion-divalent",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_born(3.0, 2.0, rtol=0.015),  # measured 0.619%
+    ),
+    Case(
+        name="born-ion-solute-eps2",
+        description="Solute dielectric 2, the protein-interior value. Exercises 1/eps_p - 1/eps_s.",
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solute_dielectric=2.0, ionic_strength=0.0),
+        analytic=_born(3.0, 1.0, 2.0, rtol=0.015),  # measured 0.598%
+    ),
+    Case(
+        name="born-ion-solute-eps4",
+        description="Solute dielectric 4; with eps_p 1 and 2 this is the dielectric arm.",
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solute_dielectric=4.0, ionic_strength=0.0),
+        analytic=_born(3.0, 1.0, 4.0, rtol=0.015),  # measured 0.571%
+    ),
 )
+
+
+def cases_for_tier(tier: CaseTier, cases: tuple[Case, ...] = MANIFEST) -> tuple[Case, ...]:
+    """Every case at or below `tier`, in manifest order."""
+    allowed = set(TIER_ORDER[: TIER_ORDER.index(tier) + 1])
+    return tuple(case for case in cases if case.tier in allowed)
 
 
 def probe_points(origin: FloatArray, spacing: FloatArray, shape: tuple[int, ...]) -> FloatArray:
@@ -245,11 +429,26 @@ def build_case(solver: Solver[FiniteDifferenceRequest], case: Case) -> dict[str,
     points = probe_points(grid.origin, grid.spacing, grid.shape)
     stats = grid.stats()
 
+    analytic: dict[str, Any] | None = None
+    if case.analytic is not None and result.energy_kj_mol is not None:
+        exact = case.analytic.energy_kj_mol
+        analytic = {
+            "energy_kj_mol": exact,
+            "rtol": case.analytic.rtol,
+            "source": case.analytic.source,
+            # Recorded so a summary diff shows convergence moving, not just the
+            # energy: this is the number that says whether the solver is right,
+            # and it is the only one in the file that is not self-referential.
+            "relative_error": abs(result.energy_kj_mol - exact) / abs(exact),
+        }
+
     return {
         "name": case.name,
         "description": case.description,
         "source": case.source,
+        "tier": case.tier.value,
         "backend": result.provenance.backend,
+        "analytic": analytic,
         "grid_spec": {
             "resolution": case.grid.resolution,
             "padding": case.grid.padding,
@@ -370,8 +569,34 @@ def verify_case(
         if not _close(actual, expected, tolerances.stats_rtol, tolerances.potential_atol):
             found.append(Discrepancy(case.name, f"potential_stats.{key}", expected, actual))
 
+    found.extend(_verify_analytic(case, fresh))
     found.extend(_verify_probes(case, recorded, fresh, tolerances))
     return found
+
+
+def _verify_analytic(case: Case, fresh: dict[str, Any]) -> list[Discrepancy]:
+    """Check the solver against the closed form, not against its own past.
+
+    Deliberately compares `fresh` to the physics rather than to the recording.
+    Every other check here would pass forever on a backend that was wrong from
+    the first build; this is the only one that would not.
+    """
+    if case.analytic is None or fresh.get("analytic") is None:
+        return []
+
+    error = fresh["analytic"]["relative_error"]
+    if error <= case.analytic.rtol:
+        return []
+    return [
+        Discrepancy(
+            case.name,
+            "analytic.energy_kj_mol",
+            case.analytic.energy_kj_mol,
+            fresh["energy_kj_mol"],
+            f"{error:.3%} from the closed form, tolerance {case.analytic.rtol:.3%} "
+            f"({case.analytic.source})",
+        )
+    ]
 
 
 def _verify_probes(

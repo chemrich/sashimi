@@ -353,6 +353,66 @@ lockfile pins any more. The day debye exists, `corpus verify --backend debye` is
 its acceptance test, with APBS ground truth baked in and no APBS installation
 required.
 
+### Two reference kinds, and the one the corpus was missing
+
+A recorded summary answers **"has this backend changed?"** to 1e-4. It cannot
+answer **"is it right?"** — a backend wrong from the first build reproduces its
+own wrong number forever and every check passes. Four of the original five cases
+had no independent check at all, and the fifth's closed form lived in a test
+rather than in the corpus.
+
+`AnalyticReference` closes that. Where the geometry has a closed form, the case
+carries it, and `verify_case` checks the fresh solve against the *physics* as
+well as against the recording — loose, because the gap is discretization, with a
+per-case `rtol` measured from what APBS 3.4.1 actually does rather than chosen.
+`tests/test_corpus_manifest.py` asserts the same thing over the checked-in
+summaries without a solver, so it runs everywhere.
+
+The sweep matters more than any single case. Radius (1, 2, 3, 4, 6 Å), charge
+(−1, +1, +2) and solute dielectric (1, 2, 4) turn one agreeing number into a
+functional form that has to agree: a missing factor of two passes one case and
+fails eight. Two of them are pure invariants — solvation goes as q², so −1e must
+reproduce +1e exactly and +2e must be exactly 4×, which no other case in the
+corpus can catch because every other case is positively charged.
+
+The 1 Å ion at 0.5 Å spacing earns its place by being *bad*: two grid points
+across the ion and 5.1% from exact, falling to 3.2% at 0.25 Å. A corpus that
+only contains cases the solver handles well does not record where it stops
+working.
+
+**Where a closed form is declined.** The salted Born ion has no analytic
+reference, deliberately. The Debye-Hückel screening term depends on an
+ion-exclusion convention the backends do not share: APBS's ionic contribution is
+−0.688 kJ/mol and DelPhi's is −0.496, both reporting `polar-solvation`, and
+DelPhi's is resolution-independent where APBS's carries grid noise. That is a
+different convention beneath the same declared quantity — not the `EnergyTerm`
+gap of §12 — and pinning either as "the" closed form would encode one code's
+choice as physics.
+
+### Tiers, because the corpus is meant to grow
+
+`CaseTier` splits the manifest by wall time, cumulatively: `fast` (seconds,
+every push), `standard` (~2 minutes, every push), `full` (tens of minutes,
+nightly or on demand). The split is cost, not importance.
+
+The target is **50 cases**. The axis that matters is what each is checked
+against, not the count — 50 self-recorded cases would be 50 change-detectors and
+a 50-line diff every time the physics legitimately moves. The intended mix:
+
+- **Analytic** — exact, no solver needed to state the answer. 11 cases today.
+- **Third-party anchored** — APBS ships its own `examples/` with per-version
+  reference values *and* independent UHBD numbers (methanol: −36.2486 APBS
+  against −35.595 UHBD). BSD-3-Clause, so vendorable with attribution. ~1%
+  anchors rather than 1e-4 references, because those inputs specify explicit
+  `cglen/fglen/dime` that `GridSpec` does not express.
+- **Cross-solver** — `BackendReference`, already built, over more structures.
+- **Self-recorded** — the original kind. Kept small and fast.
+
+73 example structures span 1 to 16,090 atoms. Cost is bounded by the existing
+`max_points` guardrail rather than by atom count: a 16,090-atom solute relaxes
+to the same 161³ grid as a 2,000-atom one, so the largest case is 14.5 s against
+lysozyme's 6.8 s, not hours.
+
 **Test partitioning by architecture.** Protocol-layer tests are pure Python and
 run natively everywhere. Subprocess integration tests are gated behind
 `@pytest.mark.apbs` (later `@pytest.mark.delphi`, …) and only run where the real

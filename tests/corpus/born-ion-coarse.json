@@ -2,7 +2,14 @@
   "name": "born-ion-coarse",
   "description": "Born ion, +1e on a 3 A sphere, vacuum reference. Closed form exists.",
   "source": "born-ion",
+  "tier": "fast",
   "backend": "apbs-3.4.1",
+  "analytic": {
+    "energy_kj_mol": -228.61080098772135,
+    "rtol": 0.015,
+    "source": "Born: q=1e, a=3 A, eps_p=1",
+    "relative_error": 0.0061891003074462875
+  },
   "grid_spec": {
     "resolution": 0.5,
     "padding": 10.0,
