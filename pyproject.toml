@@ -64,6 +64,7 @@ packages = ["src/sashimi"]
 testpaths = ["tests"]
 markers = [
     "apbs: requires the APBS binary (deselect with '-m \"not apbs\"')",
+    "delphi: requires a DelPhi executable (deselect with '-m \"not delphi\"')",
 ]
 # The MCP tests drive a real client session, which is async throughout.
 asyncio_mode = "auto"

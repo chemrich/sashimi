@@ -37,7 +37,14 @@ def _apbs_solver() -> Solver[FiniteDifferenceRequest]:
     return ApbsSolver()
 
 
+def _delphi_solver() -> Solver[FiniteDifferenceRequest]:
+    from sashimi.delphi import DelphiSolver  # noqa: PLC0415 — keeps `--help` binary-free
+
+    return DelphiSolver()
+
+
 BACKENDS["apbs"] = _apbs_solver
+BACKENDS["delphi"] = _delphi_solver
 
 
 def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case, ...]:

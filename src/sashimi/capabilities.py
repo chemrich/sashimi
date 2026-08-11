@@ -47,6 +47,9 @@ UNITS = {
 # tested code path produces it, and refusing beats returning untested numbers.
 IMPLEMENTED_EQUATIONS = (Equation.LINEAR,)
 
+# A spread needs two things to spread between.
+MIN_BACKENDS_TO_COMPARE = 2
+
 
 @dataclass(frozen=True)
 class BackendReport:
@@ -106,9 +109,73 @@ def _apbs_report() -> BackendReport:
     )
 
 
+def _delphi_report() -> BackendReport:
+    """DelPhi's state, and which of its two executables was found.
+
+    Reported as one backend rather than two, because a caller asks "can I run
+    DelPhi", but the flavour is carried in `extras` and in the supported
+    surface models — which genuinely differ between them, so a single answer to
+    "which surfaces does DelPhi support" would be wrong.
+    """
+    from sashimi.delphi.discover import discover_delphi  # noqa: PLC0415
+    from sashimi.delphi.options import SUPPORTED_SURFACES, UNVALIDATED_SURFACES  # noqa: PLC0415
+
+    equations = tuple(e.value for e in IMPLEMENTED_EQUATIONS)
+    try:
+        binary = discover_delphi()
+    except BackendUnavailable as exc:
+        return BackendReport(
+            name="delphi",
+            available=False,
+            family="finite-difference",
+            detail=str(exc),
+            equations=equations,
+        )
+
+    supported = SUPPORTED_SURFACES[binary.flavour]
+    return BackendReport(
+        name="delphi",
+        available=True,
+        family="finite-difference",
+        version=binary.version,
+        detail=f"resolved to {binary.path} ({binary.flavour.value})",
+        surface_models=tuple(sorted(m.value for m in supported)),
+        equations=equations,
+        extras={
+            "flavour": binary.flavour.value,
+            "binary_sha256": binary.sha256,
+            "unvalidated_surface_models": sorted(
+                m.value for m in (supported & UNVALIDATED_SURFACES)
+            ),
+            "energy_term": "corrected reaction field; excludes the mobile-ion osmotic term",
+        },
+    )
+
+
+def comparable_surface_models() -> list[str]:
+    """Surface models on which two or more installed backends could be compared.
+
+    The precondition for a cross-solver spread being a solver disagreement
+    rather than a modelling one (ROADMAP.md section 8). It is frequently empty,
+    for two quite different reasons: APBS and pyDelPhi have no surface model in
+    common at all, and a single backend has nothing to be compared *with*.
+
+    The second case is why this needs two backends rather than intersecting
+    whatever is present. A lone APBS trivially "shares" all three of its models
+    with itself, and reporting those as comparable would tell a caller that
+    cross-validation is available when nothing is installed to validate against.
+    """
+    reports = [_apbs_report(), _delphi_report()]
+    available = [set(r.surface_models) for r in reports if r.available]
+    if len(available) < MIN_BACKENDS_TO_COMPARE:
+        return []
+    common: set[str] = set.intersection(*available)
+    return sorted(common)
+
+
 def describe_capabilities() -> dict[str, Any]:
     """Everything a caller needs to plan a request without trial and error."""
-    backends = [_apbs_report()]
+    backends = [_apbs_report(), _delphi_report()]
     usable = [b.name for b in backends if b.available]
     defaults = GridSpec()
 
@@ -118,6 +185,9 @@ def describe_capabilities() -> dict[str, Any]:
         "available_backends": usable,
         "surface_models": {
             "portable": sorted(m.value for m in SurfaceModel),
+            # Empty is a real and common answer, not a missing one: which models
+            # two backends share is what decides whether they can be compared.
+            "comparable_across_available_backends": comparable_surface_models(),
             "note": (
                 "Surface definition is the largest modelling choice in the "
                 "calculation, moving solvation energies by tens of percent. It is "
@@ -135,7 +205,7 @@ def describe_capabilities() -> dict[str, Any]:
         "not_supported": [
             "nonlinear Poisson-Boltzmann (representable in the request; no solver path yet)",
             "boundary-element backends (protocol admits them; none shipped)",
-            "raw APBS input passthrough (deliberately absent)",
+            "raw solver input passthrough (deliberately absent)",
             "FEM, geoflow, BEM, PBAM, PBSAM solvers",
         ],
         "summary": (

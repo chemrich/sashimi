@@ -5,8 +5,9 @@
 > to outlive it. `debye` is the eventual clean-room solver that slots in behind
 > the same interface.
 
-Status: phases 0–3 shipped; protocol hardening next.
-Last updated: 2026-08-10
+Status: phases 0–4 shipped, 5 bar the PyPI release; 6 (distribution) not
+started; 7 (multi-backend) in progress — the DelPhi backend has landed.
+Last updated: 2026-08-11
 
 This is the single planning document. It supersedes the earlier split between
 ROADMAP.md (intent) and PLAN.md (APBS implementation), which had two
@@ -366,7 +367,7 @@ job fronts the matrix so the required status-check name survives matrix changes.
 | Phase | Backend | Why | Integration |
 |-------|---------|-----|-------------|
 | 1 | **APBS** (FD, mg-auto) | Community default, broadest features, conda-forge packaged | subprocess |
-| 2 | **DelPhi** | FD sibling; Gaussian dielectric, focusing workflows; cheap triangulation partner | subprocess |
+| 2 | **DelPhi** ✅ | FD sibling; Gaussian dielectric, focusing workflows; cheap triangulation partner | subprocess, two flavours |
 | 3 | **TABI-PB** | BEM; forces the protocol to handle surface potentials | subprocess |
 | 3b | **PyGBe** | BEM, Python-native → **in-process**; stress-tests transport-agnosticism | import |
 | 4 | **GB tier** (Amber GB / Bluues) | Fast approximation for high-throughput triage → PB refinement | subprocess |
@@ -383,8 +384,15 @@ Relationship to `sashimi corpus`: the corpus verifies one backend against
 *recorded* numbers; `validate` compares N backends against *each other* live.
 The corpus is the regression net, `validate` is the product feature — but they
 are **one engine with two reference kinds**, and `validate` lives in core for
-that reason (§14). Additional backends ship as optional extras
-(`sashimi[delphi]`) so core stays lean and no dependency cycle forms.
+that reason (§14).
+
+Additional backends were to ship as optional extras (`sashimi[delphi]`) so core
+stays lean. **Phase 7 retired that plan**: neither DelPhi flavour is on PyPI —
+the C++ build is a tarball needing a compiler, and pyDelPhi is a git checkout —
+so the extra cannot exist. Discovery via `$SASHIMI_DELPHI_PATH` and documented
+install steps is the substitute, and it costs nothing, since a solver binary
+was never going to arrive through a Python installer anyway. Core stays lean by
+construction rather than by packaging.
 
 `validate` **refuses to report a spread across mismatched surface models**
 unless explicitly overridden. Given the 25.7% measured in §5, a spread computed
@@ -642,10 +650,118 @@ feedstock-derived); `linux-aarch64` build offered upstream; license-file audit
 of the vendored FETK/MALOC versions; platform wheels so `pip install sashimi`
 works end to end.
 
-**Phase 7 — Multi-backend.** DelPhi backend and the `sashimi validate`
-cross-validation harness; TABI-PB, which forces the surface-potential path to be
-real; PyGBe in-process, which proves transport-agnosticism; optional GB tier for
-triage→refine workflows.
+**Phase 7 — Multi-backend. ◐ in progress.**
+
+Done: the **DelPhi backend** (`sashimi.delphi`), covering both flavours — the
+C++ reference build and pyDelPhi, the same lab's Python/numba reimplementation.
+One input generator drives both; `DelphiFlavour` names the places they differ.
+
+The headline result is that **the protocol needed no change at all**. A cubic
+grid instead of a multigrid lattice, a Gaussian-cube map in Bohr, energies in
+kT, and a temperature parameter in Celsius all absorbed below `Solver`, and the
+only edit above `sashimi.delphi` was registering it. §2's claim for the protocol
+layer has now been tested by something other than the backend it was designed
+around.
+
+**What the second backend found.** Every one of these is a silent wrong answer
+rather than an error, and none was reachable from the APBS side:
+
+- **DelPhi's `pqr` reader is not pdb2pqr's PQR.** Its plain reader takes the
+  radius from columns 62-68, its `pqr4` reader from 63-69, and pdb2pqr — like
+  sashimi's own writer — emits the latter. Read as `pqr`, an ALA-GLY radius of
+  1.824 Å parses as **4.0 Å** and the solve proceeds on wrong-sized atoms. The
+  backend pins `in(modpdb4, format=pqr)`; a binary-free test encodes the column
+  arithmetic, including a C `atof` model, because Python's `float()` raises
+  where `atof` silently truncates.
+- **`temper` is in degrees Celsius** in the C++ build — its parser ends
+  `fTemper -= dAbsoluteZero` — and in kelvin in pyDelPhi. Writing 298.15 to the
+  C++ program runs the solve at 571.3 K and reports −48.13 kT where the correct
+  answer is −92.22. Neither program complains, because 571 K is legal.
+- **DelPhi 8.6 defaults to `linit=0`, `maxc=0.0` and never terminates.** A Born
+  ion passed 1.39 million iterations with residuals at 3e-16 — machine epsilon —
+  because the convergence test compares against a threshold of zero. sashimi
+  always writes both values.
+- **DelPhi's "solvation energy" is not APBS's.** Both DelPhi flavours report the
+  polarization term alone, which does not move with salt at all (−92.22 kT from
+  the C++ build at both 0 M and 0.5 M, while its own aggregate including the
+  ionic term moves to −92.56). APBS's difference-of-blocks carries the mobile-ion
+  contribution by construction. The gap is definitional, not numerical, and
+  diagnostics name the term. *This bullet first claimed three definitions rather
+  than two, on a measurement comparing pyDelPhi's Gaussian path against the C++
+  build's molecular one; on the same surface model the flavours agree exactly.*
+
+**The surface-model mapping table** (§14's last open design question) is
+resolved:
+
+| `SurfaceModel` | APBS | DelPhi C++ | pyDelPhi |
+|---|---|---|---|
+| `MOLECULAR` | `srfm mol` | `prbrad > 0` | `surfmethod vdw`, `prbrad > 0` |
+| `SMOOTHED_MOLECULAR` | `srfm smol` | no | no |
+| `VAN_DER_WAALS` | `mol`, `srad 0` | `prbrad 0` | no (upstream crash) |
+| `GAUSSIAN` | no | `gaussian 1` | `surfmethod gaussian` |
+
+The pyDelPhi row cost a wrong answer before it was right, and the mistake is
+worth recording. `surfmethod=vdw` was read as naming the *surface*; it names the
+**construction** — roll a probe over van der Waals spheres, the algorithm its
+`vdwms` module is named for. With a probe it is the molecular surface, and it
+reproduces the C++ build's `molecular` result exactly: −84.33 kT on ALA-GLY and
+−92.22 kT on the Born ion, identical on matched grids. Its probe-dependence
+(−84.33 at 1.4 Å against −86.88 at 0.5 Å), first read as proof it was *not* the
+molecular surface, is that surface behaving correctly.
+
+`VAN_DER_WAALS` is the one model pyDelPhi genuinely cannot deliver: `prbrad=0`,
+the natural limit of its own method, aborts it with a numba `TypingError` in
+0.2.0 and 0.3.0 alike. That is an upstream bug rather than a modelling
+difference, so the model is declined rather than mapped onto something adjacent.
+`SMOOTHED_MOLECULAR` — sashimi's *default* — is APBS-only, so a DelPhi solve at
+defaults raises `UnsupportedRequest` rather than substituting `MOLECULAR` and
+moving the answer by 2,000× the corpus tolerance.
+
+`GAUSSIAN` has no APBS counterpart and no closed form, and **no equivalent
+request has been established across the two DelPhi flavours**: matching `sigma`
+and `srfcut` still leaves them at −152.43 and −38.90 kT on the same grid, and
+pyDelPhi's answer does not move with either, so those are not the corresponding
+knobs. That is an unfinished comparison, not evidence the models differ, and
+`capabilities` marks the model unvalidated rather than asserting either.
+
+`describe_capabilities` reports the models the installed backends genuinely
+share — `molecular` for every pair shipped here — and returns an empty list when
+fewer than two backends are installed, since one backend trivially shares
+everything with itself.
+
+**Cross-validation, where it is legitimate.** APBS against DelPhi C++ on the
+models they share: 2.30% on the Born ion and 2.31% on ALA-GLY (`molecular`),
+and **2.44% on hen lysozyme**, 1,960 atoms, at 0.5 Å. On the Born ion, where a
+closed form exists, DelPhi lands on **−228.609 kJ/mol against −228.611** while
+APBS is 2.36% off at the same nominal resolution.
+
+**Cross-validation in CI.** `tests/test_cross_validation.py` runs the spread
+check on every push, gated on `comparable_surface_models()` being non-empty, so
+it exercises itself only where a comparison is legitimate. CI builds the C++
+DelPhi from the Clemson tarball on the Linux leg — measured at 40 s under
+emulation on Ubuntu 24.04 with g++ 13.3, ~13 s natively, needing only boost
+headers — and runs pyDelPhi on macOS, so both flavours are covered per push and
+**both legs run the comparison**, since both share `molecular` with APBS. The
+Linux-built binary
+reproduces the Born ion to the last printed digit of the macOS arm64 build
+(−92.22 kT), which is the evidence that a build from that tarball is a
+reproducible artifact rather than a local accident.
+
+Remaining in this phase: the `sashimi validate` CLI; TABI-PB, which forces the
+surface-potential path to be real; PyGBe in-process, which proves
+transport-agnosticism; optional GB tier for triage→refine workflows.
+
+Two things learned here change that remaining work:
+
+- **`verify_case` cannot express cross-backend comparison.** It compares grid
+  shape first and bails, which is right for "has this backend changed" and wrong
+  for two backends whose legal grids differ by construction (APBS's 32c+1 dime
+  against DelPhi's any-odd cubic gsize). `validate` must compare energies and
+  potentials interpolated at *physical* probe points, not grid-derived ones. The
+  `Reference` protocol survives; the comparison engine needs a second mode.
+- **Backends cannot ship as extras** the way §8 assumed. Neither DelPhi flavour
+  is on PyPI, so `sashimi[delphi]` cannot exist; discovery via
+  `$SASHIMI_DELPHI_PATH` plus documentation is the honest substitute.
 
 **Phase 8 — debye.** The validation ladder of §10; drop-in behind the backend
 interface; portability suite green on all architectures; BEM engine later.
@@ -719,11 +835,24 @@ summarised here.
   CLI-first regardless. Revisit in phase 7.
 - **NPBE-versus-LPBE energy comparability.** The total-energy integral differs
   between the two equations, so the corpus and `validate` must compare like with
-  like once nonlinear is implemented. Needs a concrete rule before phase 7.
+  like once nonlinear is implemented. Phase 7 showed the problem is larger than
+  the equation choice: three backends disagree about what "solvation energy"
+  means at *fixed* equation, so the rule `validate` needs is not "same equation"
+  but "same reported term", carried in provenance and checked before any spread
+  is computed. Needed before the `validate` CLI, not before the backend.
 - **`pb-protocol` naming and semver.** The PyPI name should be checked early
   since it appears in every downstream dependency list, and graduation turns
   protocol changes into major-version events with migration windows.
-- **Surface-model mapping table.** Which solver-neutral enum members exist, and
-  how each backend maps them, is phase 4 design work — DelPhi's Gaussian
-  dielectric has no APBS equivalent, so the enum cannot simply be APBS's set
-  renamed.
+- ~~**Surface-model mapping table.**~~ **Resolved in phase 7** against two real
+  DelPhi implementations; the table and its consequences are recorded there and
+  in `sashimi.delphi.options`. The guess that motivated it was right: the enum
+  is not APBS's set renamed. Every backend shipped here shares `MOLECULAR`;
+  `SMOOTHED_MOLECULAR` is APBS-only and `GAUSSIAN` DelPhi-only, and the latter
+  is not yet comparable even between the two DelPhi flavours.
+- **Does `SMOOTHED_MOLECULAR` belong as the default?** Phase 7 made it
+  load-bearing in a way it was not before: sashimi's default surface model is
+  supported by exactly one backend, so every DelPhi solve at defaults raises
+  rather than running. Refusing is right — substituting would move the answer
+  by 2,000× the corpus tolerance — but a default that no second backend can
+  honor is worth revisiting now that there is a second backend to weigh it
+  against.

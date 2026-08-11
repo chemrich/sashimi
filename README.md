@@ -130,6 +130,40 @@ Scope is deliberately narrow: the `mg-auto` finite-difference path with the
 linearized PBE. The FEM, geoflow, BEM, PBAM and PBSAM solvers are not exposed,
 and there is no raw APBS-input passthrough — that would defeat the abstraction.
 
+`sashimi.delphi` is the second backend, and the test of whether that boundary
+was real. It required no protocol change at all, absorbing a cubic grid, a
+Gaussian-cube map in Bohr, energies in kT and a temperature parameter in
+*Celsius* below the same `Solver` interface.
+
+### Using DelPhi
+
+Neither DelPhi flavour has a package, so both are opt-in and neither is a
+dependency:
+
+```bash
+# the C++ reference build — compile from the Clemson tarball, then:
+export SASHIMI_DELPHI_PATH=/path/to/delphicpp_release
+
+# or the same lab's pure-Python reimplementation, which installs anywhere
+uv venv --python 3.13 .pydelphi
+uv pip install --python .pydelphi/bin/python git+https://github.com/shaileshp51/pyDelPhi
+export SASHIMI_DELPHI_PATH="$PWD/.pydelphi/bin/pydelphi-static"
+```
+
+pyDelPhi is driven as a subprocess and never imported: it is AGPL-3.0 where
+sashimi is MIT, and that is the boundary APBS already sits behind. The C++ build
+is faster and additionally supports a van der Waals boundary; pyDelPhi needs no
+compiler and runs anywhere, including `linux-aarch64`, where no APBS exists.
+
+**The backends do not agree about which surface models exist**, and surfacing
+that is the most useful thing a second backend does. `sashimi_capabilities`
+reports which models the installed backends actually share, because a spread
+computed across mismatched surface definitions is a modelling difference
+misreported as a solver disagreement. All three shipped backends share
+`molecular`; `smoothed-molecular` — sashimi's default — is APBS-only, so a
+DelPhi solve at defaults refuses rather than silently substituting. On the
+models they share, APBS and DelPhi agree to 2.4% on hen lysozyme.
+
 See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
 ## Status
