@@ -17,7 +17,7 @@ from sashimi.delphi.discover import DelphiBinary, discover_delphi
 from sashimi.delphi.grid import size_grid
 from sashimi.delphi.input import build_input, resolved_parameters
 from sashimi.delphi.options import DelphiOptions, check_equation
-from sashimi.delphi.run import DEFAULT_TIMEOUT, energy_term_description, run_delphi
+from sashimi.delphi.run import DEFAULT_TIMEOUT, ENERGY_TERM, run_delphi
 from sashimi.pqr import format_pqr
 from sashimi.protocol import FiniteDifferenceRequest, Provenance, SolveResult
 
@@ -91,9 +91,8 @@ class DelphiSolver:
             diagnostics={
                 **grid.as_diagnostics(),
                 "flavour": flavour.value,
-                # Not the same quantity APBS reports, nor the same across the two
-                # DelPhi flavours; see `sashimi.delphi.run`.
-                "energy_term": energy_term_description(flavour),
+                # Not the same quantity APBS reports; see `sashimi.delphi.run`.
+                "energy_term": ENERGY_TERM,
                 "resolution_requested": request.grid.resolution,
                 "resolution_relaxed": any(s > request.grid.resolution + 1e-9 for s in grid.spacing),
             },

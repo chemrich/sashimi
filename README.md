@@ -151,17 +151,18 @@ export SASHIMI_DELPHI_PATH="$PWD/.pydelphi/bin/pydelphi-static"
 ```
 
 pyDelPhi is driven as a subprocess and never imported: it is AGPL-3.0 where
-sashimi is MIT, and that is the boundary APBS already sits behind. Note that it
-supports **neither** of the surface models APBS does, so it cannot be
-cross-validated against APBS — it exercises the backend, not the physics. The
-C++ build is the one that can.
+sashimi is MIT, and that is the boundary APBS already sits behind. The C++ build
+is faster and additionally supports a van der Waals boundary; pyDelPhi needs no
+compiler and runs anywhere, including `linux-aarch64`, where no APBS exists.
 
-**The two backends do not agree about what a surface model is**, and that is
-the most useful thing this backend surfaces. `sashimi_capabilities` reports
-which models the installed backends actually share — often none — because a
-spread computed across mismatched surface definitions is a modelling difference
-misreported as a solver disagreement. On the models they do share, APBS and
-DelPhi agree to 2.4% on hen lysozyme.
+**The backends do not agree about which surface models exist**, and surfacing
+that is the most useful thing a second backend does. `sashimi_capabilities`
+reports which models the installed backends actually share, because a spread
+computed across mismatched surface definitions is a modelling difference
+misreported as a solver disagreement. All three shipped backends share
+`molecular`; `smoothed-molecular` — sashimi's default — is APBS-only, so a
+DelPhi solve at defaults refuses rather than silently substituting. On the
+models they share, APBS and DelPhi agree to 2.4% on hen lysozyme.
 
 See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 

@@ -51,8 +51,7 @@ _INSTALL_HINT = (
     "(https://compbio.clemson.edu/lab/delphicpp_release/) and point "
     "$SASHIMI_DELPHI_PATH at the executable, or `pip install "
     "git+https://github.com/shaileshp51/pyDelPhi` for the pure-Python flavour, "
-    "which needs no compiler and runs on every platform but supports neither of "
-    "the surface models APBS does."
+    "which needs no compiler and runs on every platform."
 )
 
 

@@ -17,25 +17,25 @@ decimal places, which is the precision floor for anything compared against a
 C++ DelPhi number. pyDelPhi writes a tab-separated CSV with four, and that is
 preferred whenever it exists.
 
-**What the energy is, and why it is not one thing.** Both flavours label their
-answer a *corrected reaction field energy*, and they do not mean the same by it.
+**What the energy is, and how it differs from APBS's.** Both flavours report a
+*corrected reaction field energy*: the polarization term, and nothing else. It
+does not move with ionic strength, in either flavour — measured on a Born ion,
+-92.22 kT from the C++ build and -228.611 kJ/mol from pyDelPhi at both 0 M and
+0.5 M — even though the solver plainly received the salt, since the C++ build
+reports a Debye length of 4.307 A at 0.5 M. Asking the C++ build for the ionic
+term as well shifts its aggregate to -92.56 kT.
 
-- The C++ program's printed line is the polarization term alone. It does not
-  move with salt: measured on a Born ion, -92.22 kT at both 0 M and 0.5 M, even
-  though the solver plainly received the salt (it reports a Debye length of
-  4.307 A). Asking it for the ionic term as well shifts its aggregate to
-  -92.56 kT.
-- pyDelPhi's `E_rxn_corr_tot` does move with salt — -219.27 vs -220.63 kJ/mol
-  between 0 M and 0.5 M on the same request — so it behaves like the C++
-  *aggregate* rather than the C++ line of the same name.
-
-APBS is a third case again: `Global net ELEC energy` is a difference between a
+APBS's `Global net ELEC energy` is a different quantity: a difference between a
 solvated state and a uniform-dielectric, ion-free reference, so it carries the
-mobile-ion contribution by construction. Three backends, three definitions of
-"the solvation energy", agreeing to ~2% at zero salt and diverging in a way no
-tolerance would distinguish from a bug. `energy_term_description` puts the
-distinction in `SolveResult.diagnostics` rather than leaving a reader to assume
-the numbers are interchangeable.
+mobile-ion contribution by construction. That gap is definitional rather than
+numerical, and `ENERGY_TERM` puts it in `SolveResult.diagnostics` rather than
+leaving a reader to assume the two backends' energies are interchangeable.
+
+(An earlier version of this note claimed the two DelPhi flavours disagreed with
+*each other* here, on the strength of pyDelPhi's energy moving with salt. That
+measurement was taken on a Gaussian dielectric while the C++ one was taken on a
+molecular surface; on the same surface model the flavours agree exactly. The
+salt-sensitivity belongs to the Gaussian path, not to the flavour.)
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ from sashimi.delphi.units import kt_to_kj_per_mol
 from sashimi.errors import ConvergenceFailure, MalformedStructure, SolverCrash
 from sashimi.protocol import PotentialGrid
 
-__all__ = ["DEFAULT_TIMEOUT", "DelphiCrash", "DelphiRun", "run_delphi"]
+__all__ = ["DEFAULT_TIMEOUT", "ENERGY_TERM", "DelphiCrash", "DelphiRun", "run_delphi"]
 
 DEFAULT_TIMEOUT = 300.0
 
@@ -80,6 +80,13 @@ _CONVERGENCE_SIGNATURES = (
 )
 
 _MIN_CSV_ROWS = 2  # a header plus at least one record
+
+# Recorded in every result's diagnostics. Not the same quantity APBS reports —
+# see the module docstring — and the same for both flavours.
+ENERGY_TERM = (
+    "corrected reaction field (polarization only; does not move with ionic strength, "
+    "and excludes the mobile-ion osmotic term APBS's difference-of-blocks includes)"
+)
 
 
 class DelphiCrash(SolverCrash):
@@ -124,24 +131,6 @@ def parse_csv_energy(path: Path) -> float | None:
         if value:
             return float(value)
     return None
-
-
-def energy_term_description(flavour: DelphiFlavour) -> str:
-    """What this flavour's reported energy actually includes.
-
-    Travels in diagnostics because the two flavours use the same words for
-    different quantities, and because neither matches APBS's definition. See the
-    module docstring for the measurements.
-    """
-    if flavour is DelphiFlavour.CPP:
-        return (
-            "corrected reaction field (polarization only; does not move with ionic "
-            "strength, and excludes the mobile-ion osmotic term APBS includes)"
-        )
-    return (
-        "corrected reaction field total (moves with ionic strength, so it includes a "
-        "mobile-ion contribution the C++ flavour's line of the same name omits)"
-    )
 
 
 def _raise_on_reported_failure(output: str, flavour: DelphiFlavour, returncode: int) -> None:

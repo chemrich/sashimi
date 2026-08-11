@@ -681,34 +681,53 @@ rather than an error, and none was reachable from the APBS side:
   ion passed 1.39 million iterations with residuals at 3e-16 — machine epsilon —
   because the convergence test compares against a threshold of zero. sashimi
   always writes both values.
-- **"Solvation energy" means three different things.** The C++ line is the
-  polarization term alone and does not move with salt at all (−92.22 kT at both
-  0 M and 0.5 M, while its own aggregate including the ionic term moves to
-  −92.56). pyDelPhi's identically-named CSV column *does* move with salt. APBS's
-  difference-of-blocks carries the mobile-ion contribution by construction.
-  Three backends, three definitions, agreeing to ~2% at zero salt and diverging
-  in a way no tolerance distinguishes from a bug. Diagnostics name the term.
+- **DelPhi's "solvation energy" is not APBS's.** Both DelPhi flavours report the
+  polarization term alone, which does not move with salt at all (−92.22 kT from
+  the C++ build at both 0 M and 0.5 M, while its own aggregate including the
+  ionic term moves to −92.56). APBS's difference-of-blocks carries the mobile-ion
+  contribution by construction. The gap is definitional, not numerical, and
+  diagnostics name the term. *This bullet first claimed three definitions rather
+  than two, on a measurement comparing pyDelPhi's Gaussian path against the C++
+  build's molecular one; on the same surface model the flavours agree exactly.*
 
 **The surface-model mapping table** (§14's last open design question) is
-resolved, and the answer is worse than expected:
+resolved:
 
-| `SurfaceModel` | APBS | DelPhi C++ | pyDelPhi 0.2.0 |
+| `SurfaceModel` | APBS | DelPhi C++ | pyDelPhi |
 |---|---|---|---|
-| `MOLECULAR` | `srfm mol` | `prbrad > 0` | no |
+| `MOLECULAR` | `srfm mol` | `prbrad > 0` | `surfmethod vdw`, `prbrad > 0` |
 | `SMOOTHED_MOLECULAR` | `srfm smol` | no | no |
-| `VAN_DER_WAALS` | `mol`, `srad 0` | `prbrad 0` | no |
+| `VAN_DER_WAALS` | `mol`, `srad 0` | `prbrad 0` | no (upstream crash) |
 | `GAUSSIAN` | no | `gaussian 1` | `surfmethod gaussian` |
 
-**APBS and pyDelPhi share no surface model at all.** pyDelPhi's `vdw` is not
-this protocol's `VAN_DER_WAALS`: it still applies the probe (−84.33 kT at 1.4 Å
-against −86.88 at 0.5 Å on ALA-GLY), and the faithful `prbrad=0` aborts it
-inside numba. And `SMOOTHED_MOLECULAR` — sashimi's *default* — is APBS-only, so
-a DelPhi solve at defaults raises `UnsupportedRequest` rather than substituting
-`MOLECULAR` and moving the answer by 2,000× the corpus tolerance. Both DelPhi
-flavours implement a Gaussian dielectric and disagree by a factor of 4.5
-(−176.86 vs −38.90 kT), so "Gaussian dielectric" names a family, not a model.
+The pyDelPhi row cost a wrong answer before it was right, and the mistake is
+worth recording. `surfmethod=vdw` was read as naming the *surface*; it names the
+**construction** — roll a probe over van der Waals spheres, the algorithm its
+`vdwms` module is named for. With a probe it is the molecular surface, and it
+reproduces the C++ build's `molecular` result exactly: −84.33 kT on ALA-GLY and
+−92.22 kT on the Born ion, identical on matched grids. Its probe-dependence
+(−84.33 at 1.4 Å against −86.88 at 0.5 Å), first read as proof it was *not* the
+molecular surface, is that surface behaving correctly.
+
+`VAN_DER_WAALS` is the one model pyDelPhi genuinely cannot deliver: `prbrad=0`,
+the natural limit of its own method, aborts it with a numba `TypingError` in
+0.2.0 and 0.3.0 alike. That is an upstream bug rather than a modelling
+difference, so the model is declined rather than mapped onto something adjacent.
+`SMOOTHED_MOLECULAR` — sashimi's *default* — is APBS-only, so a DelPhi solve at
+defaults raises `UnsupportedRequest` rather than substituting `MOLECULAR` and
+moving the answer by 2,000× the corpus tolerance.
+
+`GAUSSIAN` has no APBS counterpart and no closed form, and **no equivalent
+request has been established across the two DelPhi flavours**: matching `sigma`
+and `srfcut` still leaves them at −152.43 and −38.90 kT on the same grid, and
+pyDelPhi's answer does not move with either, so those are not the corresponding
+knobs. That is an unfinished comparison, not evidence the models differ, and
+`capabilities` marks the model unvalidated rather than asserting either.
+
 `describe_capabilities` reports the models the installed backends genuinely
-share, which is frequently the empty set — a real answer, not a missing one.
+share — `molecular` for every pair shipped here — and returns an empty list when
+fewer than two backends are installed, since one backend trivially shares
+everything with itself.
 
 **Cross-validation, where it is legitimate.** APBS against DelPhi C++ on the
 models they share: 2.30% on the Born ion and 2.31% on ALA-GLY (`molecular`),
@@ -722,7 +741,8 @@ it exercises itself only where a comparison is legitimate. CI builds the C++
 DelPhi from the Clemson tarball on the Linux leg — measured at 40 s under
 emulation on Ubuntu 24.04 with g++ 13.3, ~13 s natively, needing only boost
 headers — and runs pyDelPhi on macOS, so both flavours are covered per push and
-the comparable one is where the comparison happens. The Linux-built binary
+**both legs run the comparison**, since both share `molecular` with APBS. The
+Linux-built binary
 reproduces the Born ion to the last printed digit of the macOS arm64 build
 (−92.22 kT), which is the evidence that a build from that tarball is a
 reproducible artifact rather than a local accident.
@@ -825,9 +845,10 @@ summarised here.
   protocol changes into major-version events with migration windows.
 - ~~**Surface-model mapping table.**~~ **Resolved in phase 7** against two real
   DelPhi implementations; the table and its consequences are recorded there and
-  in `sashimi.delphi.options`. The guess that motivated it was right — the enum
-  is not APBS's set renamed — but understated: APBS and pyDelPhi turn out to
-  share *no* member, and `GAUSSIAN` is not one model but a family.
+  in `sashimi.delphi.options`. The guess that motivated it was right: the enum
+  is not APBS's set renamed. Every backend shipped here shares `MOLECULAR`;
+  `SMOOTHED_MOLECULAR` is APBS-only and `GAUSSIAN` DelPhi-only, and the latter
+  is not yet comparable even between the two DelPhi flavours.
 - **Does `SMOOTHED_MOLECULAR` belong as the default?** Phase 7 made it
   load-bearing in a way it was not before: sashimi's default surface model is
   supported by exactly one backend, so every DelPhi solve at defaults raises

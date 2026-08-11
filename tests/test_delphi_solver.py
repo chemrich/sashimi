@@ -91,13 +91,11 @@ def test_discovery_reports_a_flavour_and_version(binary):
 def test_born_ion_matches_the_closed_form(binary, ion):
     """The analytic calibration APBS is held to, applied to the other backend.
 
-    Only meaningful where the flavour can express a sharp dielectric boundary:
-    a Gaussian dielectric has no radius at which the closed form applies, so
-    pyDelPhi is skipped rather than asserted loosely.
+    Runs for both flavours: `_supported_surface` picks the molecular surface,
+    which both express, and which has a sharp dielectric boundary the closed
+    form applies to. Only a Gaussian dielectric would have to be skipped here,
+    and no flavour falls back to one.
     """
-    if binary.flavour is DelphiFlavour.PYDELPHI:
-        pytest.skip("pyDelPhi offers only a Gaussian dielectric; no closed form applies")
-
     result = DelphiSolver().solve(_request(ion, binary))
     expected = born_solvation_energy(3.0, solute_dielectric=1.0)
 
@@ -150,26 +148,23 @@ def test_nonlinear_is_refused(binary, ion):
         DelphiSolver().solve(request)
 
 
-def test_the_reported_energy_term_matches_what_the_flavour_computes(binary, ion):
-    """The two flavours mean different things by "reaction field energy".
+def test_the_reported_energy_is_the_reaction_field_term_only(binary, ion):
+    """DelPhi's energy does not move with salt, and that is not a bug.
 
     The natural assertion is that mobile ions change the answer, which is what
-    APBS's difference-of-blocks and pyDelPhi both show. The C++ program reports
-    the polarization term alone and does not move with salt at all — measured
-    here, -92.22 kT at both 0 M and 0.5 M — while plainly having received the
-    salt, since it reports a Debye length of 4.307 A at 0.5 M.
+    APBS's difference-of-blocks shows. DelPhi reports the polarization term
+    alone: measured here, -92.22 kT from the C++ build and -228.611 kJ/mol from
+    pyDelPhi at both 0 M and 0.5 M. The salt does reach the solver — the C++
+    build reports a Debye length of 4.307 A at 0.5 M — so this pins a
+    definitional difference between the backends, not a parameter that failed to
+    arrive.
 
-    So this asserts each flavour against its own documented term rather than
-    against a shared expectation neither would satisfy, and checks that
-    diagnostics say which one a caller got.
+    Both flavours, deliberately. An earlier version asserted they differed here,
+    on a measurement taken from pyDelPhi's Gaussian path against the C++ build's
+    molecular one; on the same surface model they agree exactly.
     """
     salted = DelphiSolver().solve(_request(ion, binary, solvent={"ionic_strength": 0.5}))
     plain = DelphiSolver().solve(_request(ion, binary))
-    term = salted.diagnostics["energy_term"]
 
-    if binary.flavour is DelphiFlavour.CPP:
-        assert salted.energy_kj_mol == pytest.approx(plain.energy_kj_mol, rel=1e-6)
-        assert "polarization only" in term
-    else:
-        assert salted.energy_kj_mol != pytest.approx(plain.energy_kj_mol, rel=1e-4)
-        assert "moves with ionic strength" in term
+    assert salted.energy_kj_mol == pytest.approx(plain.energy_kj_mol, rel=1e-6)
+    assert "polarization only" in salted.diagnostics["energy_term"]

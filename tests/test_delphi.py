@@ -246,16 +246,31 @@ def test_pydelphi_refuses_van_der_waals_and_says_why():
         resolve_surface(SurfaceModel.VAN_DER_WAALS, 1.4, DelphiFlavour.PYDELPHI)
 
 
-def test_apbs_and_pydelphi_share_no_surface_model():
-    """The measured consequence: no honest spread exists between these two.
+def test_every_flavour_shares_the_molecular_surface_with_apbs():
+    """The precondition for cross-validation, pinned rather than assumed.
 
-    Guards the claim `sashimi.delphi.options` makes, so that a future flavour
-    gaining a model updates the documented mapping table rather than quietly
-    making a stale statement true again.
+    This test previously asserted the opposite — that APBS and pyDelPhi shared
+    nothing — on the reading that `surfmethod=vdw` was a van der Waals surface.
+    It is the probe-rolling *construction*, and with a probe it reproduces the
+    C++ build's `molecular` answer to the last printed digit. Both DelPhi
+    flavours therefore share `MOLECULAR` with APBS, and that is what makes
+    `tests/test_cross_validation.py` able to run at all.
     """
     from sashimi.apbs.options import SURFACE_KEYWORD  # noqa: PLC0415
 
-    assert not (set(SURFACE_KEYWORD) & SUPPORTED_SURFACES[DelphiFlavour.PYDELPHI])
+    apbs_models = set(SURFACE_KEYWORD)
+    for flavour in FLAVOURS:
+        shared = apbs_models & SUPPORTED_SURFACES[flavour]
+        assert SurfaceModel.MOLECULAR in shared, f"{flavour.value} shares nothing with APBS"
+
+
+def test_pydelphi_maps_molecular_onto_its_vdw_construction():
+    """`vdw` plus a probe is the molecular surface, and the probe must survive."""
+    resolved = resolve_surface(SurfaceModel.MOLECULAR, 1.4, DelphiFlavour.PYDELPHI)
+
+    assert resolved.keyword == "vdw"
+    assert resolved.probe_radius == pytest.approx(1.4)
+    assert resolved.gaussian is False
 
 
 def test_nonlinear_is_refused_but_named_as_a_sashimi_limit():
