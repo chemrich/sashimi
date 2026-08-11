@@ -158,6 +158,59 @@ def test_salt_makes_a_real_solute_more_favourably_solvated():
     assert all(b < a for a, b in itertools.pairwise(energies)), energies
 
 
+def test_adding_a_proton_makes_a_protein_more_favourably_solvated():
+    """+8e to +9e on the same 1,960 atoms. Solvation grows with net charge."""
+    neutral_form = recorded("lysozyme")["energy_kj_mol"]
+    protonated = recorded("lysozyme-protonated")["energy_kj_mol"]
+
+    assert protonated < neutral_form
+
+
+def test_geometry_matters_at_fixed_net_charge():
+    """Two lysozymes at +9e, differing only in whether Asp66 is there.
+
+    Both carry the same monopole, so anything separating them is the charge
+    *distribution* rather than its total — which is the whole reason to solve
+    the equation instead of using Born.
+    """
+    protonated = recorded("lysozyme-protonated")["energy_kj_mol"]
+    deleted = recorded("lysozyme-deleted-residue")["energy_kj_mol"]
+
+    assert protonated != deleted
+    # ...and the difference is small next to either, which is what makes
+    # charge-state calculations numerically awkward: 0.48% here.
+    assert abs(deleted - protonated) / abs(protonated) < 0.05
+
+
+def test_a_bound_ligand_is_a_small_perturbation_on_a_large_number():
+    """FKBP with and without DMSO: 0.26% apart on 2,094 kJ/mol.
+
+    A binding energy is this difference, so it is a few kJ/mol extracted from
+    two numbers three orders of magnitude larger — the reason the corpus holds
+    energies to 1e-4 rather than to something comfortable.
+    """
+    apo = recorded("fkbp-apo")["energy_kj_mol"]
+    holo = recorded("fkbp-dmso")["energy_kj_mol"]
+
+    assert apo != holo
+    assert abs(holo - apo) / abs(apo) < 0.01
+
+
+def test_the_largest_case_had_its_resolution_relaxed():
+    """The guardrail engaging, recorded rather than assumed.
+
+    8,279 atoms asks for 0.5 A and is given coarser, because `max_points` caps
+    the grid rather than the atom count. That is why the largest case in the
+    corpus costs 15 s and not an hour — and it is only visible because the
+    resolved geometry is recorded next to the requested one.
+    """
+    summary = recorded("acetylcholinesterase")
+    requested = summary["grid_spec"]["resolution"]
+
+    assert max(summary["geometry"]["spacing"]) > requested
+    assert summary["geometry"]["shape"] == [161, 161, 161]
+
+
 def test_analytic_references_are_computed_rather_than_quoted():
     """The +2e reference is 4x the +1e one to the last bit, because both came
     from the same expression rather than from a table someone typed."""
