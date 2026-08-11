@@ -852,12 +852,30 @@ because `BoundaryElementRequest.mesh_density` **defaults to 1.0** — so the mos
 obvious first call fails unintelligibly. The backend names the cause; whether
 the protocol default should move is recorded in §14.
 
+### Cross-family validation ✅
+
+`validate_system` completes the picture: `System` holds one physical question
+and produces whichever request family a backend speaks, so a grid solver and a
+surface solver can be asked the same thing without either reading the other's
+dialect. That is the seam `SolveRequest` was split for in phase 4, used for the
+first time, and it was the small addition predicted rather than a redesign.
+
+Measured across **two solver families**: ALA-GLY at physiological salt gives
+APBS −214.20, DelPhi −209.42, TABI-PB −217.36 kJ/mol, a **3.65% spread**; the
+low-dielectric case 3.58%. Energies only — a volume and a triangulated surface
+have no shared representation, and inventing one would be the category error the
+comparability checks exist to refuse.
+
+Crossing families widens who can participate without relaxing anything: the
+surface-model, equation and energy-term checks all still apply, and `equation`
+is read as linear for a boundary-element run because a nonlinear one is
+unrepresentable there rather than rejected.
+
+The corpus stays finite-difference by construction — every case records grid
+geometry — so `sashimi corpus --backend tabipb` refuses and points at `validate`.
+
 Remaining in this phase: PyGBe in-process, which proves transport-agnosticism;
-optional GB tier for triage→refine workflows. Also outstanding: `validate` still
-takes a single `FiniteDifferenceRequest` and hands it to every backend, so it
-cannot yet include TABI-PB. Cross-family comparison means building both request
-types from the shared `SolveRequest` core — which is exactly what that base class
-was for, and is a small addition rather than a redesign.
+optional GB tier for triage→refine workflows.
 
 **Phase 8 — debye.** The validation ladder of §10; drop-in behind the backend
 interface; portability suite green on all architectures; BEM engine later.
