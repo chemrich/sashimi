@@ -99,11 +99,20 @@ PROBE_INSET = 0.5  # sample the middle 50% of the shared box, away from boundari
 DEFAULT_ENERGY_TOLERANCE = 0.10
 
 # An approximation is not held to the tolerance above, because it is not trying
-# to meet it. Generalized Born reproduces PB solvation energies to roughly
-# 10-30% depending on the system, which is the method working as designed rather
-# than a defect. This is the line between "the approximation behaved as
-# documented" and "the approximation is broken or misconfigured".
-DEFAULT_APPROXIMATION_TOLERANCE = 0.30
+# to meet it. This is the line between "the approximation behaved as documented"
+# and "it is broken or misconfigured", and it is set from measurement in both
+# directions rather than from the literature's loose 10-30%.
+#
+# Measured for Generalized Born against the APBS/DelPhi consensus on the
+# molecular surface: 1.89, 2.77, 2.04, 7.10 and 6.75% across the five corpus
+# cases, and 1.48% on hen lysozyme at 1,960 atoms. This is roughly twice the
+# worst of those.
+#
+# The other direction matters more. Both real misconfigurations found while
+# building the GB backend land far outside it: declaring the wrong surface model
+# costs 31% and feeding it pdb2pqr's radii instead of mbondi costs 35%. A
+# tolerance that tolerated those would have let both ship.
+DEFAULT_APPROXIMATION_TOLERANCE = 0.15
 
 
 class SolverFamily(StrEnum):
@@ -118,6 +127,10 @@ class SolverFamily(StrEnum):
 
     FINITE_DIFFERENCE = "finite-difference"
     BOUNDARY_ELEMENT = "boundary-element"
+    # Needs neither a grid nor a mesh, so it reads the base request. Generalized
+    # Born is the only member today, and it is a family rather than a flavour of
+    # the other two because nothing about its request is discretized.
+    ANALYTIC = "analytic"
 
 
 @dataclass(frozen=True)
@@ -156,6 +169,15 @@ class System:
                 want_energy=self.want_energy,
                 want_potential=self.want_potential,
                 grid=self.grid,
+            )
+        if family is SolverFamily.ANALYTIC:
+            # The base request, unadorned: an analytic method discretizes
+            # nothing, so it has nothing to say about grids or meshes.
+            return SolveRequest(
+                structure=self.structure,
+                solvent=self.solvent,
+                want_energy=self.want_energy,
+                want_potential=self.want_potential,
             )
         return BoundaryElementRequest(
             structure=self.structure,

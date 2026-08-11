@@ -16,11 +16,9 @@ converted here and a closed form computed there are on the same footing.
 
 from __future__ import annotations
 
-__all__ = ["BOHR_TO_ANGSTROM", "GAS_CONSTANT", "kt_to_kj_per_mol"]
+from sashimi.constants import GAS_CONSTANT
 
-AVOGADRO = 6.02214076e23  # 1/mol
-BOLTZMANN = 1.380649e-23  # J/K
-GAS_CONSTANT = BOLTZMANN * AVOGADRO  # J/(mol K)
+__all__ = ["BOHR_TO_ANGSTROM", "GAS_CONSTANT", "kt_to_kj_per_mol"]
 
 # CODATA 2018 Bohr radius in metres, expressed in angstroms.
 BOHR_TO_ANGSTROM = 0.529177210903

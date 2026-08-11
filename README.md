@@ -147,6 +147,30 @@ A BEM backend answers different questions, and sashimi says so rather than
 pretending otherwise: there is no volume to interpolate, so `sashimi_potential_at`
 does not apply, and a single-sphere solute cannot be triangulated at all.
 
+`sashimi.gb` is the odd one out twice over. It is a **Generalized Born**
+approximation rather than a discretization of the equation, and it runs **in
+this process** — no binary, no environment variable, nothing to install, so it
+is the one backend that cannot be missing. Roughly 300 lines of numpy: hen
+lysozyme in 0.196 s against APBS's 6.79 s, landing 1.48% from the APBS/DelPhi
+consensus.
+
+Being an approximation is declared, not implied. `AccuracyTier` in provenance
+says so, and `sashimi validate` reports it separately rather than averaging it
+into the spread — otherwise the tolerance would have to be wide enough to
+accommodate an approximation, which is wide enough to hide a real regression in
+the solvers being compared.
+
+Two things about it are worth knowing before using it:
+
+- **It answers on the molecular surface**, though its integral runs over van der
+  Waals spheres. The rescaling exists to carry one onto the other. Declared the
+  intuitive way it sits 31% from APBS instead of 4.7%.
+- **It substitutes mbondi radii by default.** pdb2pqr emits Lennard-Jones radii,
+  including exactly 0 for hydroxyl hydrogens — fine for a grid solver, an
+  infinite self-energy for a method that divides by radius. Using them as given
+  costs 35% on a protein. The substitution is counted in the result's
+  diagnostics, and `GbRadii.AS_GIVEN` turns it off.
+
 ### Using DelPhi
 
 Neither DelPhi flavour has a package, so both are opt-in and neither is a
@@ -171,20 +195,24 @@ compiler and runs anywhere, including `linux-aarch64`, where no APBS exists.
 that is the most useful thing a second backend does. `sashimi_capabilities`
 reports which models the installed backends actually share, because a spread
 computed across mismatched surface definitions is a modelling difference
-misreported as a solver disagreement. All three shipped backends share
+misreported as a solver disagreement. All four shipped backends share
 `molecular`; `smoothed-molecular` — sashimi's default — is APBS-only, so a
-DelPhi solve at defaults refuses rather than silently substituting. On the
-models they share, APBS and DelPhi agree to 2.4% on hen lysozyme.
+DelPhi solve at defaults refuses rather than silently substituting, and
+`van-der-waals` is APBS and DelPhi only. On the models they share, APBS and
+DelPhi agree to 2.4% on hen lysozyme.
 
 See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
 ## Status
 
-Phases 0–4 are done and phase 5 is nearly so. The core library is validated
-against the closed-form Born ion, converging monotonically as the grid refines
-(0.62% → 0.11% → 0.02% at 0.41 / 0.20 / 0.16 Å spacing). The protocol admits a
-boundary-element backend without APBS-shaped concessions, proven by a stub that
-returns surface potentials through the same `SolveResult`.
+Phases 0–4 and 7 are done, and phase 5 needs only its PyPI release. The core
+library is validated against the closed-form Born ion, converging monotonically
+as the grid refines (0.62% → 0.11% → 0.02% at 0.41 / 0.20 / 0.16 Å spacing).
+
+Four backends now span three solver families — finite difference, boundary
+element, analytic — and the protocol absorbed all four without changing shape:
+two enum members, no new types. They agree on ALA-GLY to 3.65% across families,
+and on hen lysozyme to 1.97%.
 
 The MCP server exposes nine tools over stdio:
 

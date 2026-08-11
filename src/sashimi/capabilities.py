@@ -209,6 +209,39 @@ def _tabipb_report() -> BackendReport:
     )
 
 
+def _gb_report() -> BackendReport:
+    """Generalized Born's state, which is always "available".
+
+    The only backend with nothing to discover: no binary, no environment
+    variable, no install step. `available` is therefore unconditionally true,
+    and the honest caveat is not availability but `accuracy_tier` — it
+    approximates the equation the others solve, and a caller choosing it for an
+    answer rather than for triage needs to see that before it picks.
+    """
+    from sashimi.gb import BACKEND_VERSION, GbOptions  # noqa: PLC0415
+    from sashimi.gb.options import SUPPORTED_SURFACES  # noqa: PLC0415
+
+    options = GbOptions()
+    return BackendReport(
+        name="gb",
+        available=True,
+        family="analytic",
+        version=BACKEND_VERSION,
+        detail="in process; no binary, nothing to install",
+        surface_models=tuple(sorted(m.value for m in SUPPORTED_SURFACES)),
+        equations=(Equation.LINEAR.value,),
+        accuracy_tier=AccuracyTier.APPROXIMATE.value,
+        extras={
+            "model": options.model.value,
+            "returns": "solvation energy only; no potential field exists to sample",
+            "expected_deviation": (
+                "tens of percent from a Poisson-Boltzmann solver by construction; "
+                "`sashimi validate` reports it as a deviation, not a disagreement"
+            ),
+        },
+    )
+
+
 def comparable_surface_models() -> list[str]:
     """Surface models on which two or more installed backends could be compared.
 
@@ -223,13 +256,19 @@ def comparable_surface_models() -> list[str]:
     that cross-validation is available when nothing is installed to validate
     against.
 
-    **Two or more, not all.** This intersected every available backend until
-    a fourth arrived supporting only `van-der-waals`, which no boundary-element
-    backend can mesh: the intersection emptied, and an empty result here stops
-    `sashimi validate` and skips the whole cross-validation tier. Adding a
-    backend must not be able to switch off comparisons between the others.
+    **Two or more, not all**, which is what the first line says and what the
+    intersection this used to compute did not do. The bug was invisible while
+    three backends all supported `molecular`, and it fails in the direction that
+    hurts: one backend supporting a disjoint set empties the result for
+    everybody, and an empty result here stops `sashimi validate` and skips the
+    whole cross-validation tier. Adding a backend must not be able to switch off
+    the comparisons between the others.
+
+    Fixing it turned up a comparison that was legitimate all along and had never
+    run: APBS against DelPhi on `van-der-waals`, which TABI-PB cannot mesh and
+    which the intersection therefore hid.
     """
-    reports = [_apbs_report(), _delphi_report(), _tabipb_report()]
+    reports = [_apbs_report(), _delphi_report(), _tabipb_report(), _gb_report()]
     supported = [set(r.surface_models) for r in reports if r.available]
     if len(supported) < MIN_BACKENDS_TO_COMPARE:
         return []
@@ -239,7 +278,7 @@ def comparable_surface_models() -> list[str]:
 
 def describe_capabilities() -> dict[str, Any]:
     """Everything a caller needs to plan a request without trial and error."""
-    backends = [_apbs_report(), _delphi_report(), _tabipb_report()]
+    backends = [_apbs_report(), _delphi_report(), _tabipb_report(), _gb_report()]
     usable = [b.name for b in backends if b.available]
     defaults = GridSpec()
 
@@ -269,7 +308,7 @@ def describe_capabilities() -> dict[str, Any]:
         "not_supported": [
             "nonlinear Poisson-Boltzmann (representable in the request; no solver path yet)",
             "raw solver input passthrough (deliberately absent)",
-            "FEM, geoflow, BEM, PBAM, PBSAM solvers",
+            "FEM, geoflow, PBAM, PBSAM solvers",
         ],
         "summary": (
             f"{len(usable)}/{len(backends)} backend(s) available"
