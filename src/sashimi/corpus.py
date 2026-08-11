@@ -706,6 +706,104 @@ MANIFEST: tuple[Case, ...] = (
         grid=GridSpec(resolution=0.5, padding=10.0),
         solvent=SolventModel(solvent_dielectric=4.0),
     ),
+    # --- charge states, binding partners, and scale --------------------------
+    #
+    # What a corpus of one-structure-per-chemistry cannot test: the same solute
+    # in two charge states, the same protein with and without its ligand, and
+    # what happens when the atom count outruns the grid guardrail.
+    Case(
+        name="aspartate-residue",
+        description="A single aspartate at -1e. 12 atoms — a residue, not a molecule.",
+        source="apbs-examples/ASP66.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(),
+    ),
+    Case(
+        name="lysozyme-protonated",
+        description=(
+            "2LZT with Asp66 protonated: +9e against `lysozyme`'s +8e, the same "
+            "1,960 atoms otherwise. One titratable proton, which is the quantity "
+            "a pKa calculation is a difference of."
+        ),
+        source="apbs-examples/2LZT-ASH66.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="lysozyme-deleted-residue",
+        description=(
+            "The same structure with Asp66 removed rather than protonated — also "
+            "+9e, so it isolates geometry from charge against `lysozyme-protonated`."
+        ),
+        source="apbs-examples/2LZT-noASP66.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="fkbp-apo",
+        description="FKBP with an empty binding site; pairs with `fkbp-dmso`.",
+        source="apbs-examples/fkbp-apo.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="fkbp-dmso",
+        description=(
+            "The same protein with a DMSO molecule bound — ten more atoms and "
+            "the same net charge. A binding energy is the difference of these "
+            "two, which is what most real users of a PB solver actually want."
+        ),
+        source="apbs-examples/fkbp-dmso.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="ion-protein-complex",
+        description=(
+            "260 atoms carrying +21.69 e — by far the most charged solute here, "
+            "and small enough that the charge is not spread thin."
+        ),
+        source="apbs-examples/ion-protein-complex.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="hca-complex",
+        description=(
+            "Carbonic anhydrase with acetazolamide bound, and the only "
+            "*net-neutral* protein in the corpus. Everything else has a monopole "
+            "to dominate its solvation energy; this one does not."
+        ),
+        source="apbs-examples/hca-complex.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="actin-monomer",
+        description="5,877 atoms at -12e; where the grid guardrail starts relaxing resolution.",
+        source="apbs-examples/actin-monomer.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="acetylcholinesterase",
+        description=(
+            "8,279 atoms, the largest in the corpus. It asks for 0.5 A and is "
+            "given coarser, because `max_points` caps the grid rather than the "
+            "atom count — which is why 8,000 atoms costs 15 s and not an hour."
+        ),
+        source="apbs-examples/mache.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.FULL,
+    ),
     Case(
         name="fas2-fine",
         description=(

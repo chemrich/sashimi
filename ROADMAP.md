@@ -422,20 +422,51 @@ the 0.25 Å cases look small because their solutes are, and a Kirkwood sphere at
 that spacing is 5.2 s against a Born ion's 0.47 s at 0.5 Å — so 52 seconds of
 work had accumulated in a tier whose contract said "seconds".
 
-| tier | cumulative | who runs it |
-|---|---|---|
-| `fast` | 11 s | `pytest`, so the local edit-test loop stays a loop |
-| `standard` | 93 s | a dedicated CI step per push |
-| `full` | 138 s | `sashimi corpus verify --tier full`, on demand |
+| tier | cases | cumulative | who runs it |
+|---|---|---|---|
+| `fast` | 21 | 14 s | `pytest`, so the local edit-test loop stays a loop |
+| `standard` | 42 | 113 s | a dedicated CI step per push |
+| `full` | 50 | 206 s | `sashimi corpus verify --tier full`, on demand |
 
 The standard tier is its own CI step rather than a test, for the same reason
 CLAUDE.md treats a corpus diff as a real result change: it should read as a
 corpus failure, not as one failure among four hundred.
 
-The target is **50 cases**. The axis that matters is what each is checked
-against, not the count — 50 self-recorded cases would be 50 change-detectors and
-a 50-line diff every time the physics legitimately moves. **41 cases today**: 15
-analytic, 10 vendored structures, 16 parameter variations.
+The target was **50 cases**, and the corpus is there. The axis that mattered was
+what each case is checked against, not the count — 50 self-recorded cases would
+have been 50 change-detectors and a 50-line diff every time the physics
+legitimately moved. What 50 is made of:
+
+| kind | cases | checked against |
+|---|---|---|
+| Analytic | 15 | Born and Kirkwood closed forms, to a measured per-case tolerance |
+| Structures | 19 | recorded APBS, plus the invariants below |
+| Parameter variations | 16 | recorded APBS, and each other |
+
+Nineteen structures from 2 to 8,279 atoms: methanol and methoxide, an acetic
+acid / acetate ionization pair, a lone aspartate residue, a 906-atom protein
+with a non-integer net charge, barnase and barstar, three lysozyme charge
+states, a protein-RNA complex, an FKBP apo/holo pair, carbonic anhydrase with
+and without its ligand, a 260-atom solute carrying +21.69 e, an actin monomer,
+and acetylcholinesterase.
+
+**What the corpus can now assert that no single case could.** Solvation goes as
+q², so the ±1e Born pair must agree exactly and the +2e case must be exactly 4×.
+A probe cannot carve a re-entrant surface out of one atom, so the molecular and
+van der Waals Born cases must agree to the last digit. Two lysozymes at the same
++9e must *not* agree, because what separates them is the charge distribution
+rather than its total — which is the entire reason to solve the equation instead
+of using Born. Refining the grid must move an answer toward the closed form, on
+a real protein and not only on a sphere. And FKBP with and without DMSO differ
+by 0.26% of either, which is what a binding energy is: a few kJ/mol extracted
+from two numbers three orders of magnitude larger, and the reason energies are
+held to 1e-4 rather than to something comfortable.
+
+Deliberately absent: `achbp` at 16,090 atoms, whose PQR is 1,068 KB against the
+repository's 1,024 KB large-file guard. Weakening a guard for one convenience
+case is a bad trade, and acetylcholinesterase at 8,279 atoms already exercises
+what it would have — the `max_points` cap relaxing 0.5 Å to 0.60/0.54/0.49 Å,
+which is why the largest case costs 15 s rather than an hour.
 
 **The third-party anchored tier was planned and then abandoned, on measurement.**
 APBS ships `examples/` with per-version reference values and independent UHBD
@@ -459,21 +490,13 @@ passthrough §5 deliberately refuses. UHBD's numbers follow the same convention,
 so they go too. Recorded in `tests/data/apbs-examples/PROVENANCE.md`, where
 someone comparing sashimi against the APBS docs will find it before filing a bug.
 
-What remains, and what 50 will be made of:
-
-- **Analytic** — exact. The Born family is nearly exhausted at 11; a Kirkwood
-  sphere with off-centre charges is the next real one.
-- **Structural diversity** — no external number, but real charge distributions
-  and geometry. This is where the remaining budget goes, and it is where every
-  genuine defect in this project has come from.
-- **Cross-solver** — `BackendReference` over those structures: four backends
-  agreeing is weaker evidence than a closed form and much stronger than none.
-- **Self-recorded** — the original kind. Kept small and fast.
-
-73 example structures span 1 to 16,090 atoms. Cost is bounded by the existing
-`max_points` guardrail rather than by atom count: a 16,090-atom solute relaxes
-to the same 161³ grid as a 2,000-atom one, so the largest case is 14.5 s against
-lysozyme's 6.8 s, not hours.
+**What is still worth adding, now that the count is met.** The corpus has no
+`BackendReference` cases — four backends agreeing live is weaker evidence than a
+closed form and much stronger than none, and the engine for it already exists
+(§7). Every case is also still finite-difference by construction, because `Case`
+records grid geometry; re-basing it on `System`, which phase 7 built, is what
+would let TABI-PB and the GB tier into the corpus at all. Both are worth more
+than case 51.
 
 **What the first ten structures found immediately.** Generalized Born's
 deviation from APBS is 1.6–4.5% on proteins whose PQR carries AMBER
