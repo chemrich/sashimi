@@ -10,9 +10,9 @@ discipline of section 8 rather than a detail. Surface definition moves a
 dipeptide's solvation energy across 25.7% on this code, so a spread computed
 between an APBS `smoothed-molecular` and a DelPhi `molecular` would be a
 modelling difference misreported as a solver disagreement — worse than no
-number. `comparable_surface_models()` is the precondition, and it is frequently
-empty: with pyDelPhi installed instead of the C++ build it is empty by
-definition, and this file skips entirely rather than inventing a comparison.
+number. `comparable_surface_models()` is the precondition, and it is empty
+whenever fewer than two backends are installed, in which case this file skips
+entirely rather than inventing a comparison.
 
 The gate is deliberately loose. Two independent finite-difference codes on
 different grids will never agree to corpus tolerance, and pinning the measured
@@ -31,14 +31,17 @@ import pytest
 
 from sashimi.apbs import ApbsSolver
 from sashimi.capabilities import comparable_surface_models
-from sashimi.delphi import DelphiSolver
+from sashimi.delphi import DelphiSolver, discover_delphi
+from sashimi.delphi.discover import DelphiFlavour
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
+    EnergyTerm,
     FiniteDifferenceRequest,
     GridSpec,
     SolventModel,
     SurfaceModel,
 )
+from sashimi.validate import Comparison, Incomparable, validate
 
 pytestmark = [pytest.mark.apbs, pytest.mark.delphi]
 
@@ -54,8 +57,9 @@ BORN_ION_PQR = "ATOM      1  I   ION     1       0.000   0.000  0.000  1.00  3.0
 # guess which: fewer than two backends installed, or two that overlap nowhere.
 NO_SHARED_MODEL = (
     "no surface model is comparable across the installed backends — either fewer "
-    "than two are installed, or they overlap nowhere, which is the case for APBS "
-    "and pyDelPhi. Cross-validation needs the C++ DelPhi build."
+    "than two are installed, or the installed pair overlaps nowhere. Both shipped "
+    "DelPhi flavours share `molecular` with APBS, so in practice this means a "
+    "backend is missing."
 )
 
 
@@ -69,18 +73,26 @@ def structures():
     return {"born-ion": parse_pqr(BORN_ION_PQR), "ala-gly": peptide}
 
 
-def _solve_both(structure, solvent) -> tuple[float, float]:
+def _compare(structure, solvent, *, want_potential: bool = False) -> Comparison:
+    """Run both backends through the real `sashimi.validate` engine.
+
+    Deliberately not a private comparison: this file used to subtract two
+    energies itself, which meant the shipped engine — including every refusal
+    that makes a spread trustworthy — was exercised only by stubs. Going through
+    `validate` means the CLI, the library and this test all agree by
+    construction.
+    """
     request = FiniteDifferenceRequest(
         structure=structure,
         solvent=solvent,
         grid=GridSpec(resolution=0.5, padding=10.0),
-        want_potential=False,  # energy is the comparable quantity; grids differ
+        want_potential=want_potential,
     )
-    apbs = ApbsSolver().solve(request)
-    delphi = DelphiSolver().solve(request)
-    assert apbs.energy_kj_mol is not None
-    assert delphi.energy_kj_mol is not None
-    return apbs.energy_kj_mol, delphi.energy_kj_mol
+    return validate(
+        {"apbs": ApbsSolver(), "delphi": DelphiSolver()},
+        request,
+        tolerance=MAX_SPREAD,
+    )
 
 
 @pytest.mark.parametrize("case", ["born-ion", "ala-gly"])
@@ -90,19 +102,68 @@ def test_backends_agree_on_shared_surface_models(structures, case):
         pytest.skip(NO_SHARED_MODEL)
 
     for model in models:
-        solvent = SolventModel(surface_model=model)
-        if case == "born-ion":
-            solvent = dataclasses.replace(solvent, solute_dielectric=1.0, ionic_strength=0.0)
-
-        apbs, delphi = _solve_both(structures[case], solvent)
-        spread = abs(apbs - delphi) / abs(apbs)
-
-        assert spread < MAX_SPREAD, (
-            f"{case} / {model.value}: APBS {apbs:.3f} vs DelPhi {delphi:.3f} kJ/mol "
-            f"= {spread:.2%} apart. Two FD codes should agree to a few percent on a "
-            "shared surface model; a gap this size is a unit, sign or definitional "
-            "error rather than discretization."
+        # Zero salt, so this case is comparable whichever DelPhi flavour is
+        # installed: pyDelPhi reports the reaction field only, which coincides
+        # with APBS's polar solvation energy exactly when there are no mobile
+        # ions. The salted case is
+        # `test_salted_comparison_depends_on_the_flavours_energy_term`.
+        solvent = SolventModel(
+            surface_model=model, solute_dielectric=1.0 if case == "born-ion" else 2.0
         )
+        solvent = dataclasses.replace(solvent, ionic_strength=0.0)
+
+        comparison = _compare(structures[case], solvent)
+
+        assert comparison.agrees, f"{case} / {model.value}: {comparison.summary()}"
+
+
+def test_salted_comparison_depends_on_the_flavours_energy_term(structures):
+    """Salt is where the two backends' definitions used to diverge.
+
+    The C++ build is asked for the ion-inclusive quantity, so it reports APBS's
+    term and a salted comparison is legitimate — which is the whole reason for
+    reconstructing that term rather than reading DelPhi's headline line.
+    pyDelPhi cannot report it, so the same request is refused there.
+
+    Both branches are the engine working. Which one runs is a property of the
+    installed flavour, so the test asks rather than assumes.
+    """
+    models = shared_models()
+    if not models:
+        pytest.skip(NO_SHARED_MODEL)
+
+    solvent = SolventModel(surface_model=models[0], ionic_strength=0.15)
+
+    if discover_delphi().flavour is DelphiFlavour.CPP:
+        comparison = _compare(structures["ala-gly"], solvent)
+        assert comparison.agrees, comparison.summary()
+        assert all(r.energy_term is EnergyTerm.POLAR_SOLVATION for r in comparison.runs), (
+            "a salted comparison is only meaningful when both report the same term"
+        )
+    else:
+        with pytest.raises(Incomparable, match="mobile-ion contribution"):
+            _compare(structures["ala-gly"], solvent)
+
+
+def test_potentials_are_comparable_across_incompatible_grids(structures):
+    """The blocker that kept this out of `corpus.verify_case`, resolved.
+
+    APBS's dime must be 32c+1 and DelPhi's gsize is any odd integer, so the two
+    never produce the same grid. Sampling both at shared physical coordinates
+    sidesteps that entirely.
+    """
+    models = shared_models()
+    if not models:
+        pytest.skip(NO_SHARED_MODEL)
+
+    solvent = SolventModel(surface_model=models[0], solute_dielectric=1.0, ionic_strength=0.0)
+    comparison = _compare(structures["born-ion"], solvent, want_potential=True)
+
+    grids = [r.potential for r in comparison.runs if r.potential is not None]
+    assert len(grids) == 2
+    assert grids[0].shape != grids[1].shape, "expected incompatible grids to compare across"
+    assert comparison.n_probes > 0
+    assert comparison.potential_rmsd_kt_e is not None
 
 
 def test_both_backends_agree_on_the_born_ion_closed_form(structures):
@@ -119,11 +180,13 @@ def test_both_backends_agree_on_the_born_ion_closed_form(structures):
     solvent = SolventModel(
         surface_model=shared_models()[0], solute_dielectric=1.0, ionic_strength=0.0
     )
-    apbs, delphi = _solve_both(structures["born-ion"], solvent)
+    comparison = _compare(structures["born-ion"], solvent)
     expected = born_solvation_energy(3.0, solute_dielectric=1.0)
 
     # Both are held to the same 3% here rather than the 1% the analytic test
     # applies to a converged grid: this runs at a fixed 0.5 A for speed, and
     # APBS is measurably further from the closed form there than DelPhi is.
-    assert apbs == pytest.approx(expected, rel=0.03)
-    assert delphi == pytest.approx(expected, rel=0.03)
+    for backend_run in comparison.runs:
+        assert backend_run.energy_kj_mol == pytest.approx(expected, rel=0.03), (
+            f"{backend_run.name} is {backend_run.energy_kj_mol} against a closed form of {expected}"
+        )

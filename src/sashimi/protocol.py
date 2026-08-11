@@ -37,6 +37,7 @@ __all__ = [
     "DIMENSIONS",
     "BoundaryElementRequest",
     "Diagnostics",
+    "EnergyTerm",
     "Equation",
     "FiniteDifferenceRequest",
     "FloatArray",
@@ -64,6 +65,28 @@ class Equation(StrEnum):
 
     LINEAR = "linear"
     NONLINEAR = "nonlinear"
+
+
+class EnergyTerm(StrEnum):
+    """Which energy a backend reports in `SolveResult.energy_kj_mol`.
+
+    Not a formatting detail: two backends can solve the same equation on the
+    same structure with the same surface and still return different quantities,
+    and the difference is invisible in the number. APBS reports a difference
+    between the solvated state and a uniform-dielectric, ion-free reference, so
+    it carries the mobile-ion contribution; DelPhi reports the polarization term
+    alone and does not move with ionic strength at all. At zero salt the two
+    coincide, which is exactly what makes the gap easy to miss.
+
+    Cross-solver comparison refuses to report a spread across differing terms
+    for the same reason it refuses across differing surface models: the number
+    would be a definitional difference misreported as a solver disagreement.
+    ROADMAP.md section 14 states the rule as "same reported term", not "same
+    equation".
+    """
+
+    POLAR_SOLVATION = "polar-solvation"  # solvated minus uniform-dielectric, ion-free
+    REACTION_FIELD = "reaction-field"  # polarization only; excludes the mobile-ion term
 
 
 class SurfaceModel(StrEnum):
@@ -358,6 +381,10 @@ class Provenance:
     binary_sha256: str | None = None
     resolved_parameters: Diagnostics = field(default_factory=dict)
     wall_seconds: float | None = None
+    # What `SolveResult.energy_kj_mol` actually is. Optional only so that a
+    # backend predating this field still constructs; `sashimi.validate` treats
+    # an unstated term as uncomparable rather than assuming it matches.
+    energy_term: EnergyTerm | None = None
 
     def summary(self) -> str:
         checksum = f" sha256:{self.binary_sha256[:12]}" if self.binary_sha256 else ""

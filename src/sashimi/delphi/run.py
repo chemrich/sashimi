@@ -17,25 +17,28 @@ decimal places, which is the precision floor for anything compared against a
 C++ DelPhi number. pyDelPhi writes a tab-separated CSV with four, and that is
 preferred whenever it exists.
 
-**What the energy is, and how it differs from APBS's.** Both flavours report a
-*corrected reaction field energy*: the polarization term, and nothing else. It
-does not move with ionic strength, in either flavour — measured on a Born ion,
--92.22 kT from the C++ build and -228.611 kJ/mol from pyDelPhi at both 0 M and
-0.5 M — even though the solver plainly received the salt, since the C++ build
-reports a Debye length of 4.307 A at 0.5 M. Asking the C++ build for the ionic
-term as well shifts its aggregate to -92.56 kT.
+**What the energy is.** DelPhi's headline "corrected reaction field energy" is
+*not* APBS's solvation energy: it is the polarization term alone, and it does
+not move with ionic strength at all — -92.22 kT on a Born ion at both 0 M and
+0.5 M, despite the solver reporting a Debye length of 4.307 A at 0.5 M. APBS's
+`Global net ELEC energy` is a difference against a uniform-dielectric, ion-free
+reference and so carries the mobile-ion atmosphere by construction.
 
-APBS's `Global net ELEC energy` is a different quantity: a difference between a
-solvated state and a uniform-dielectric, ion-free reference, so it carries the
-mobile-ion contribution by construction. That gap is definitional rather than
-numerical, and `ENERGY_TERM` puts it in `SolveResult.diagnostics` rather than
-leaving a reader to assume the two backends' energies are interchangeable.
+The C++ build can be asked for the matching quantity, which is what sashimi
+does. `parse_cpp_polar_solvation` reconstructs it from the aggregate line; see
+that function for the arithmetic and `input.py` for why the request has to say
+`energy(s,c,ion)` rather than the `s` or `s,ion` one might expect.
 
-(An earlier version of this note claimed the two DelPhi flavours disagreed with
-*each other* here, on the strength of pyDelPhi's energy moving with salt. That
-measurement was taken on a Gaussian dielectric while the C++ one was taken on a
-molecular surface; on the same surface model the flavours agree exactly. The
-salt-sensitivity belongs to the Gaussian path, not to the flavour.)
+That it is the right term is not assumed. The reconstructed contribution is zero
+at zero salt and grows monotonically with it (-0.20 kT at 0.15 M, -0.34 at 0.5 M
+on a Born ion), and adding it makes the gap to APBS **salt-independent** —
+2.30 / 2.59 / 2.70% across 0 / 0.15 / 0.5 M becomes 2.30 / 2.38 / 2.34%, leaving
+only the constant discretization difference between two codes on different
+grids. A missing term produces exactly that signature; a coincidence does not.
+
+pyDelPhi has no such line: its results CSV carries no ion-atmosphere column, so
+it stays on the reaction-field term and `ENERGY_TERMS` records the difference.
+`sashimi.validate` reads that and compares the two only where they coincide.
 """
 
 from __future__ import annotations
@@ -53,9 +56,16 @@ from sashimi.delphi.discover import DelphiBinary, DelphiFlavour
 from sashimi.delphi.input import POTENTIAL_FILENAME, PQR_FILENAME
 from sashimi.delphi.units import kt_to_kj_per_mol
 from sashimi.errors import ConvergenceFailure, MalformedStructure, SolverCrash
-from sashimi.protocol import PotentialGrid
+from sashimi.protocol import EnergyTerm, PotentialGrid
 
-__all__ = ["DEFAULT_TIMEOUT", "ENERGY_TERM", "DelphiCrash", "DelphiRun", "run_delphi"]
+__all__ = [
+    "DEFAULT_TIMEOUT",
+    "ENERGY_TERMS",
+    "ENERGY_TERM_DETAIL",
+    "DelphiCrash",
+    "DelphiRun",
+    "run_delphi",
+]
 
 DEFAULT_TIMEOUT = 300.0
 
@@ -64,6 +74,10 @@ _CSV_ENERGY_COLUMN = "E_rxn_corr_tot"  # total corrected reaction-field energy, 
 
 _CPP_ENERGY_RE = re.compile(
     r"Corrected reaction field energy\s*:\s*([-+0-9.eE]+)\s*kT", re.IGNORECASE
+)
+_CPP_COULOMBIC_RE = re.compile(r"Coulombic energy\s*:\s*([-+0-9.eE]+)\s*kT", re.IGNORECASE)
+_CPP_TOTAL_RE = re.compile(
+    r"All required energy terms but grid energy\s*:\s*([-+0-9.eE]+)\s*kT", re.IGNORECASE
 )
 
 # Both flavours exit 0 on these.
@@ -81,12 +95,25 @@ _CONVERGENCE_SIGNATURES = (
 
 _MIN_CSV_ROWS = 2  # a header plus at least one record
 
-# Recorded in every result's diagnostics. Not the same quantity APBS reports —
-# see the module docstring — and the same for both flavours.
-ENERGY_TERM = (
-    "corrected reaction field (polarization only; does not move with ionic strength, "
-    "and excludes the mobile-ion osmotic term APBS's difference-of-blocks includes)"
-)
+# What each flavour's reported energy is. These differ, and for once that is a
+# capability difference rather than a mistake: the C++ build can be asked for
+# the ion-inclusive quantity and pyDelPhi cannot, since its results CSV carries
+# no ion-atmosphere column.
+ENERGY_TERMS: dict[DelphiFlavour, EnergyTerm] = {
+    DelphiFlavour.CPP: EnergyTerm.POLAR_SOLVATION,
+    DelphiFlavour.PYDELPHI: EnergyTerm.REACTION_FIELD,
+}
+
+ENERGY_TERM_DETAIL: dict[DelphiFlavour, str] = {
+    DelphiFlavour.CPP: (
+        "reaction field plus the mobile-ion atmosphere (DelPhi's aggregate less its "
+        "Coulombic term), which is the quantity APBS reports"
+    ),
+    DelphiFlavour.PYDELPHI: (
+        "corrected reaction field (polarization only; pyDelPhi reports no ion-atmosphere "
+        "term, so this does not move with ionic strength and is not APBS's quantity)"
+    ),
+}
 
 
 class DelphiCrash(SolverCrash):
@@ -106,10 +133,34 @@ def _tail(text: str, lines: int = 25) -> str:
     return "\n".join(text.strip().splitlines()[-lines:])
 
 
-def parse_cpp_energy(stdout: str) -> float | None:
-    """The C++ program's reaction-field energy, in kT. None if it printed none."""
+def parse_cpp_reaction_field(stdout: str) -> float | None:
+    """The C++ program's reaction-field line, in kT. Polarization only."""
     match = _CPP_ENERGY_RE.search(stdout)
     return float(match.group(1)) if match else None
+
+
+def parse_cpp_polar_solvation(stdout: str) -> float | None:
+    """Reaction field *plus* the mobile-ion atmosphere, in kT — APBS's quantity.
+
+    DelPhi's aggregate line is
+    `Nonlinear + Coulombic + Solvation + SolvToChgIn + SolvToChgOut`
+    (`energy_run.cpp`), where the last two are the ion-atmosphere terms and
+    `Nonlinear` is zero for the linear equation. Subtracting the separately
+    printed Coulombic term therefore leaves exactly the polar solvation energy.
+
+    The alternative would be DelPhi's dedicated "solvent and boundary pol." line,
+    which computes precisely this — but it is commented out in 8.5.0/8.6.
+
+    Costs a little precision: both inputs are printed to two decimals in kT, so
+    the result carries up to 0.01 kT (0.025 kJ/mol) of rounding. That is an
+    absolute error, so it matters least where it would matter most — on a large
+    solute whose Coulombic term is huge.
+    """
+    total = _CPP_TOTAL_RE.search(stdout)
+    coulombic = _CPP_COULOMBIC_RE.search(stdout)
+    if total is None or coulombic is None:
+        return None
+    return float(total.group(1)) - float(coulombic.group(1))
 
 
 def parse_csv_energy(path: Path) -> float | None:
@@ -215,9 +266,11 @@ def run_delphi(
                     f"{binary.flavour.value} wrote an unparseable cube: {exc}"
                 ) from exc
 
+        # pyDelPhi's CSV carries only a reaction-field column, so it stays on
+        # that term; the C++ build is asked for the ion-inclusive quantity.
         energy_kt = parse_csv_energy(work / ENERGY_CSV)
         if energy_kt is None:
-            energy_kt = parse_cpp_energy(combined)
+            energy_kt = parse_cpp_polar_solvation(combined) or parse_cpp_reaction_field(combined)
 
         energy = None
         if expect_energy:

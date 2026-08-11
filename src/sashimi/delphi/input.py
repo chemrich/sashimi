@@ -127,8 +127,16 @@ def build_input(
     lines.append(f'in(modpdb4,file="{pqr_filename}",format=pqr)')
 
     if compute_energy and flavour is DelphiFlavour.CPP:
-        # pyDelPhi computes these unconditionally and writes them to CSV.
-        lines.append("energy(s,c)")
+        # `s,c,ion` and not `s`, for a reason that is not obvious and cost an
+        # afternoon to establish. `s` alone reports the reaction field, which is
+        # a *different quantity* from APBS's polar solvation energy: it omits
+        # the mobile-ion atmosphere. Adding `ion` alone changes nothing, because
+        # `fEnergy_SolvToChgIn/Out` — the ion-atmosphere terms — are computed
+        # inside the Coulombic routine (`energy_clbnonl.cpp`), so they stay zero
+        # unless `c` is also requested. Requesting all three populates them, and
+        # `run.py` subtracts the separately-printed Coulombic term back off.
+        # pyDelPhi computes its energies unconditionally and writes them to CSV.
+        lines.append("energy(s,c,ion)")
 
     if write_potential:
         lines.append(f'out(phi,file="{potential_filename}",media="water",format=cube)')
