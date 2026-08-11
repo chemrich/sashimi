@@ -123,6 +123,50 @@ jobs:
           # missed the first time. `discover.py` tolerates the same exit code.
           .pydelphi/bin/pydelphi-static --version || true
 
+      # TABI-PB, the boundary-element backend. Linux only, for the same reason
+      # the DelPhi build is: the NanoShaper triangulator its build fetches is
+      # x86_64, which is native on ubuntu-latest and needs Rosetta on the arm64
+      # macOS runner. Without this the eleven `tabipb`-marked tests skip, and a
+      # skipped tier looks exactly like a passing one.
+      #
+      # BSD-3-Clause and CMake, so this is a much smaller ceremony than DelPhi:
+      # the build fetches its own mesher. Pinned to a commit because TABI-PB
+      # publishes no release tarball, and allowed to fail so a third party's
+      # outage skips the tier rather than reddening CI.
+      - name: Cache the TABI-PB build
+        if: runner.os == 'Linux'
+        id: tabipb-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/tabipb
+          key: tabipb-970c98d4-${{ runner.os }}-v1
+
+      - name: Build TABI-PB
+        id: tabipb
+        if: runner.os == 'Linux' && steps.tabipb-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/Treecodes/TABI-PB.git tabipb-src
+          git -C tabipb-src checkout -q 970c98d4080903caf1b8999c6135fe5e726a2b4a
+          cmake -S tabipb-src -B tabipb-build -DGET_NanoShaper=ON -DCMAKE_BUILD_TYPE=Release
+          make -C tabipb-build -j"$(nproc)"
+          mkdir -p ~/.local/tabipb
+          # NanoShaper must sit beside the solver: `tabipb` invokes it by bare
+          # name through a shell. It also arrives without the execute bit.
+          install -m 0755 tabipb-build/bin/tabipb ~/.local/tabipb/tabipb
+          install -m 0755 tabipb-build/bin/NanoShaper ~/.local/tabipb/NanoShaper
+
+      - name: Point sashimi at TABI-PB
+        id: tabipb_path
+        run: |
+          if [ -x "$HOME/.local/tabipb/tabipb" ]; then
+            echo "SASHIMI_TABIPB_PATH=$HOME/.local/tabipb/tabipb" >> "$GITHUB_ENV"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No TABI-PB available; its tests will skip."
+          fi
+
       - name: Point sashimi at DelPhi
         id: delphi_path
         run: |
@@ -161,6 +205,10 @@ jobs:
       - name: Verify the DelPhi tier actually ran
         if: steps.delphi_path.outputs.found == 'true'
         run: uv run --frozen pytest -q -m delphi
+
+      - name: Verify the TABI-PB tier actually ran
+        if: steps.tabipb_path.outputs.found == 'true'
+        run: uv run --frozen pytest -q -m tabipb
 
   # Single stable check name for the branch ruleset to require. Matrix job names
   # change whenever the matrix does; this one does not.
