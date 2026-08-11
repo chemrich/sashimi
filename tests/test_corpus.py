@@ -18,9 +18,11 @@ from sashimi.cli import main
 from sashimi.corpus import (
     MANIFEST,
     BackendReference,
+    CaseTier,
     RecordedReference,
     Tolerances,
     build_case,
+    cases_for_tier,
     load_summary,
     verify_case,
     verify_manifest,
@@ -97,8 +99,14 @@ class TestBackend:
 
 
 class TestReproduces:
-    def test_the_whole_manifest_verifies_clean(self, solver):
-        assert verify_manifest(solver) == []
+    def test_the_manifest_verifies_clean(self, solver):
+        """Fast and standard tiers, which is what CI runs per push.
+
+        Not the whole manifest: the `full` tier exists precisely because
+        re-solving it on every push is minutes rather than seconds. It is
+        verified by `sashimi corpus verify --tier full` on demand.
+        """
+        assert verify_manifest(solver, cases_for_tier(CaseTier.STANDARD)) == []
 
     def test_born_ion_converges_toward_the_closed_form(self):
         """The two Born cases exist as a pair; refining must reduce the error."""
