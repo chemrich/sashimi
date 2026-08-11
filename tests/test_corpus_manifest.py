@@ -8,6 +8,7 @@ rather than merely obeying themselves.
 
 from __future__ import annotations
 
+import itertools
 from typing import Any
 
 import numpy as np
@@ -104,6 +105,57 @@ def test_refining_the_grid_moves_the_answer_toward_the_closed_form():
             recorded(fine)["analytic"]["relative_error"]
             < (recorded(coarse)["analytic"]["relative_error"])
         ), f"{fine} should be closer to exact than {coarse}"
+
+
+def test_a_lone_sphere_has_the_same_molecular_and_van_der_waals_boundary():
+    """Rolling a probe over one sphere cannot carve a re-entrant surface.
+
+    So these two must agree exactly, not approximately, and no other case in the
+    corpus can catch a probe applied where it should not be.
+    """
+    molecular = recorded("born-ion-molecular")["energy_kj_mol"]
+    van_der_waals = recorded("born-ion-vdw")["energy_kj_mol"]
+
+    assert molecular == van_der_waals
+
+
+def test_the_surface_model_moves_the_answer():
+    """Section 5's 25.7%: the largest modelling choice in the calculation.
+
+    Every corpus case was `smoothed-molecular` until these, so a backend that
+    ignored the surface model entirely would have passed the whole corpus.
+    """
+    energies = {
+        name: recorded(name)["energy_kj_mol"]
+        for name in ("peptide-default", "peptide-molecular", "peptide-vdw")
+    }
+
+    assert len(set(energies.values())) == len(energies), (
+        f"surface models must give different answers, got {energies}"
+    )
+
+
+def test_no_two_cases_ask_the_same_question():
+    """A case that duplicates another adds runtime and no coverage.
+
+    Caught exactly this: `acetate-molecular` was committed with the surface
+    model left at the default, making it a byte-identical rerun of `acetate`.
+    """
+    seen: dict[tuple[Any, ...], str] = {}
+    for case in MANIFEST:
+        key = (case.source, case.solvent, case.grid, case.compute_energy)
+        assert key not in seen, f"{case.name} is identical to {seen.get(key)}"
+        seen[key] = case.name
+
+
+def test_salt_makes_a_real_solute_more_favourably_solvated():
+    """Screening on a structure rather than on a sphere."""
+    energies = [
+        recorded(name)["energy_kj_mol"]
+        for name in ("peptide-no-salt", "peptide-default", "peptide-high-salt")
+    ]
+
+    assert all(b < a for a, b in itertools.pairwise(energies)), energies
 
 
 def test_analytic_references_are_computed_rather_than_quoted():

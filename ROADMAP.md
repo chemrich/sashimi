@@ -389,16 +389,53 @@ different convention beneath the same declared quantity — not the `EnergyTerm`
 gap of §12 — and pinning either as "the" closed form would encode one code's
 choice as physics.
 
+### Charge placement, and the axis nothing covered
+
+Two additions worth naming, because both closed gaps that had been invisible.
+
+**Kirkwood's series** — a charge off-centre in a sphere — is the second closed
+form in the project. The Born ion is symmetric in every way a solver could be
+wrong about direction, so it cannot catch a mistake in *where* a charge is;
+every multipole above the monopole only exists once the charge moves. Expressing
+it needs nothing new: one uncharged sphere for the boundary plus a zero-radius
+atom carrying the charge, which is only possible because a PQR separates charge
+from radius. Verified against APBS at 0.25 Å: 0.097%, 0.473%, 0.114% and 7.678%
+at d/a of 0.3, 0.5, 0.7 and 0.9 — the last being 0.3 Å from the boundary, kept
+precisely because it records where charge placement stops being resolvable.
+
+**Every case was `smoothed-molecular` until now**, which is APBS's alone. Two
+consequences, both bad and neither noticed until the manifest was surveyed: the
+single largest modelling choice in the calculation — 25.7% on a dipeptide (§5) —
+was untested, so a backend that ignored the surface model entirely would have
+passed the whole corpus; and *no corpus case could ever be verified against
+another backend*, which quietly undercut the corpus's stated job as debye's
+acceptance gate. Eight cases now run on `molecular` or `van-der-waals`. One of
+them is an invariant no other case can express: for a lone sphere the two
+surfaces coincide, because a probe cannot carve a re-entrant surface out of one
+atom, so `born-ion-molecular` and `born-ion-vdw` must agree *exactly* — and do.
+
 ### Tiers, because the corpus is meant to grow
 
-`CaseTier` splits the manifest by wall time, cumulatively: `fast` (seconds,
-every push), `standard` (~2 minutes, every push), `full` (tens of minutes,
-nightly or on demand). The split is cost, not importance.
+`CaseTier` splits the manifest by wall time, cumulatively. Membership comes from
+*measured* per-case cost, which matters because intuition had already drifted:
+the 0.25 Å cases look small because their solutes are, and a Kirkwood sphere at
+that spacing is 5.2 s against a Born ion's 0.47 s at 0.5 Å — so 52 seconds of
+work had accumulated in a tier whose contract said "seconds".
+
+| tier | cumulative | who runs it |
+|---|---|---|
+| `fast` | 11 s | `pytest`, so the local edit-test loop stays a loop |
+| `standard` | 93 s | a dedicated CI step per push |
+| `full` | 138 s | `sashimi corpus verify --tier full`, on demand |
+
+The standard tier is its own CI step rather than a test, for the same reason
+CLAUDE.md treats a corpus diff as a real result change: it should read as a
+corpus failure, not as one failure among four hundred.
 
 The target is **50 cases**. The axis that matters is what each is checked
 against, not the count — 50 self-recorded cases would be 50 change-detectors and
-a 50-line diff every time the physics legitimately moves. 24 cases today: 11
-analytic, 10 vendored structures, 3 self-recorded.
+a 50-line diff every time the physics legitimately moves. **41 cases today**: 15
+analytic, 10 vendored structures, 16 parameter variations.
 
 **The third-party anchored tier was planned and then abandoned, on measurement.**
 APBS ships `examples/` with per-version reference values and independent UHBD

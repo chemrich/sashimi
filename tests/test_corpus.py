@@ -100,13 +100,13 @@ class TestBackend:
 
 class TestReproduces:
     def test_the_manifest_verifies_clean(self, solver):
-        """Fast and standard tiers, which is what CI runs per push.
+        """The fast tier only, so the local edit-test loop stays a loop.
 
-        Not the whole manifest: the `full` tier exists precisely because
-        re-solving it on every push is minutes rather than seconds. It is
-        verified by `sashimi corpus verify --tier full` on demand.
+        `standard` and `full` are minutes of solving; CI runs `standard` as its
+        own step per push, which also makes a corpus failure legible as a corpus
+        failure rather than as one test among four hundred.
         """
-        assert verify_manifest(solver, cases_for_tier(CaseTier.STANDARD)) == []
+        assert verify_manifest(solver, cases_for_tier(CaseTier.FAST)) == []
 
     def test_born_ion_converges_toward_the_closed_form(self):
         """The two Born cases exist as a pair; refining must reduce the error."""
