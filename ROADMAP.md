@@ -372,8 +372,8 @@ job fronts the matrix so the required status-check name survives matrix changes.
 | 1 | **APBS** (FD, mg-auto) | Community default, broadest features, conda-forge packaged | subprocess |
 | 2 | **DelPhi** ✅ | FD sibling; Gaussian dielectric, focusing workflows; cheap triangulation partner | subprocess, two flavours |
 | 3 | **TABI-PB** ✅ | BEM; forces the protocol to handle surface potentials | subprocess + NanoShaper |
-| 3b | **PyGBe** | BEM, Python-native → **in-process**; stress-tests transport-agnosticism | import |
-| 4 | **GB tier** (Amber GB / Bluues) | Fast approximation for high-throughput triage → PB refinement | subprocess |
+| 3b | ~~**PyGBe**~~ ❌ | Dropped: builds only on Python ≤3.11, so it cannot be imported into a 3.13 process at all. §12 records the measurement | — |
+| 4 | **GB tier** ✅ | Fast approximation for high-throughput triage → PB refinement — **and**, being pure numpy, the in-process proof PyGBe was meant to supply | none: in process |
 | — | **MIBPB** | Not production; the *accuracy referee* (~0.4% relative error, rigorous interface treatment) | validation harness |
 
 **Cross-solver validation as a feature.** `sashimi validate`: run one system
@@ -388,6 +388,14 @@ Relationship to `sashimi corpus`: the corpus verifies one backend against
 The corpus is the regression net, `validate` is the product feature — but they
 are **one engine with two reference kinds**, and `validate` lives in core for
 that reason (§14).
+
+**Not every backend is a reference.** The GB tier approximates the equation the
+others discretize, so a spread that averaged it in would report the method
+working as designed as a defect, and would need a tolerance wide enough to hide
+a real regression in the solvers it was averaged with. `AccuracyTier` in
+provenance partitions them: the spread describes the reference tier, each
+approximation is reported as its deviation from what that tier agreed on. §12
+records what this cost and what it caught.
 
 Additional backends were to ship as optional extras (`sashimi[delphi]`) so core
 stays lean. **Phase 7 retired that plan**: neither DelPhi flavour is on PyPI —
@@ -656,7 +664,8 @@ feedstock-derived); `linux-aarch64` build offered upstream; license-file audit
 of the vendored FETK/MALOC versions; platform wheels so `pip install sashimi`
 works end to end.
 
-**Phase 7 — Multi-backend. ◐ in progress.**
+**Phase 7 — Multi-backend. ✅** Four backends, three solver families, one
+unchanged protocol.
 
 Done: the **DelPhi backend** (`sashimi.delphi`), covering both flavours — the
 C++ reference build and pyDelPhi, the same lab's Python/numba reimplementation.
@@ -899,18 +908,118 @@ a disagreement. Refuse the silent failure; default the loud one.
 
 **A latent bug surfaced while planning for it.**
 `comparable_surface_models()` promised "two or more installed backends" and
-computed the intersection across *all* of them. Harmless with three backends
-that share `molecular` — and fatal on the fourth: a GB tier supports only
-`van-der-waals`, which no surface solver can mesh, so the intersection would
-have emptied, and an empty list here stops `sashimi validate` and skips the
-whole cross-validation tier. Adding a backend must not be able to switch off
-the comparisons between the others. Counting backends per model, as the
-docstring always said, also revealed a comparison that was already legitimate
-and never run: APBS against DelPhi on `van-der-waals`, now exercised on every
-push at a measured 3.93% on ALA-GLY and 2.30% on the Born ion.
+computed the intersection across *all* of them. Harmless while three backends
+shared `molecular`, and wrong in the direction that hurts: one backend
+supporting a disjoint set empties the result for everybody, and an empty list
+here stops `sashimi validate` and skips the whole cross-validation tier. Adding
+a backend must not be able to switch off the comparisons between the others.
 
-Remaining in this phase: PyGBe in-process, which proves transport-agnosticism;
-optional GB tier for triage→refine workflows.
+*The example that motivated the fix was itself wrong, and is worth recording as
+such: the GB tier was expected to support only `van-der-waals`, and measurement
+later showed it belongs on `molecular` — see below. The bug was real
+independently of it.* Counting backends per model, as the docstring always
+said, revealed a comparison that was legitimate all along and had never run:
+APBS against DelPhi on `van-der-waals`, which TABI-PB cannot mesh and which the
+intersection therefore hid. Now exercised on every push, at 2.30% on the Born
+ion, 3.93% on ALA-GLY and 3.66% on the low-dielectric peptide.
+
+### Generalized Born ✅ — the approximation, and the first in-process backend
+
+`sashimi.gb` implements `Solver[SolveRequest]`: HCT pairwise descreening, OBC
+effective radii, Still's equation, Debye-Hückel screening. Roughly 300 lines of
+numpy and **no binary at all** — no discovery, no environment variable, no
+install step, no CI build. It closes both of this phase's remaining items at
+once, and neither the way §8 planned.
+
+**A third solver family, and the protocol needed one enum member.** Generalized
+Born needs neither a grid nor a mesh, so it takes the base `SolveRequest` and
+`System.request_for` grew an `ANALYTIC` arm. Because `Solver` is contravariant
+in its request type, `Solver[SolveRequest]` is already assignable everywhere an
+FD solver is expected — the registry needed no signature change. Two backends
+in two phases have now been added without the protocol moving: §2's claim is
+holding up under a third kind of solver, not just a second.
+
+**What being in-process actually costs**, now measured rather than predicted:
+`Provenance.binary_path` and `binary_sha256` are `None` for the first time on a
+real backend, and nothing downstream cared — `validate` already tolerated it,
+having only ever been exercised that way by stubs. `timeout` is the one that
+does not survive: a function call cannot be interrupted the way
+`subprocess.run(timeout=)` can. The substitute is that the cost is knowable
+before it is paid — O(N²), no iteration, no convergence criterion, so it cannot
+fail to terminate — and chunking bounds the memory that size costs. **And this
+tier cannot silently skip**, which is the failure this project has shipped
+twice: there is no binary to be missing.
+
+**Two mistakes, both caught by running it against real structures, and neither
+visible from the physics tests.** The suite was green for both.
+
+- **The surface model is `molecular`, not `van-der-waals`.** Descreening
+  integrates over van der Waals spheres, so the intuitive declaration is
+  `van-der-waals` — and that is the construction, not the surface. The OBC
+  rescaling exists precisely to carry the union of spheres onto the
+  solvent-excluded volume, and the parameters were fit to reproduce
+  Poisson-Boltzmann on the molecular surface. On hen lysozyme: **4.72%** against
+  APBS on `molecular`, **31.35%** on `van-der-waals`. This is the pyDelPhi
+  `surfmethod=vdw` lesson a second time, in a place nothing connected it to the
+  first: *the name of the construction is not the name of the surface.*
+- **pdb2pqr's radii are not Generalized Born radii.** They are Lennard-Jones
+  parameters, and AMBER gives hydroxyl and sulfhydryl hydrogens a radius of
+  exactly **0** — their volume is subsumed into the heavy atom. A grid solver
+  spreads that charge over grid points and never notices; a method that divides
+  by the radius gets an infinite self-energy. Hen lysozyme has twenty such
+  atoms carrying **+8.34 e** between them. This is why Amber ships the mbondi
+  sets, and the difference is a third of the answer: **4.72%** with mbondi
+  against **35.43%** with pdb2pqr's. mbondi is therefore the default, the
+  substitution is counted into diagnostics, and `GbRadii.AS_GIVEN` turns it off.
+
+**Measured against the reference tier**, molecular surface, after both fixes:
+
+| case | APBS | DelPhi | GB | reference spread | GB deviation |
+|---|---|---|---|---|---|
+| born-ion-coarse | −234.00 | −228.61 | −235.68 | 2.30% | 1.89% |
+| born-ion-fine | −230.03 | −228.61 | −235.68 | 0.62% | 2.77% |
+| born-ion-salt | −234.69 | −229.11 | −236.62 | 2.38% | 2.04% |
+| peptide-default | −214.20 | −209.42 | −226.84 | 2.23% | 7.10% |
+| peptide-low-dielectric | −434.42 | −425.09 | −458.77 | 2.15% | 6.75% |
+| **hen lysozyme** | −3976.6 | −3898.3 | −3879.1 | 1.97% | **1.48%** |
+
+1,960 atoms in **0.196 s** against APBS's 6.79 s — 35× — which is the triage
+claim §8 made for this tier, met. `DEFAULT_APPROXIMATION_TOLERANCE` is set from
+these numbers at **15%**: roughly twice the worst of them, and comfortably tight
+enough to have caught both mistakes above, which is the more useful direction.
+
+**The one calibration no other backend here gets.** For a single sphere the
+interpolating denominator collapses to the effective radius, so Generalized Born
+*is* the Born formula rather than an approximation to it — matched to 4e-16.
+TABI-PB cannot be pinned this way at all, since NanoShaper will not triangulate
+fewer than four atoms. The descreening integral is checked separately against
+direct numerical quadrature, because it was derived here rather than quoted and
+a misremembered sign in it produces entirely plausible numbers.
+
+### PyGBe — dropped, with the measurement
+
+§8 row 3b wanted PyGBe to prove the protocol was transport-agnostic by being
+imported rather than executed. It cannot, and the reason is not a matter of
+effort:
+
+- `pip install` fails during metadata generation on **Python 3.12+** — its
+  vendored `versioneer.py` calls `configparser.SafeConfigParser()`, removed in
+  3.12. sashimi is `requires-python = ">=3.13"`, so PyGBe can never be imported
+  into sashimi's own interpreter.
+- On 3.11 the build then fails on osx-arm64: its Cython extensions hardcode
+  `-msse3` and `-fopenmp`.
+
+A package that builds only on ≤3.11 cannot be imported by a 3.13 process, so the
+in-process claim is unavailable at any price, and subprocessing it would prove
+nothing `sashimi.tabipb` has not already proven. `sashimi.gb` supplies the
+in-process proof instead, and supplies it better: no transport at all rather
+than a different one. The same conclusion as "backends cannot ship as extras",
+reached the same way — by trying it.
+
+**Phase 7 is complete.** Four backends across three solver families — finite
+difference (APBS, DelPhi ×2 flavours), boundary element (TABI-PB), analytic
+(GB) — all exercised in CI, and the protocol absorbed every one of them with
+two enum members and no new types.
 
 **Phase 8 — debye.** The validation ladder of §10; drop-in behind the backend
 interface; portability suite green on all architectures; BEM engine later.

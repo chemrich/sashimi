@@ -153,15 +153,16 @@ def test_an_approximation_does_not_widen_the_reference_spread():
 
 
 def test_an_approximation_is_measured_against_the_reference_consensus():
-    comparison = compare_results([run("a", -100.0), run("b", -102.0), approximation("gb", -121.0)])
+    comparison = compare_results([run("a", -100.0), run("b", -102.0), approximation("gb", -111.1)])
 
     # Consensus is the mean of the reference energies, -101.0.
-    assert comparison.approximation_deviation == {"gb": pytest.approx(20.0 / 101.0)}
+    assert comparison.approximation_deviation == {"gb": pytest.approx(10.1 / 101.0)}
     assert comparison.approximations_agree
     assert comparison.agrees
 
 
 def test_an_approximation_beyond_its_own_tolerance_disagrees():
+    """The 31%-wrong-surface and 35%-wrong-radii mistakes, in miniature."""
     comparison = compare_results([run("a", -100.0), run("b", -100.0), approximation("gb", -200.0)])
 
     assert comparison.approximation_deviation["gb"] == pytest.approx(1.0)
@@ -188,9 +189,9 @@ def test_a_lone_reference_still_calibrates_an_approximation():
 
 
 def test_approximations_alone_are_compared_but_not_called_accurate():
-    comparison = compare_results([approximation("gb", -100.0), approximation("gb2", -120.0)])
+    comparison = compare_results([approximation("gb", -100.0), approximation("gb2", -110.0)])
 
-    assert comparison.energy_spread == pytest.approx(20.0 / 120.0)
+    assert comparison.energy_spread == pytest.approx(10.0 / 110.0)
     assert comparison.tolerance == DEFAULT_APPROXIMATION_TOLERANCE
     assert comparison.agrees
     assert any("establishes accuracy" in note for note in comparison.notes)
@@ -224,11 +225,11 @@ def test_an_approximation_is_still_held_to_the_comparability_checks():
 
 
 def test_the_summary_names_the_approximation_separately():
-    comparison = compare_results([run("a", -100.0), run("b", -102.0), approximation("gb", -121.0)])
+    comparison = compare_results([run("a", -100.0), run("b", -102.0), approximation("gb", -111.1)])
     summary = comparison.summary()
 
     assert "2 backends agree" in summary  # the reference pair, not all three
-    assert "gb 19.80%" in summary
+    assert "gb 10.00%" in summary
 
 
 # --- refusals ----------------------------------------------------------------

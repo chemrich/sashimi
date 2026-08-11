@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from sashimi.capabilities import comparable_surface_models
+from sashimi.capabilities import comparable_surface_models, describe_capabilities
 from sashimi.corpus import (
     MANIFEST,
     Case,
@@ -62,9 +62,17 @@ def _tabipb_solver() -> Solver[Any]:
     return TabipbSolver()
 
 
+def _gb_solver() -> Solver[Any]:
+    # Lazy for consistency with the others, though this one has nothing to find.
+    from sashimi.gb import GbSolver  # noqa: PLC0415
+
+    return GbSolver()
+
+
 BACKENDS["apbs"] = _apbs_solver
 BACKENDS["delphi"] = _delphi_solver
 BACKENDS["tabipb"] = _tabipb_solver
+BACKENDS["gb"] = _gb_solver
 
 # Which request family each backend speaks. `Solver` is generic in its request
 # type, so a checker already refuses to hand a boundary-element request to an FD
@@ -73,6 +81,7 @@ FAMILIES: dict[str, SolverFamily] = {
     "apbs": SolverFamily.FINITE_DIFFERENCE,
     "delphi": SolverFamily.FINITE_DIFFERENCE,
     "tabipb": SolverFamily.BOUNDARY_ELEMENT,
+    "gb": SolverFamily.ANALYTIC,
 }
 
 
@@ -88,10 +97,13 @@ def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case,
 
 def _fd_solver(name: str) -> Solver[FiniteDifferenceRequest]:
     """A corpus backend. The corpus is finite-difference by construction — every
-    case records a grid — so a BEM backend cannot build or verify one."""
+    case records a grid — so neither a BEM nor an analytic backend can build or
+    verify one."""
     if FAMILIES[name] is not SolverFamily.FINITE_DIFFERENCE:
+        family = FAMILIES[name].value
+        article = "an" if family[0] in "aeiou" else "a"
         raise SystemExit(
-            f"{name} is a {FAMILIES[name].value} solver, and the corpus records grid "
+            f"{name} is {article} {family} solver, and the corpus records grid "
             "geometry for every case. Use `sashimi validate` to compare it against "
             "the finite-difference backends."
         )
@@ -187,6 +199,36 @@ def _pick_surface_model(requested: str | None) -> SurfaceModel:
     return SurfaceModel(shared[0])
 
 
+def _backends_supporting(
+    names: list[str], model: SurfaceModel, *, explicit: bool
+) -> tuple[list[str], dict[str, str]]:
+    """Drop backends that cannot answer on this surface, and say which and why.
+
+    Backends no longer support the same surfaces — Generalized Born answers only
+    on `molecular`, TABI-PB cannot mesh `van-der-waals`, `smoothed-molecular` is
+    APBS's alone. Handing a backend a surface it refuses makes every case report
+    as incomparable, which names neither the backend nor the reason.
+
+    A backend the caller named explicitly is kept, so `--backend gb --surface
+    van-der-waals` fails with GB's own message rather than being silently
+    dropped: asking for something impossible should say so.
+    """
+    if explicit:
+        return names, {}
+
+    supported = {
+        report["name"]: report["surface_models"] for report in describe_capabilities()["backends"]
+    }
+    kept, excluded = [], {}
+    for name in names:
+        models = supported.get(name)
+        if models is None or model.value in models:
+            kept.append(name)
+        else:
+            excluded[name] = f"does not support the {model.value} surface"
+    return kept, excluded
+
+
 def _validate(args: argparse.Namespace) -> int:
     names = args.backend or sorted(BACKENDS)
     unknown = [n for n in names if n not in BACKENDS]
@@ -200,11 +242,23 @@ def _validate(args: argparse.Namespace) -> int:
 
     model = _pick_surface_model(args.surface)
     cases = _select(MANIFEST, args.case)
+    names, excluded = _backends_supporting(names, model, explicit=bool(args.backend))
+    if len(names) < MIN_BACKENDS:
+        raise SystemExit(
+            f"only {len(names)} of the selected backends support the "
+            f"{model.value} surface. `sashimi capabilities` reports what each "
+            "one supports; `--surface` chooses a different one."
+        )
     backends = [Backend(name, BACKENDS[name](), FAMILIES[name]) for name in names]
 
     families = {b.family.value for b in backends}
     across = f" across {len(families)} solver families" if len(families) > 1 else ""
-    print(f"Comparing {', '.join(names)} on the {model.value} surface{across}.\n")
+    print(f"Comparing {', '.join(names)} on the {model.value} surface{across}.")
+    for name, reason in excluded.items():
+        # An excluded *backend* is not a skipped *case*: without this the run
+        # reports every case as incomparable and never says which backend did it.
+        print(f"  excluding {name}: {reason}")
+    print()
 
     disagreed: list[str] = []
     incomparable: list[str] = []

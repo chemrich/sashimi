@@ -88,25 +88,41 @@ class TestCapabilities:
         """This tool must survive exactly the situation it exists to explain."""
         caps = describe_capabilities()
 
-        assert caps["available_backends"] == []
-        assert all(backend["available"] is False for backend in caps["backends"])
+        # Every backend that needs installing is absent; `gb` needs none, so
+        # "nothing installed" is no longer the same thing as "nothing usable".
+        assert caps["available_backends"] == ["gb"]
+        assert all(
+            backend["available"] is False for backend in caps["backends"] if backend["name"] != "gb"
+        )
         assert "brew install apbs" in caps["backends"][0]["detail"]
         # Every backend must explain its own absence, not just the first one.
         assert "compbio.clemson.edu" in caps["backends"][1]["detail"]
         assert "Treecodes/TABI-PB" in caps["backends"][2]["detail"]
-        assert "0/3 backend" in caps["summary"]
+        assert "1/4 backend" in caps["summary"]
 
     def test_reports_every_backend_with_its_solver_family(self):
         """The family is what tells a caller why TABI-PB answers different
         questions: a boundary-element solve has no volume to interpolate."""
         backends = describe_capabilities()["backends"]
 
-        assert [b["name"] for b in backends] == ["apbs", "delphi", "tabipb"]
+        assert [b["name"] for b in backends] == ["apbs", "delphi", "tabipb", "gb"]
         assert [b["family"] for b in backends] == [
             "finite-difference",
             "finite-difference",
             "boundary-element",
+            "analytic",
         ]
+
+    def test_only_gb_reports_itself_as_an_approximation(self):
+        """The tier is what stops a triage number being read as an answer."""
+        tiers = {b["name"]: b["accuracy_tier"] for b in describe_capabilities()["backends"]}
+
+        assert tiers == {
+            "apbs": "reference",
+            "delphi": "reference",
+            "tabipb": "reference",
+            "gb": "approximate",
+        }
 
     def test_one_backend_is_comparable_with_nothing(self, monkeypatch):
         """A lone backend trivially shares every model with itself.
@@ -114,6 +130,10 @@ class TestCapabilities:
         Reporting those as comparable would tell a caller cross-validation is
         available when there is nothing installed to validate against — which is
         exactly what `tests/test_cross_validation.py` tripped over.
+
+        Reaching this state now takes hiding `gb` as well, since it is always
+        available. That is the rule still holding rather than going away: a real
+        installation has a comparison partner whether or not it installed one.
         """
 
         def which_apbs_only(name: str) -> str | None:
@@ -125,6 +145,10 @@ class TestCapabilities:
         monkeypatch.setenv("SASHIMI_DELPHI_PATH", "/nonexistent/delphi")
         monkeypatch.setenv("SASHIMI_TABIPB_PATH", "/nonexistent/tabipb")
         monkeypatch.setattr("shutil.which", which_apbs_only)
+        monkeypatch.setattr(
+            "sashimi.capabilities._gb_report",
+            lambda: BackendReport("gb", False, "analytic", detail="hidden for this test"),
+        )
         try:
             assert comparable_surface_models() == []
         finally:
@@ -149,6 +173,10 @@ class TestCapabilities:
         monkeypatch.setattr("sashimi.capabilities._apbs_report", lambda: reports[0])
         monkeypatch.setattr("sashimi.capabilities._delphi_report", lambda: reports[1])
         monkeypatch.setattr("sashimi.capabilities._tabipb_report", lambda: reports[2])
+        monkeypatch.setattr(
+            "sashimi.capabilities._gb_report",
+            lambda: BackendReport("unused", False, "analytic"),
+        )
 
         assert comparable_surface_models() == ["molecular"]
 
@@ -165,6 +193,10 @@ class TestCapabilities:
         monkeypatch.setattr(
             "sashimi.capabilities._tabipb_report",
             lambda: BackendReport("tabipb", False, "bem", surface_models=("molecular",)),
+        )
+        monkeypatch.setattr(
+            "sashimi.capabilities._gb_report",
+            lambda: BackendReport("unused", False, "analytic"),
         )
 
         assert comparable_surface_models() == []

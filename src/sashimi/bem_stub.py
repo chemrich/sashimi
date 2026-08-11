@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sashimi.constants import ANGSTROM, AVOGADRO, ELEMENTARY_CHARGE, VACUUM_PERMITTIVITY
 from sashimi.errors import UnsupportedRequest
 from sashimi.protocol import (
     DIMENSIONS,
@@ -30,12 +31,6 @@ from sashimi.protocol import (
 )
 
 __all__ = ["StubBemSolver"]
-
-# CODATA 2018, matching tests/born_reference.py.
-ELEMENTARY_CHARGE = 1.602176634e-19
-VACUUM_PERMITTIVITY = 8.8541878128e-12
-AVOGADRO = 6.02214076e23
-ANGSTROM = 1e-10
 
 
 def fibonacci_sphere(n: int) -> FloatArray:
