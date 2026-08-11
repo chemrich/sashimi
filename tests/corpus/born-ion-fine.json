@@ -2,7 +2,14 @@
   "name": "born-ion-fine",
   "description": "Born ion at 2x resolution. Pairs with the coarse case to show convergence.",
   "source": "born-ion",
+  "tier": "fast",
   "backend": "apbs-3.4.1",
+  "analytic": {
+    "energy_kj_mol": -228.61080098772135,
+    "rtol": 0.008,
+    "source": "Born: q=1e, a=3 A, eps_p=1",
+    "relative_error": 0.0011311052223317458
+  },
   "grid_spec": {
     "resolution": 0.25,
     "padding": 10.0,

@@ -2,7 +2,9 @@
   "name": "peptide-low-dielectric",
   "description": "Same peptide with a harder solute interior; catches dielectric plumbing.",
   "source": "ala-gly.pqr",
+  "tier": "fast",
   "backend": "apbs-3.4.1",
+  "analytic": null,
   "grid_spec": {
     "resolution": 0.6,
     "padding": 8.0,

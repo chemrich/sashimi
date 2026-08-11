@@ -17,8 +17,10 @@ from sashimi.capabilities import comparable_surface_models, describe_capabilitie
 from sashimi.corpus import (
     MANIFEST,
     Case,
+    CaseTier,
     Tolerances,
     build_case,
+    cases_for_tier,
     load_summary,
     summary_path,
     verify_case,
@@ -113,7 +115,7 @@ def _fd_solver(name: str) -> Solver[FiniteDifferenceRequest]:
 def _build(args: argparse.Namespace) -> int:
     solver = _fd_solver(args.backend)
     directory = Path(args.directory) if args.directory else None
-    cases = _select(MANIFEST, args.case)
+    cases = _select(cases_for_tier(CaseTier(args.tier)), args.case)
 
     for case in cases:
         path = summary_path(case, directory)
@@ -133,7 +135,7 @@ def _build(args: argparse.Namespace) -> int:
 def _verify(args: argparse.Namespace) -> int:
     solver = _fd_solver(args.backend)
     directory = Path(args.directory) if args.directory else None
-    cases = _select(MANIFEST, args.case)
+    cases = _select(cases_for_tier(CaseTier(args.tier)), args.case)
     tolerances = Tolerances(
         energy_rtol=args.energy_rtol,
         potential_rtol=args.potential_rtol,
@@ -333,6 +335,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     common.add_argument("--case", action="append", help="limit to a named case; repeatable")
     common.add_argument("--directory", help="where summaries live (default: tests/corpus)")
+    common.add_argument(
+        "--tier",
+        choices=[t.value for t in CaseTier],
+        default=CaseTier.STANDARD.value,
+        help=(
+            "how much of the corpus to run; cumulative "
+            f"(default: {CaseTier.STANDARD.value}, which is what CI runs per push)"
+        ),
+    )
 
     builder = actions.add_parser("build", parents=[common], help="record summaries")
     builder.add_argument("--force", action="store_true", help="overwrite existing summaries")
