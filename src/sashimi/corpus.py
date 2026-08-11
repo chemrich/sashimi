@@ -25,7 +25,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from sashimi.analytic import born_solvation_energy
+from sashimi.analytic import born_solvation_energy, kirkwood_solvation_energy
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
     DIMENSIONS,
@@ -36,6 +36,7 @@ from sashimi.protocol import (
     PQRData,
     SolventModel,
     Solver,
+    SurfaceModel,
 )
 
 __all__ = [
@@ -78,6 +79,21 @@ def born_ion_pqr(radius: float, charge: float = 1.0) -> str:
     return f"ATOM      1  I   ION     1       0.000   0.000  0.000 {charge:5.2f} {radius:5.2f}\n"
 
 
+def kirkwood_pqr(radius: float, offset: float, charge: float = 1.0) -> str:
+    """A sphere with its charge off-centre, as two atoms.
+
+    The dielectric boundary is one uncharged sphere of `radius`; the charge is a
+    second atom of *zero* radius sitting `offset` from the centre, which adds no
+    volume and so leaves the boundary a clean sphere. That is exactly Kirkwood's
+    geometry, and it is only expressible because a PQR separates charge from
+    radius.
+    """
+    return (
+        f"ATOM      1  C   SPH     1       0.000   0.000  0.000  0.00 {radius:5.2f}\n"
+        f"ATOM      2  Q   SPH     1     {offset:7.3f}   0.000  0.000 {charge:5.2f}  0.00\n"
+    )
+
+
 N_PROBES = 50
 PROBE_SEED = 20260809  # pinned; probe placement must never move between builds
 PROBE_INSET = 0.6  # sample the middle 60% of the box, away from boundary effects
@@ -87,14 +103,20 @@ class CaseTier(StrEnum):
     """How much of the corpus to run, because not all of it can run every push.
 
     Cumulative: `STANDARD` includes `FAST`, `FULL` includes both. The split is
-    wall time, not importance — a 16,000-atom solve is 15 s per backend per
-    platform, and a corpus that made every push wait for it would be a corpus
-    people turn off.
+    wall time, not importance — a corpus that made every push wait for it is a
+    corpus people turn off.
+
+    Membership is assigned from *measured* per-case cost rather than by
+    intuition, which had already drifted once: the 0.25 A cases look small
+    because their solutes are, and a Kirkwood sphere at that spacing is 5.2 s
+    against a Born ion's 0.47 s at 0.5 A. That put 52 seconds of work in a tier
+    whose contract says "seconds". Totals as measured on APBS 3.4.1:
+    `fast` 11 s, `standard` 93 s cumulative, `full` 138 s cumulative.
     """
 
-    FAST = "fast"  # seconds in total; every push
-    STANDARD = "standard"  # ~2 minutes; every push
-    FULL = "full"  # tens of minutes; nightly or on demand
+    FAST = "fast"  # ~10 s in total; `pytest` verifies this one
+    STANDARD = "standard"  # ~90 s cumulative; a dedicated CI step per push
+    FULL = "full"  # everything; nightly or on demand
 
 
 TIER_ORDER: tuple[CaseTier, ...] = (CaseTier.FAST, CaseTier.STANDARD, CaseTier.FULL)
@@ -242,7 +264,17 @@ SYNTHETIC: dict[str, str] = {
     **{f"born-ion-r{r:g}": born_ion_pqr(r) for r in (1.0, 2.0, 4.0, 6.0)},
     "born-ion-negative": born_ion_pqr(3.0, -1.0),
     "born-ion-divalent": born_ion_pqr(3.0, 2.0),
+    **{f"kirkwood-{int(f * 10):02d}": kirkwood_pqr(3.0, 3.0 * f) for f in (0.3, 0.5, 0.7, 0.9)},
 }
+
+
+def _kirkwood(offset_fraction: float, *, rtol: float) -> AnalyticReference:
+    """The off-centre closed form for a 3 A sphere, computed not quoted."""
+    return AnalyticReference(
+        energy_kj_mol=kirkwood_solvation_energy(3.0, 3.0 * offset_fraction, 1.0, 1.0, 78.54),
+        rtol=rtol,
+        source=f"Kirkwood: q=1e at d/a={offset_fraction:g} in a 3 A sphere, eps_p=1",
+    )
 
 
 def _born(
@@ -277,6 +309,7 @@ MANIFEST: tuple[Case, ...] = (
         grid=GridSpec(resolution=0.25, padding=10.0),
         solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
         analytic=_born(3.0, rtol=0.008),  # measured 0.278%; the pair's whole point
+        tier=CaseTier.STANDARD,
     ),
     Case(
         name="born-ion-salt",
@@ -331,6 +364,7 @@ MANIFEST: tuple[Case, ...] = (
         grid=GridSpec(resolution=0.25, padding=10.0),
         solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
         analytic=_born(1.0, rtol=0.055),  # measured 3.197%
+        tier=CaseTier.STANDARD,
     ),
     Case(
         name="born-ion-r2",
@@ -415,7 +449,7 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(
             solute_dielectric=2.0, solvent_dielectric=78.00, ionic_strength=0.0, temperature=300.0
         ),
-        tier=CaseTier.FAST,
+        tier=CaseTier.STANDARD,
     ),
     Case(
         name="methoxide",
@@ -425,7 +459,7 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(
             solute_dielectric=2.0, solvent_dielectric=78.00, ionic_strength=0.0, temperature=300.0
         ),
-        tier=CaseTier.FAST,
+        tier=CaseTier.STANDARD,
     ),
     Case(
         name="acetic-acid",
@@ -433,7 +467,7 @@ MANIFEST: tuple[Case, ...] = (
         source="apbs-examples/acetic-acid.pqr",
         grid=GridSpec(resolution=0.25, padding=10.0),
         solvent=SolventModel(solute_dielectric=2.0, ionic_strength=0.0),
-        tier=CaseTier.FAST,
+        tier=CaseTier.STANDARD,
     ),
     Case(
         name="acetate",
@@ -441,7 +475,7 @@ MANIFEST: tuple[Case, ...] = (
         source="apbs-examples/acetate.pqr",
         grid=GridSpec(resolution=0.25, padding=10.0),
         solvent=SolventModel(solute_dielectric=2.0, ionic_strength=0.0),
-        tier=CaseTier.FAST,
+        tier=CaseTier.STANDARD,
     ),
     Case(
         name="fas2",
@@ -498,6 +532,188 @@ MANIFEST: tuple[Case, ...] = (
         description="2,482 atoms, the largest case; 13 s, which is why it is not standard.",
         source="apbs-examples/hca.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(),
+        tier=CaseTier.FULL,
+    ),
+    # --- charge placement ---------------------------------------------------
+    #
+    # The Born ion is symmetric in every way a solver could be wrong about
+    # direction, so it cannot catch a mistake in *where* a charge is. Kirkwood's
+    # series is the same sphere with the charge moved off centre, and every term
+    # above the monopole — the whole multipole structure of the reaction field —
+    # only exists once it moves.
+    Case(
+        name="kirkwood-03",
+        description="Charge at 0.3 of the way to the boundary of a 3 A sphere.",
+        source="kirkwood-03",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_kirkwood(0.3, rtol=0.005),  # measured 0.097%
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-05",
+        description="Halfway out. The series is well past the monopole here.",
+        source="kirkwood-05",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_kirkwood(0.5, rtol=0.012),  # measured 0.473%
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-07",
+        description="0.7 out, where the reaction field is dominated by high multipoles.",
+        source="kirkwood-07",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_kirkwood(0.7, rtol=0.005),  # measured 0.114%
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-09",
+        description=(
+            "0.3 A from the dielectric boundary at 0.25 A spacing — 7.7% out, and "
+            "the case that records where charge placement stops being resolvable."
+        ),
+        source="kirkwood-09",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        analytic=_kirkwood(0.9, rtol=0.12),  # measured 7.678%
+        tier=CaseTier.STANDARD,
+    ),
+    # --- surface models -----------------------------------------------------
+    #
+    # Until these, every case in the corpus was `smoothed-molecular`, which is
+    # APBS's alone. Two consequences, both bad: the single largest modelling
+    # choice in the calculation — worth 25.7% on a dipeptide (section 5) — was
+    # untested, and *no corpus case could ever be verified against another
+    # backend*, which undercuts the corpus's stated job as debye's acceptance
+    # gate. Every case below runs on a model at least two backends support.
+    Case(
+        name="born-ion-molecular",
+        description=(
+            "The Born ion on the molecular surface, which DelPhi and TABI-PB can "
+            "also solve. Rolling a probe over a lone sphere cannot carve a "
+            "re-entrant surface, so the boundary is the sphere and Born still holds."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(3.0, rtol=0.05),  # measured 2.36%
+    ),
+    Case(
+        name="born-ion-vdw",
+        description=(
+            "The same ion with the probe collapsed. For one sphere this must "
+            "return the molecular answer exactly — the two surfaces coincide, and "
+            "no other case in the corpus can catch a probe applied where it "
+            "should not be."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        analytic=_born(3.0, rtol=0.05),
+    ),
+    Case(
+        name="peptide-molecular",
+        description="ALA-GLY on the molecular surface: the cross-backend workhorse.",
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+    ),
+    Case(
+        name="peptide-vdw",
+        description="ALA-GLY with no probe. Against `peptide-molecular` this is the 25.7%.",
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+    ),
+    Case(
+        name="methanol-molecular",
+        description="A 3-atom solute where the probe genuinely changes the boundary.",
+        source="apbs-examples/methanol.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0,
+            solvent_dielectric=78.00,
+            ionic_strength=0.0,
+            temperature=300.0,
+            surface_model=SurfaceModel.MOLECULAR,
+        ),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="acetate-molecular",
+        description="A charged small molecule on a shared surface model.",
+        source="apbs-examples/acetate.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="lysozyme-molecular",
+        description="Hen lysozyme where all four backends can be asked the same question.",
+        source="apbs-examples/2LZT-ASP66.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="barnase-vdw",
+        description="A protein-scale van der Waals boundary; the surface TABI-PB refuses.",
+        source="apbs-examples/barnase.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
+    # --- the solvent, swept -------------------------------------------------
+    Case(
+        name="peptide-no-salt",
+        description="ALA-GLY at zero ionic strength; the low end of the salt arm.",
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(ionic_strength=0.0),
+    ),
+    Case(
+        name="peptide-high-salt",
+        description="500 mM: a Debye length of 4.3 A, well inside the solute's own size.",
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(ionic_strength=0.5),
+    ),
+    Case(
+        name="peptide-cold",
+        description=(
+            "277 K. Temperature enters both the Boltzmann factor and the kT/e "
+            "the potential is reported in, and a solver that reads it in the "
+            "wrong unit still returns a plausible number — which is exactly how "
+            "DelPhi's Celsius parameter cost a day (section 12)."
+        ),
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(temperature=277.0),
+    ),
+    Case(
+        name="peptide-low-solvent-dielectric",
+        description="Solvent dielectric 4, a membrane interior rather than water.",
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(solvent_dielectric=4.0),
+    ),
+    Case(
+        name="fas2-fine",
+        description=(
+            "906 atoms at 0.35 A. The corpus tests convergence only on a single "
+            "sphere otherwise; this is the same claim on a real charge distribution."
+        ),
+        source="apbs-examples/fas2.pqr",
+        grid=GridSpec(resolution=0.35, padding=10.0),
         solvent=SolventModel(),
         tier=CaseTier.FULL,
     ),

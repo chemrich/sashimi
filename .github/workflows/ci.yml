@@ -210,6 +210,14 @@ jobs:
         if: steps.tabipb_path.outputs.found == 'true'
         run: uv run --frozen pytest -q -m tabipb
 
+      # `pytest` verifies the fast tier so the local edit-test loop stays a
+      # loop; the standard tier is ~90 s of solving and runs here instead. Its
+      # own step on purpose: a corpus diff is a real result change, and it
+      # should read as one rather than as one failure among four hundred tests.
+      # `full` is not run per push — `sashimi corpus verify --tier full`.
+      - name: Verify the corpus (standard tier)
+        run: uv run --frozen sashimi corpus verify --tier standard
+
   # Single stable check name for the branch ruleset to require. Matrix job names
   # change whenever the matrix does; this one does not.
   ci-ok:
