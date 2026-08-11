@@ -10,9 +10,9 @@ discipline of section 8 rather than a detail. Surface definition moves a
 dipeptide's solvation energy across 25.7% on this code, so a spread computed
 between an APBS `smoothed-molecular` and a DelPhi `molecular` would be a
 modelling difference misreported as a solver disagreement — worse than no
-number. `comparable_surface_models()` is the precondition, and it is frequently
-empty: with pyDelPhi installed instead of the C++ build it is empty by
-definition, and this file skips entirely rather than inventing a comparison.
+number. `comparable_surface_models()` is the precondition, and it is empty
+whenever fewer than two backends are installed, in which case this file skips
+entirely rather than inventing a comparison.
 
 The gate is deliberately loose. Two independent finite-difference codes on
 different grids will never agree to corpus tolerance, and pinning the measured
@@ -31,9 +31,11 @@ import pytest
 
 from sashimi.apbs import ApbsSolver
 from sashimi.capabilities import comparable_surface_models
-from sashimi.delphi import DelphiSolver
+from sashimi.delphi import DelphiSolver, discover_delphi
+from sashimi.delphi.discover import DelphiFlavour
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
+    EnergyTerm,
     FiniteDifferenceRequest,
     GridSpec,
     SolventModel,
@@ -55,8 +57,9 @@ BORN_ION_PQR = "ATOM      1  I   ION     1       0.000   0.000  0.000  1.00  3.0
 # guess which: fewer than two backends installed, or two that overlap nowhere.
 NO_SHARED_MODEL = (
     "no surface model is comparable across the installed backends — either fewer "
-    "than two are installed, or they overlap nowhere, which is the case for APBS "
-    "and pyDelPhi. Cross-validation needs the C++ DelPhi build."
+    "than two are installed, or the installed pair overlaps nowhere. Both shipped "
+    "DelPhi flavours share `molecular` with APBS, so in practice this means a "
+    "backend is missing."
 )
 
 
@@ -99,10 +102,11 @@ def test_backends_agree_on_shared_surface_models(structures, case):
         pytest.skip(NO_SHARED_MODEL)
 
     for model in models:
-        # Zero salt, deliberately: APBS reports a polar solvation energy and
-        # DelPhi a reaction-field energy, and those coincide only where there is
-        # no mobile-ion contribution. `validate` refuses the salted comparison,
-        # which `test_salted_comparison_is_refused` covers.
+        # Zero salt, so this case is comparable whichever DelPhi flavour is
+        # installed: pyDelPhi reports the reaction field only, which coincides
+        # with APBS's polar solvation energy exactly when there are no mobile
+        # ions. The salted case is
+        # `test_salted_comparison_depends_on_the_flavours_energy_term`.
         solvent = SolventModel(
             surface_model=model, solute_dielectric=1.0 if case == "born-ion" else 2.0
         )
@@ -113,21 +117,32 @@ def test_backends_agree_on_shared_surface_models(structures, case):
         assert comparison.agrees, f"{case} / {model.value}: {comparison.summary()}"
 
 
-def test_salted_comparison_is_refused(structures):
-    """The engine's central refusal, against the real backends.
+def test_salted_comparison_depends_on_the_flavours_energy_term(structures):
+    """Salt is where the two backends' definitions used to diverge.
 
-    APBS's difference-of-blocks carries the mobile-ion term and DelPhi's
-    reaction field does not, so at 0.15 M these are different quantities. The
-    spread would look like a modest disagreement rather than the definitional
-    gap it is, which is precisely the failure mode worth refusing.
+    The C++ build is asked for the ion-inclusive quantity, so it reports APBS's
+    term and a salted comparison is legitimate — which is the whole reason for
+    reconstructing that term rather than reading DelPhi's headline line.
+    pyDelPhi cannot report it, so the same request is refused there.
+
+    Both branches are the engine working. Which one runs is a property of the
+    installed flavour, so the test asks rather than assumes.
     """
     models = shared_models()
     if not models:
         pytest.skip(NO_SHARED_MODEL)
 
     solvent = SolventModel(surface_model=models[0], ionic_strength=0.15)
-    with pytest.raises(Incomparable, match="mobile-ion contribution"):
-        _compare(structures["ala-gly"], solvent)
+
+    if discover_delphi().flavour is DelphiFlavour.CPP:
+        comparison = _compare(structures["ala-gly"], solvent)
+        assert comparison.agrees, comparison.summary()
+        assert all(r.energy_term is EnergyTerm.POLAR_SOLVATION for r in comparison.runs), (
+            "a salted comparison is only meaningful when both report the same term"
+        )
+    else:
+        with pytest.raises(Incomparable, match="mobile-ion contribution"):
+            _compare(structures["ala-gly"], solvent)
 
 
 def test_potentials_are_comparable_across_incompatible_grids(structures):

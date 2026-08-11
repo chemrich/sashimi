@@ -20,6 +20,7 @@ from sashimi.delphi.discover import DelphiFlavour, DelphiNotFound
 from sashimi.delphi.options import SUPPORTED_SURFACES
 from sashimi.errors import UnsupportedRequest
 from sashimi.protocol import (
+    EnergyTerm,
     Equation,
     FiniteDifferenceRequest,
     GridSpec,
@@ -148,23 +149,28 @@ def test_nonlinear_is_refused(binary, ion):
         DelphiSolver().solve(request)
 
 
-def test_the_reported_energy_is_the_reaction_field_term_only(binary, ion):
-    """DelPhi's energy does not move with salt, and that is not a bug.
+def test_the_reported_energy_matches_the_declared_term(binary, ion):
+    """Whether salt moves the answer is a property of the term being reported.
 
-    The natural assertion is that mobile ions change the answer, which is what
-    APBS's difference-of-blocks shows. DelPhi reports the polarization term
-    alone: measured here, -92.22 kT from the C++ build and -228.611 kJ/mol from
-    pyDelPhi at both 0 M and 0.5 M. The salt does reach the solver — the C++
-    build reports a Debye length of 4.307 A at 0.5 M — so this pins a
-    definitional difference between the backends, not a parameter that failed to
-    arrive.
+    The C++ build is asked for the ion-inclusive quantity, so mobile ions must
+    change its answer and make it more favourable — screening stabilises the
+    charge. pyDelPhi has no ion-atmosphere column and reports the reaction field
+    alone, which is salt-independent by construction.
 
-    Both flavours, deliberately. An earlier version asserted they differed here,
-    on a measurement taken from pyDelPhi's Gaussian path against the C++ build's
-    molecular one; on the same surface model they agree exactly.
+    Asserting each flavour against its own declared `EnergyTerm` is the point:
+    `sashimi.validate` trusts that declaration, so a backend whose number does
+    not behave like the term it claims would silently corrupt every comparison.
     """
     salted = DelphiSolver().solve(_request(ion, binary, solvent={"ionic_strength": 0.5}))
     plain = DelphiSolver().solve(_request(ion, binary))
+    assert salted.energy_kj_mol is not None
+    assert plain.energy_kj_mol is not None
 
-    assert salted.energy_kj_mol == pytest.approx(plain.energy_kj_mol, rel=1e-6)
-    assert "polarization only" in salted.diagnostics["energy_term"]
+    if binary.flavour is DelphiFlavour.CPP:
+        assert salted.provenance.energy_term is EnergyTerm.POLAR_SOLVATION
+        assert salted.energy_kj_mol < plain.energy_kj_mol
+        assert "mobile-ion atmosphere" in salted.diagnostics["energy_term"]
+    else:
+        assert salted.provenance.energy_term is EnergyTerm.REACTION_FIELD
+        assert salted.energy_kj_mol == pytest.approx(plain.energy_kj_mol, rel=1e-6)
+        assert "polarization only" in salted.diagnostics["energy_term"]

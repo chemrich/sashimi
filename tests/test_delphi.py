@@ -31,7 +31,11 @@ from sashimi.delphi.options import (
     check_equation,
     resolve_surface,
 )
-from sashimi.delphi.run import parse_cpp_energy, parse_csv_energy
+from sashimi.delphi.run import (
+    parse_cpp_polar_solvation,
+    parse_cpp_reaction_field,
+    parse_csv_energy,
+)
 from sashimi.delphi.units import BOHR_TO_ANGSTROM, kt_to_kj_per_mol
 from sashimi.errors import GridTooLarge, MalformedStructure, UnsupportedRequest
 from sashimi.pqr import format_pqr, parse_pqr, read_pqr
@@ -336,13 +340,37 @@ def test_kt_converts_to_kj_per_mol():
     assert kt_to_kj_per_mol(-92.22, 298.15) == pytest.approx(-228.6, abs=0.2)
 
 
-def test_cpp_energy_is_parsed_from_stdout():
-    stdout = " Energy> Corrected reaction field energy               :       -92.22 kT\n"
-    assert parse_cpp_energy(stdout) == pytest.approx(-92.22)
+CPP_ENERGY_BLOCK = """\
+ Energy> Corrected reaction field energy               :       -84.40 kT
+ Energy> Coulombic energy                              :     -271.23 kT
+ Energy> All required energy terms but grid energy     :     -355.71 kT
+"""
+
+
+def test_the_reaction_field_line_is_parsed():
+    assert parse_cpp_reaction_field(CPP_ENERGY_BLOCK) == pytest.approx(-84.40)
+
+
+def test_polar_solvation_is_the_aggregate_less_the_coulombic_term():
+    """APBS's quantity, reconstructed: reaction field plus the ion atmosphere.
+
+    The aggregate is Nonlinear + Coulombic + Solvation + SolvToChgIn +
+    SolvToChgOut, so removing Coulombic leaves the polar solvation energy. Here
+    that is -355.71 - (-271.23) = -84.48, which exceeds the -84.40 reaction
+    field by the -0.08 kT the mobile ions contribute.
+    """
+    polar = parse_cpp_polar_solvation(CPP_ENERGY_BLOCK)
+    reaction_field = parse_cpp_reaction_field(CPP_ENERGY_BLOCK)
+    assert polar is not None
+    assert reaction_field is not None
+
+    assert polar == pytest.approx(-84.48)
+    assert polar < reaction_field  # the ion atmosphere is stabilising
 
 
 def test_missing_cpp_energy_is_none():
-    assert parse_cpp_energy("Energy> Coulombic energy : 0.00 kT") is None
+    assert parse_cpp_reaction_field("Energy> Coulombic energy : 0.00 kT") is None
+    assert parse_cpp_polar_solvation("Energy> Coulombic energy : 0.00 kT") is None
 
 
 def test_pydelphi_energy_is_read_from_its_csv(tmp_path):
@@ -378,17 +406,32 @@ def test_boundary_condition_is_a_code_for_cpp_and_a_name_for_pydelphi(born):
     assert "bndcon             = coulombic" in py
 
 
+def test_cpp_requests_the_ion_inclusive_energy(born):
+    """`s` alone is the reaction field; `s,ion` leaves the ion terms at zero.
+
+    They are computed inside the Coulombic routine, so `c` has to be requested
+    too and subtracted back off. Pinning the statement keeps that reasoning from
+    being tidied away into something that looks more sensible and is wrong.
+    """
+    text = build_input(
+        size_grid(born, GridSpec()),
+        SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        flavour=DelphiFlavour.CPP,
+    )
+    assert "energy(s,c,ion)" in text
+
+
 def test_only_cpp_asks_for_energies_explicitly(born):
     solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
     cpp = build_input(size_grid(born, GridSpec()), solvent, flavour=DelphiFlavour.CPP)
-    assert "energy(s,c)" in cpp
+    assert "energy(s,c,ion)" in cpp
 
     py = build_input(
         size_grid(born, GridSpec()),
         dataclasses.replace(solvent, surface_model=SurfaceModel.GAUSSIAN),
         flavour=DelphiFlavour.PYDELPHI,
     )
-    assert "energy(s,c)" not in py  # computed unconditionally, written to CSV
+    assert "energy(s,c,ion)" not in py  # computed unconditionally, written to CSV
 
 
 def test_salt_and_ion_radius_reach_the_file(born):

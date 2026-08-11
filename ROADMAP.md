@@ -767,15 +767,35 @@ held fixed, and none of those differences is visible in the number itself.
 The energy term is the one this phase discovered and the one §14 asked for.
 `EnergyTerm` is now a protocol-level enum carried in `Provenance`, because
 "what quantity is this" is a question every backend must answer and no
-comparison can be trusted without it. APBS reports `polar-solvation`, DelPhi
-`reaction-field`.
+comparison can be trusted without it.
 
-The first version of the rule was "same term", and it refused all five corpus
-cases — correct and useless. The rule that ships is **same term, or terms that
-provably coincide under this request**: the two differ by exactly the mobile-ion
-contribution, so at zero ionic strength they are the same quantity and the
-comparison proceeds with a note. At nonzero salt it refuses. Three of five
-corpus cases are zero-salt and now compare; two refuse, with the reason.
+**The better fix was to remove the mismatch rather than tolerate it.** DelPhi's
+headline "corrected reaction field energy" is the polarization term alone, but
+the C++ build can be asked for APBS's quantity, and now is. The request has to
+say `energy(s,c,ion)`, which is not guessable: `s` gives the reaction field,
+adding `ion` changes nothing because the ion-atmosphere terms
+(`fEnergy_SolvToChgIn/Out`) are computed *inside the Coulombic routine*, so `c`
+must be requested too and subtracted back off the aggregate. DelPhi has a
+dedicated line that computes exactly this, and it is commented out in 8.5.0.
+
+That the reconstructed term is the right one is evidenced three ways rather than
+assumed: it is zero at zero salt, it grows monotonically with salt (−0.20 kT at
+0.15 M, −0.34 at 0.5 M on a Born ion), and adding it makes the gap to APBS
+**salt-independent** — 2.30 / 2.59 / 2.70% across 0 / 0.15 / 0.5 M becomes
+2.30 / 2.38 / 2.34%. A missing term produces that signature; a coincidence does
+not.
+
+So APBS and the C++ DelPhi now both report `polar-solvation`, and **all five
+corpus cases compare** where three did before. Hen lysozyme at physiological
+salt — previously refused outright — agrees to **1.97%**.
+
+The comparability rule survives for the case it cannot fix: pyDelPhi's results
+CSV has no ion-atmosphere column, so it stays on `reaction-field`. The rule is
+**same term, or terms that provably coincide under this request** — the two
+differ by exactly the mobile-ion contribution, so at zero ionic strength they
+are the same quantity and the comparison proceeds with a note, and at nonzero
+salt it refuses. That refinement was itself a correction: the first version was
+"same term" and refused all five corpus cases, which is correct and useless.
 
 **The `verify_case` blocker is resolved** rather than worked around. That
 function compares grid shape first and bails, which is right for "has this
@@ -785,11 +805,12 @@ construction (APBS's 32c+1 dime against DelPhi's any-odd cubic gsize).
 and potentials are compared by interpolating both maps at the same *physical*
 coordinates inside the box they share. `corpus` is untouched.
 
-Measured, all at zero salt on the molecular surface: **1.70% on hen lysozyme**
-(1,960 atoms, APBS 129×161×129 against DelPhi 133³, potential RMSD 4.29 kT/e
-over 200 shared points), 2.30% on the Born ion at 0.5 Å and **0.62% at 0.25 Å** —
-the two codes converging on each other as the grid refines, which is the
-behaviour that makes the agreement meaningful rather than coincidental.
+Measured on the molecular surface: **1.70% on hen lysozyme** at zero salt and
+**1.97% at 0.15 M** (1,960 atoms, APBS 129×161×129 against DelPhi 133³,
+potential RMSD 4.29 kT/e over 200 shared points); 2.30% on the Born ion at
+0.5 Å and **0.62% at 0.25 Å** — the two codes converging on each other as the
+grid refines, which is the behaviour that makes the agreement meaningful rather
+than coincidental.
 
 Remaining in this phase: TABI-PB, which forces the surface-potential path to be
 real; PyGBe in-process, which proves transport-agnosticism; optional GB tier for

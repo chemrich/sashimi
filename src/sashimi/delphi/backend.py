@@ -17,9 +17,14 @@ from sashimi.delphi.discover import DelphiBinary, discover_delphi
 from sashimi.delphi.grid import size_grid
 from sashimi.delphi.input import build_input, resolved_parameters
 from sashimi.delphi.options import DelphiOptions, check_equation
-from sashimi.delphi.run import DEFAULT_TIMEOUT, ENERGY_TERM, run_delphi
+from sashimi.delphi.run import (
+    DEFAULT_TIMEOUT,
+    ENERGY_TERM_DETAIL,
+    ENERGY_TERMS,
+    run_delphi,
+)
 from sashimi.pqr import format_pqr
-from sashimi.protocol import EnergyTerm, FiniteDifferenceRequest, Provenance, SolveResult
+from sashimi.protocol import FiniteDifferenceRequest, Provenance, SolveResult
 
 __all__ = ["DelphiSolver"]
 
@@ -82,9 +87,9 @@ class DelphiSolver:
                 grid, solvent, self.options, flavour=flavour, equation=request.equation
             ),
             wall_seconds=round(run.wall_seconds, 3),
-            # Polarization only, and it does not move with ionic strength;
-            # see `sashimi.delphi.run`. Not APBS's quantity.
-            energy_term=EnergyTerm.REACTION_FIELD,
+            # Differs by flavour: only the C++ build can be asked for the
+            # ion-inclusive quantity. See `sashimi.delphi.run`.
+            energy_term=ENERGY_TERMS[flavour],
         )
 
         result = SolveResult(
@@ -95,7 +100,7 @@ class DelphiSolver:
                 **grid.as_diagnostics(),
                 "flavour": flavour.value,
                 # Not the same quantity APBS reports; see `sashimi.delphi.run`.
-                "energy_term": ENERGY_TERM,
+                "energy_term": ENERGY_TERM_DETAIL[flavour],
                 "resolution_requested": request.grid.resolution,
                 "resolution_relaxed": any(s > request.grid.resolution + 1e-9 for s in grid.spacing),
             },
