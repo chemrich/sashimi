@@ -35,6 +35,7 @@ Diagnostics = dict[str, Any]
 
 __all__ = [
     "DIMENSIONS",
+    "AccuracyTier",
     "BoundaryElementRequest",
     "Diagnostics",
     "EnergyTerm",
@@ -87,6 +88,27 @@ class EnergyTerm(StrEnum):
 
     POLAR_SOLVATION = "polar-solvation"  # solvated minus uniform-dielectric, ion-free
     REACTION_FIELD = "reaction-field"  # polarization only; excludes the mobile-ion term
+
+
+class AccuracyTier(StrEnum):
+    """How close to solving the Poisson-Boltzmann equation a backend gets.
+
+    `EnergyTerm` answers "what quantity is this"; this answers "how was it
+    obtained". Two backends that discretize the same equation differently
+    should agree to within discretization noise — a few percent — and a wider
+    gap means someone has a bug. An approximation that never solves the
+    equation at all has no such obligation: it is expected to differ, by tens
+    of percent, and saying so is the honest description rather than an excuse.
+
+    Cross-solver comparison needs the distinction because it has exactly one
+    verdict to give. Averaging an approximation into a spread with the solvers
+    it approximates destroys both numbers: the disagreement is reported as if
+    it were a defect, and the reference solvers' own agreement disappears into
+    a tolerance wide enough to hide a real regression.
+    """
+
+    REFERENCE = "reference"  # a discretization of the PB equation
+    APPROXIMATE = "approximate"  # an analytic approximation to it
 
 
 class SurfaceModel(StrEnum):
@@ -385,6 +407,14 @@ class Provenance:
     # backend predating this field still constructs; `sashimi.validate` treats
     # an unstated term as uncomparable rather than assuming it matches.
     energy_term: EnergyTerm | None = None
+    # How the number was obtained. Defaults rather than being optional, which is
+    # the opposite of `energy_term` above and deliberate. An unstated energy term
+    # is a silently wrong comparison, so it is refused; an unstated tier has one
+    # correct answer for every backend that predates the field — all of them
+    # discretize the equation — and the cost of a mis-defaulted approximation is
+    # the behaviour that existed before this field: compared at the reference
+    # tolerance and loudly reported as a disagreement. Loud, not silent.
+    accuracy_tier: AccuracyTier = AccuracyTier.REFERENCE
 
     def summary(self) -> str:
         checksum = f" sha256:{self.binary_sha256[:12]}" if self.binary_sha256 else ""

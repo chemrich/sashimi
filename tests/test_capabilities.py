@@ -11,6 +11,7 @@ from sashimi.apbs import discover
 from sashimi.apbs.options import ApbsOptions
 from sashimi.capabilities import (
     UNITS,
+    BackendReport,
     comparable_surface_models,
     describe_capabilities,
     validate_request,
@@ -129,6 +130,44 @@ class TestCapabilities:
         finally:
             for cache in caches:
                 cache.cache_clear()
+
+    def test_a_backend_nobody_shares_a_model_with_does_not_empty_the_list(self, monkeypatch):
+        """The regression that adding a fourth backend would otherwise cause.
+
+        This intersected every available backend, so a Generalized Born tier
+        supporting only `van-der-waals` — which no surface solver can mesh —
+        would empty the result. That is not a smaller answer: an empty list
+        stops `sashimi validate` outright and skips the entire cross-validation
+        tier, so adding a backend would have silently switched off the
+        comparisons between the other three while CI stayed green.
+        """
+        reports = [
+            BackendReport("apbs", True, "finite-difference", surface_models=("molecular", "smol")),
+            BackendReport("delphi", True, "finite-difference", surface_models=("molecular",)),
+            BackendReport("gb", True, "analytic", surface_models=("van-der-waals",)),
+        ]
+        monkeypatch.setattr("sashimi.capabilities._apbs_report", lambda: reports[0])
+        monkeypatch.setattr("sashimi.capabilities._delphi_report", lambda: reports[1])
+        monkeypatch.setattr("sashimi.capabilities._tabipb_report", lambda: reports[2])
+
+        assert comparable_surface_models() == ["molecular"]
+
+    def test_a_model_only_one_backend_supports_is_not_comparable(self, monkeypatch):
+        """Two or more, still — the property the intersection was there for."""
+        monkeypatch.setattr(
+            "sashimi.capabilities._apbs_report",
+            lambda: BackendReport("apbs", True, "fd", surface_models=("molecular", "smol")),
+        )
+        monkeypatch.setattr(
+            "sashimi.capabilities._delphi_report",
+            lambda: BackendReport("delphi", True, "fd", surface_models=("gaussian",)),
+        )
+        monkeypatch.setattr(
+            "sashimi.capabilities._tabipb_report",
+            lambda: BackendReport("tabipb", False, "bem", surface_models=("molecular",)),
+        )
+
+        assert comparable_surface_models() == []
 
     @pytest.mark.usefixtures("hide_backends")
     def test_comparable_surface_models_are_reported(self):

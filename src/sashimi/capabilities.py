@@ -18,6 +18,7 @@ explain the problem the one tool that cannot run.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,7 +26,14 @@ from sashimi.apbs.grid import size_grid
 from sashimi.apbs.options import SURFACE_KEYWORD, ApbsOptions, resolve_surface
 from sashimi.artifacts import describe_cleanup, estimated_dx_bytes
 from sashimi.errors import BackendUnavailable, InputError, SashimiError
-from sashimi.protocol import Equation, GridSpec, PQRData, SolventModel, SurfaceModel
+from sashimi.protocol import (
+    AccuracyTier,
+    Equation,
+    GridSpec,
+    PQRData,
+    SolventModel,
+    SurfaceModel,
+)
 
 __all__ = [
     "UNITS",
@@ -62,6 +70,10 @@ class BackendReport:
     detail: str = ""
     surface_models: tuple[str, ...] = ()
     equations: tuple[str, ...] = ()
+    # Whether this backend discretizes the equation or approximates it. An agent
+    # choosing a backend for triage rather than for an answer needs to see the
+    # difference, and `sashimi validate` reports the two tiers separately.
+    accuracy_tier: str = AccuracyTier.REFERENCE.value
     extras: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -73,6 +85,7 @@ class BackendReport:
             "detail": self.detail,
             "surface_models": list(self.surface_models),
             "equations": list(self.equations),
+            "accuracy_tier": self.accuracy_tier,
             **self.extras,
         }
 
@@ -204,17 +217,24 @@ def comparable_surface_models() -> list[str]:
     for two quite different reasons: APBS and pyDelPhi have no surface model in
     common at all, and a single backend has nothing to be compared *with*.
 
-    The second case is why this needs two backends rather than intersecting
-    whatever is present. A lone APBS trivially "shares" all three of its models
-    with itself, and reporting those as comparable would tell a caller that
-    cross-validation is available when nothing is installed to validate against.
+    The second case is why this counts backends rather than reporting whatever
+    a lone one supports. A single APBS trivially "shares" all three of its
+    models with itself, and reporting those as comparable would tell a caller
+    that cross-validation is available when nothing is installed to validate
+    against.
+
+    **Two or more, not all.** This intersected every available backend until
+    a fourth arrived supporting only `van-der-waals`, which no boundary-element
+    backend can mesh: the intersection emptied, and an empty result here stops
+    `sashimi validate` and skips the whole cross-validation tier. Adding a
+    backend must not be able to switch off comparisons between the others.
     """
     reports = [_apbs_report(), _delphi_report(), _tabipb_report()]
-    available = [set(r.surface_models) for r in reports if r.available]
-    if len(available) < MIN_BACKENDS_TO_COMPARE:
+    supported = [set(r.surface_models) for r in reports if r.available]
+    if len(supported) < MIN_BACKENDS_TO_COMPARE:
         return []
-    common: set[str] = set.intersection(*available)
-    return sorted(common)
+    counts = Counter(model for models in supported for model in models)
+    return sorted(model for model, n in counts.items() if n >= MIN_BACKENDS_TO_COMPARE)
 
 
 def describe_capabilities() -> dict[str, Any]:
