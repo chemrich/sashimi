@@ -39,6 +39,7 @@ from sashimi.protocol import (
     SolventModel,
     SurfaceModel,
 )
+from sashimi.validate import Comparison, Incomparable, validate
 
 pytestmark = [pytest.mark.apbs, pytest.mark.delphi]
 
@@ -69,18 +70,26 @@ def structures():
     return {"born-ion": parse_pqr(BORN_ION_PQR), "ala-gly": peptide}
 
 
-def _solve_both(structure, solvent) -> tuple[float, float]:
+def _compare(structure, solvent, *, want_potential: bool = False) -> Comparison:
+    """Run both backends through the real `sashimi.validate` engine.
+
+    Deliberately not a private comparison: this file used to subtract two
+    energies itself, which meant the shipped engine — including every refusal
+    that makes a spread trustworthy — was exercised only by stubs. Going through
+    `validate` means the CLI, the library and this test all agree by
+    construction.
+    """
     request = FiniteDifferenceRequest(
         structure=structure,
         solvent=solvent,
         grid=GridSpec(resolution=0.5, padding=10.0),
-        want_potential=False,  # energy is the comparable quantity; grids differ
+        want_potential=want_potential,
     )
-    apbs = ApbsSolver().solve(request)
-    delphi = DelphiSolver().solve(request)
-    assert apbs.energy_kj_mol is not None
-    assert delphi.energy_kj_mol is not None
-    return apbs.energy_kj_mol, delphi.energy_kj_mol
+    return validate(
+        {"apbs": ApbsSolver(), "delphi": DelphiSolver()},
+        request,
+        tolerance=MAX_SPREAD,
+    )
 
 
 @pytest.mark.parametrize("case", ["born-ion", "ala-gly"])
@@ -90,19 +99,56 @@ def test_backends_agree_on_shared_surface_models(structures, case):
         pytest.skip(NO_SHARED_MODEL)
 
     for model in models:
-        solvent = SolventModel(surface_model=model)
-        if case == "born-ion":
-            solvent = dataclasses.replace(solvent, solute_dielectric=1.0, ionic_strength=0.0)
-
-        apbs, delphi = _solve_both(structures[case], solvent)
-        spread = abs(apbs - delphi) / abs(apbs)
-
-        assert spread < MAX_SPREAD, (
-            f"{case} / {model.value}: APBS {apbs:.3f} vs DelPhi {delphi:.3f} kJ/mol "
-            f"= {spread:.2%} apart. Two FD codes should agree to a few percent on a "
-            "shared surface model; a gap this size is a unit, sign or definitional "
-            "error rather than discretization."
+        # Zero salt, deliberately: APBS reports a polar solvation energy and
+        # DelPhi a reaction-field energy, and those coincide only where there is
+        # no mobile-ion contribution. `validate` refuses the salted comparison,
+        # which `test_salted_comparison_is_refused` covers.
+        solvent = SolventModel(
+            surface_model=model, solute_dielectric=1.0 if case == "born-ion" else 2.0
         )
+        solvent = dataclasses.replace(solvent, ionic_strength=0.0)
+
+        comparison = _compare(structures[case], solvent)
+
+        assert comparison.agrees, f"{case} / {model.value}: {comparison.summary()}"
+
+
+def test_salted_comparison_is_refused(structures):
+    """The engine's central refusal, against the real backends.
+
+    APBS's difference-of-blocks carries the mobile-ion term and DelPhi's
+    reaction field does not, so at 0.15 M these are different quantities. The
+    spread would look like a modest disagreement rather than the definitional
+    gap it is, which is precisely the failure mode worth refusing.
+    """
+    models = shared_models()
+    if not models:
+        pytest.skip(NO_SHARED_MODEL)
+
+    solvent = SolventModel(surface_model=models[0], ionic_strength=0.15)
+    with pytest.raises(Incomparable, match="mobile-ion contribution"):
+        _compare(structures["ala-gly"], solvent)
+
+
+def test_potentials_are_comparable_across_incompatible_grids(structures):
+    """The blocker that kept this out of `corpus.verify_case`, resolved.
+
+    APBS's dime must be 32c+1 and DelPhi's gsize is any odd integer, so the two
+    never produce the same grid. Sampling both at shared physical coordinates
+    sidesteps that entirely.
+    """
+    models = shared_models()
+    if not models:
+        pytest.skip(NO_SHARED_MODEL)
+
+    solvent = SolventModel(surface_model=models[0], solute_dielectric=1.0, ionic_strength=0.0)
+    comparison = _compare(structures["born-ion"], solvent, want_potential=True)
+
+    grids = [r.potential for r in comparison.runs if r.potential is not None]
+    assert len(grids) == 2
+    assert grids[0].shape != grids[1].shape, "expected incompatible grids to compare across"
+    assert comparison.n_probes > 0
+    assert comparison.potential_rmsd_kt_e is not None
 
 
 def test_both_backends_agree_on_the_born_ion_closed_form(structures):
@@ -119,11 +165,13 @@ def test_both_backends_agree_on_the_born_ion_closed_form(structures):
     solvent = SolventModel(
         surface_model=shared_models()[0], solute_dielectric=1.0, ionic_strength=0.0
     )
-    apbs, delphi = _solve_both(structures["born-ion"], solvent)
+    comparison = _compare(structures["born-ion"], solvent)
     expected = born_solvation_energy(3.0, solute_dielectric=1.0)
 
     # Both are held to the same 3% here rather than the 1% the analytic test
     # applies to a converged grid: this runs at a fixed 0.5 A for speed, and
     # APBS is measurably further from the closed form there than DelPhi is.
-    assert apbs == pytest.approx(expected, rel=0.03)
-    assert delphi == pytest.approx(expected, rel=0.03)
+    for backend_run in comparison.runs:
+        assert backend_run.energy_kj_mol == pytest.approx(expected, rel=0.03), (
+            f"{backend_run.name} is {backend_run.energy_kj_mol} against a closed form of {expected}"
+        )

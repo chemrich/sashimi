@@ -206,6 +206,33 @@ Five cases, summaries in `tests/corpus/`. It is the regression net for the
 unpinned APBS today, and the acceptance gate for a second backend later —
 `sashimi corpus verify --backend debye` needs no APBS installed.
 
+With two backends installed, they can be checked against *each other*:
+
+```sh
+sashimi validate                   # every case, every installed backend
+sashimi validate --backend apbs --backend delphi --surface molecular
+```
+
+```
+ok    born-ion-coarse   2 backends agree: 2.30% spread (-234.000 to -228.609 kJ/mol)
+        apbs           -234.000 kJ/mol  (polar-solvation)
+        delphi         -228.609 kJ/mol  (reaction-field)
+SKIP  born-ion-salt: refusing to report a spread:
+  - energy terms differ at 0.15 M ionic strength. The difference between them is
+    exactly the mobile-ion contribution, which is nonzero here…
+```
+
+Most of `validate` is about **refusing to answer**. A spread only means "the
+solvers disagree" if the surface model, the equation and the *reported energy
+term* were all held fixed, and none of those differences shows up in the number.
+APBS reports a polar solvation energy; DelPhi reports a reaction-field energy;
+they coincide only where there are no mobile ions. Comparing them at
+physiological salt would report a definitional gap as a solver disagreement,
+so it refuses — and says which one it is.
+
+Energies are compared directly, potentials by sampling both maps at the same
+physical coordinates, since two backends never produce the same grid.
+
 Not yet released to PyPI. See [ROADMAP.md](ROADMAP.md) for where this is
 heading — it is the single planning document, covering the protocol, the
 multi-backend future, distribution and `debye`.

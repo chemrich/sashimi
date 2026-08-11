@@ -394,6 +394,9 @@ install steps is the substitute, and it costs nothing, since a solver binary
 was never going to arrive through a Python installer anyway. Core stays lean by
 construction rather than by packaging.
 
+**Shipped in phase 7** as `sashimi.validate` and `sashimi validate`. See §12 for
+what it does and what the energy-term rule turned out to require.
+
 `validate` **refuses to report a spread across mismatched surface models**
 unless explicitly overridden. Given the 25.7% measured in §5, a spread computed
 across differing surface definitions would not be a solver disagreement at all —
@@ -747,21 +750,50 @@ reproduces the Born ion to the last printed digit of the macOS arm64 build
 (−92.22 kT), which is the evidence that a build from that tarball is a
 reproducible artifact rather than a local accident.
 
-Remaining in this phase: the `sashimi validate` CLI; TABI-PB, which forces the
-surface-potential path to be real; PyGBe in-process, which proves
-transport-agnosticism; optional GB tier for triage→refine workflows.
+One thing learned here changed the plan: **backends cannot ship as extras** the
+way §8 assumed. Neither DelPhi flavour is on PyPI, so `sashimi[delphi]` cannot
+exist; discovery via `$SASHIMI_DELPHI_PATH` plus documentation is the honest
+substitute.
 
-Two things learned here change that remaining work:
+### `sashimi validate` ✅
 
-- **`verify_case` cannot express cross-backend comparison.** It compares grid
-  shape first and bails, which is right for "has this backend changed" and wrong
-  for two backends whose legal grids differ by construction (APBS's 32c+1 dime
-  against DelPhi's any-odd cubic gsize). `validate` must compare energies and
-  potentials interpolated at *physical* probe points, not grid-derived ones. The
-  `Reference` protocol survives; the comparison engine needs a second mode.
-- **Backends cannot ship as extras** the way §8 assumed. Neither DelPhi flavour
-  is on PyPI, so `sashimi[delphi]` cannot exist; discovery via
-  `$SASHIMI_DELPHI_PATH` plus documentation is the honest substitute.
+`sashimi.validate` plus a `sashimi validate` subcommand: run one system through
+N backends, report the spread, and refuse when the number would mislead.
+
+**Most of the module is refusals**, which is the point. A spread is a solver
+disagreement only if surface model, equation and *reported energy term* were all
+held fixed, and none of those differences is visible in the number itself.
+
+The energy term is the one this phase discovered and the one §14 asked for.
+`EnergyTerm` is now a protocol-level enum carried in `Provenance`, because
+"what quantity is this" is a question every backend must answer and no
+comparison can be trusted without it. APBS reports `polar-solvation`, DelPhi
+`reaction-field`.
+
+The first version of the rule was "same term", and it refused all five corpus
+cases — correct and useless. The rule that ships is **same term, or terms that
+provably coincide under this request**: the two differ by exactly the mobile-ion
+contribution, so at zero ionic strength they are the same quantity and the
+comparison proceeds with a note. At nonzero salt it refuses. Three of five
+corpus cases are zero-salt and now compare; two refuse, with the reason.
+
+**The `verify_case` blocker is resolved** rather than worked around. That
+function compares grid shape first and bails, which is right for "has this
+backend changed" and impossible for two backends whose legal grids differ by
+construction (APBS's 32c+1 dime against DelPhi's any-odd cubic gsize).
+`validate` never touches grid indices: energies are grid-independent scalars,
+and potentials are compared by interpolating both maps at the same *physical*
+coordinates inside the box they share. `corpus` is untouched.
+
+Measured, all at zero salt on the molecular surface: **1.70% on hen lysozyme**
+(1,960 atoms, APBS 129×161×129 against DelPhi 133³, potential RMSD 4.29 kT/e
+over 200 shared points), 2.30% on the Born ion at 0.5 Å and **0.62% at 0.25 Å** —
+the two codes converging on each other as the grid refines, which is the
+behaviour that makes the agreement meaningful rather than coincidental.
+
+Remaining in this phase: TABI-PB, which forces the surface-potential path to be
+real; PyGBe in-process, which proves transport-agnosticism; optional GB tier for
+triage→refine workflows.
 
 **Phase 8 — debye.** The validation ladder of §10; drop-in behind the backend
 interface; portability suite green on all architectures; BEM engine later.
@@ -830,16 +862,20 @@ summarised here.
   225³ is 33.9 s and 154 MB. The current cap happens to sit in a defensible
   place for both, so this is now a question of whether to *document* that
   reasoning rather than whether to change the number.
-- **Does `validate` become an MCP tool?** An agent asking "is this energy
-  trustworthy?" is a good capability, but it needs N backends installed, so it is
-  CLI-first regardless. Revisit in phase 7.
-- **NPBE-versus-LPBE energy comparability.** The total-energy integral differs
-  between the two equations, so the corpus and `validate` must compare like with
-  like once nonlinear is implemented. Phase 7 showed the problem is larger than
-  the equation choice: three backends disagree about what "solvation energy"
-  means at *fixed* equation, so the rule `validate` needs is not "same equation"
-  but "same reported term", carried in provenance and checked before any spread
-  is computed. Needed before the `validate` CLI, not before the backend.
+- **Does `validate` become an MCP tool?** Still open, and now concrete: the CLI
+  and `sashimi.validate` both exist, so exposing it is a thin wrapper. The
+  argument against remains that it needs two backends installed and most
+  installations will have one — but `sashimi_capabilities` already reports
+  exactly that, so the tool could answer honestly rather than failing. The real
+  question is what an agent does with a spread it cannot act on.
+- ~~**NPBE-versus-LPBE energy comparability.**~~ **Resolved in phase 7**, and
+  more generally than posed. The problem was never specific to the equation:
+  backends disagree about what "solvation energy" means at *fixed* equation, so
+  the rule is "same reported term", not "same equation". `EnergyTerm` carries it
+  in provenance and `sashimi.validate` checks it — with the refinement that
+  terms differing only by the mobile-ion contribution are comparable where that
+  contribution is zero. Nonlinear, when it arrives, adds an `EnergyTerm` member
+  rather than a new kind of check.
 - **`pb-protocol` naming and semver.** The PyPI name should be checked early
   since it appears in every downstream dependency list, and graduation turns
   protocol changes into major-version events with migration windows.

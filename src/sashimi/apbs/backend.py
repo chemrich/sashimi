@@ -12,6 +12,7 @@ from sashimi.apbs.run import DEFAULT_TIMEOUT, parse_block_energies, run_apbs
 from sashimi.errors import UnsupportedRequest
 from sashimi.pqr import format_pqr
 from sashimi.protocol import (
+    EnergyTerm,
     Equation,
     FiniteDifferenceRequest,
     Provenance,
@@ -82,6 +83,10 @@ class ApbsSolver:
                 grid, solvent, self.options, equation=request.equation
             ),
             wall_seconds=round(run.wall_seconds, 3),
+            # `Global net ELEC energy` is the solvated block minus a
+            # uniform-dielectric, ion-free reference, so it carries the
+            # mobile-ion contribution. See `sashimi.apbs.input`.
+            energy_term=EnergyTerm.POLAR_SOLVATION,
         )
 
         result = SolveResult(

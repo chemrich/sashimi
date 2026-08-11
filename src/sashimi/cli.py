@@ -11,6 +11,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from sashimi.capabilities import comparable_surface_models
 from sashimi.corpus import (
     MANIFEST,
     Case,
@@ -22,9 +23,12 @@ from sashimi.corpus import (
     write_summary,
 )
 from sashimi.errors import SashimiError
-from sashimi.protocol import FiniteDifferenceRequest, Solver
+from sashimi.protocol import FiniteDifferenceRequest, Solver, SurfaceModel
+from sashimi.validate import DEFAULT_ENERGY_TOLERANCE, validate, with_surface_model
 
 __all__ = ["main"]
+
+MIN_BACKENDS = 2  # a spread needs two things to spread between
 
 # Backends `--backend` can name. debye registers itself here when it exists;
 # the corpus is designed to be its acceptance gate.
@@ -115,6 +119,103 @@ def _verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pick_surface_model(requested: str | None) -> SurfaceModel:
+    """A surface model the installed backends can all actually run.
+
+    Cross-validation has to pick one, because sashimi's default
+    (`smoothed-molecular`) is APBS-only and every DelPhi solve at it refuses.
+    Choosing is not the same as substituting silently: the choice is printed,
+    and an explicit `--surface` that some backend cannot honour fails at solve
+    time with that backend's own message rather than being quietly replaced.
+
+    Scoped to *installed* backends rather than the selected subset, which is the
+    same set while `BACKENDS` holds two entries. A third backend would make the
+    distinction real, and this is where it would be narrowed.
+    """
+    if requested is not None:
+        return SurfaceModel(requested)
+
+    shared = comparable_surface_models()
+    if not shared:
+        raise SystemExit(
+            "The installed backends share no surface model, so no comparison is "
+            "possible. `sashimi capabilities` reports what each one supports; "
+            "`--surface` overrides this choice."
+        )
+    # Prefer the solvent-excluded surface: it is the one every shipped backend
+    # supports and the one most published numbers use.
+    for preferred in (SurfaceModel.MOLECULAR, SurfaceModel.VAN_DER_WAALS):
+        if preferred.value in shared:
+            return preferred
+    return SurfaceModel(shared[0])
+
+
+def _validate(args: argparse.Namespace) -> int:
+    names = args.backend or sorted(BACKENDS)
+    unknown = [n for n in names if n not in BACKENDS]
+    if unknown:
+        raise SystemExit(f"unknown backend(s): {', '.join(unknown)}")
+    if len(names) < MIN_BACKENDS:
+        raise SystemExit(
+            f"cross-validation needs at least two backends, got {len(names)}. "
+            "One backend trivially agrees with itself."
+        )
+
+    model = _pick_surface_model(args.surface)
+    cases = _select(MANIFEST, args.case)
+    solvers = {name: BACKENDS[name]() for name in names}
+
+    print(f"Comparing {', '.join(names)} on the {model.value} surface.\n")
+
+    disagreed: list[str] = []
+    incomparable: list[str] = []
+
+    for case in cases:
+        request = with_surface_model(case.request(), model)
+        try:
+            comparison = validate(
+                solvers,
+                request,
+                tolerance=args.tolerance,
+                allow_mismatch=args.allow_mismatched,
+            )
+        except SashimiError as exc:
+            print(f"  SKIP  {case.name}: {exc}\n")
+            incomparable.append(case.name)
+            continue
+
+        marker = "ok   " if comparison.agrees else "DIFF "
+        print(f"  {marker} {case.name:<24} {comparison.summary()}")
+        for run in comparison.runs:
+            energy = (
+                f"{run.energy_kj_mol:12.3f}" if run.energy_kj_mol is not None else "          -"
+            )
+            print(f"          {run.name:<10} {energy} kJ/mol  ({run.energy_term})")
+        for note in comparison.notes:
+            print(f"          note: {note}")
+        if not comparison.agrees:
+            disagreed.append(case.name)
+
+    compared = len(cases) - len(incomparable)
+    print()
+    if incomparable:
+        # Not a failure on its own: refusing to compare incomparable things is
+        # this tool working, not this tool breaking.
+        print(f"{len(incomparable)} case(s) could not be compared: {', '.join(incomparable)}")
+    if disagreed:
+        print(
+            f"{len(disagreed)} of {compared} compared case(s) disagreed: "
+            f"{', '.join(disagreed)}. A spread beyond discretization is an "
+            "input-generation bug or real parameter sensitivity — both worth knowing."
+        )
+        return 1
+    if not compared:
+        print("Nothing was comparable, so nothing was validated.")
+        return 1
+    print(f"All {compared} compared case(s) agree across {len(names)} backends.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sashimi", description=__doc__)
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -137,6 +238,41 @@ def build_parser() -> argparse.ArgumentParser:
     verifier.add_argument("--energy-rtol", type=float, default=Tolerances().energy_rtol)
     verifier.add_argument("--potential-rtol", type=float, default=Tolerances().potential_rtol)
     verifier.set_defaults(func=_verify)
+
+    validator = subcommands.add_parser(
+        "validate",
+        help="compare backends against each other on the same system",
+        description=(
+            "Run one system through several backends and report the spread. "
+            "Refuses to compare across differing surface models, energy terms or "
+            "equations, because such a spread is a modelling difference reported "
+            "as a solver disagreement."
+        ),
+    )
+    validator.add_argument(
+        "--backend",
+        action="append",
+        choices=sorted(BACKENDS),
+        help="backend to include; repeatable (default: all installed)",
+    )
+    validator.add_argument("--case", action="append", help="limit to a named case; repeatable")
+    validator.add_argument(
+        "--surface",
+        choices=sorted(m.value for m in SurfaceModel),
+        help="surface model to compare on (default: one the backends share)",
+    )
+    validator.add_argument(
+        "--tolerance",
+        type=float,
+        default=DEFAULT_ENERGY_TOLERANCE,
+        help=f"relative energy spread treated as agreement (default: {DEFAULT_ENERGY_TOLERANCE})",
+    )
+    validator.add_argument(
+        "--allow-mismatched",
+        action="store_true",
+        help="report a spread even across differing surface models or energy terms",
+    )
+    validator.set_defaults(func=_validate)
 
     return parser
 
