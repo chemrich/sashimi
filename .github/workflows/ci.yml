@@ -253,6 +253,37 @@ jobs:
       # own step on purpose: a corpus diff is a real result change, and it
       # should read as one rather than as one failure among four hundred tests.
       # `full` is not run per push — `sashimi corpus verify --tier full`.
+      # A measurement, not a gate — hence continue-on-error, and hence it prints
+      # rather than asserts.
+      #
+      # `tests/corpus/delphi/` was recorded from the C++ build on osx-arm64. Two
+      # things are unknown and neither can be checked from that machine: whether
+      # a Linux x86-64 build of the same source reproduces it inside the corpus
+      # tolerance, and whether pyDelPhi does. Both are answered here, because
+      # this runner has both. Until they are, the DelPhi recordings are verified
+      # by the binary-free comparison in tests/test_corpus_manifest.py and not
+      # by re-solving.
+      - name: Measure DelPhi corpus fidelity across builds
+        if: runner.os == 'Linux' && matrix.profile == 'full'
+        continue-on-error: true
+        run: |
+          cases=$(uv run --frozen python -c "
+          from sashimi.corpus import MANIFEST
+          from sashimi.protocol import SurfaceModel
+          print(' '.join('--case ' + c.name for c in MANIFEST
+                         if c.solvent.surface_model is SurfaceModel.MOLECULAR))")
+          echo "::group::C++ build (linux-64) against recordings from osx-arm64"
+          uv run --frozen sashimi corpus verify --backend delphi \
+            --directory tests/corpus/delphi $cases || true
+          echo "::endgroup::"
+          if [ -x .pydelphi/bin/pydelphi-static ]; then
+            echo "::group::pyDelPhi against the same recordings"
+            SASHIMI_DELPHI_PATH="$PWD/.pydelphi/bin/pydelphi-static" \
+              uv run --frozen sashimi corpus verify --backend delphi \
+              --directory tests/corpus/delphi $cases || true
+            echo "::endgroup::"
+          fi
+
       # Needs APBS and nothing else, so running it on both Linux legs would pay
       # twice for the same numbers.
       - name: Verify the corpus (standard tier)

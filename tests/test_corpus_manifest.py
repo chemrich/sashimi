@@ -333,6 +333,7 @@ def test_an_analytic_reference_records_how_it_was_derived():
 CROSS_BACKEND_DIRECTORIES = {
     "gb": Path("tests/corpus/gb"),
     "tabipb": Path("tests/corpus/tabipb"),
+    "delphi": Path("tests/corpus/delphi"),
 }
 
 # TABI-PB against APBS on every case both recorded. Measured 2026-08-12.
@@ -396,3 +397,52 @@ def test_the_expensive_boundary_element_recordings_are_present():
         assert name in recorded, f"{name} has no boundary-element recording"
         assert recorded[name]["surface"]["n_vertices"] > 20_000
         assert recorded[name]["energy_kj_mol"] < 0
+
+
+# The DelPhi tier, from the files alone. Re-solving these needs a DelPhi
+# executable; comparing what two solvers recorded needs nothing, and it is the
+# comparison that says whether either is right.
+DELPHI_DIRECTORY = Path("tests/corpus/delphi")
+
+# APBS against the C++ DelPhi on every case both recorded, measured 2026-08-12.
+# Two independent finite-difference codes on different lattices — APBS's
+# multigrid `dime`, DelPhi's odd cubic `gsize` — so this band is discretization
+# and the definitional difference in what each calls a solvation energy, not
+# arithmetic. Deliberately loose: pinning the measured 2% would make it a
+# change-detector for physics that is allowed to change.
+DELPHI_DEVIATION_CEILING = 0.08
+
+
+def test_the_two_grid_codes_agree_where_they_can_be_compared():
+    """The third reference, and the one that anchors the Born ion.
+
+    DelPhi answers the closed form to -228.609 kJ/mol against -228.611 exactly,
+    where APBS is 2.36% out at the same nominal resolution — so this tier is not
+    a worse copy of APBS, it is a second opinion that happens to be sharper on
+    the one case with an analytic answer.
+    """
+    recorded = cross_backend_cases("delphi")
+    assert len(recorded) >= 19
+
+    for name, reference, other in recorded:
+        deviation = abs(other["energy_kj_mol"] - reference["energy_kj_mol"]) / abs(
+            reference["energy_kj_mol"]
+        )
+        assert deviation < DELPHI_DEVIATION_CEILING, f"{name}: {deviation:.2%}"
+
+
+def test_no_recorded_delphi_answer_is_absurd():
+    """The check that would have caught what recording this tier actually found.
+
+    Until 2026-08-12 `format_pqr` wrote minimum-width fields, so a
+    four-character residue name shifted every column after it and DelPhi — which
+    reads fixed columns — solved on charges that were not in the file. It
+    returned -865,205 kJ/mol for acetate against APBS's -196.90, and the
+    identical value for acetic acid, which is a different molecule. Two numbers
+    agreeing to six decimals for two different structures is the tell.
+    """
+    energies = {name: other["energy_kj_mol"] for name, _, other in cross_backend_cases("delphi")}
+
+    assert len(set(energies.values())) == len(energies), "two structures, one answer"
+    for name, energy in energies.items():
+        assert -20_000 < energy < 0, f"{name}: {energy}"

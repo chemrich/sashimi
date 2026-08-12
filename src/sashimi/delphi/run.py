@@ -76,6 +76,9 @@ _CPP_ENERGY_RE = re.compile(
     r"Corrected reaction field energy\s*:\s*([-+0-9.eE]+)\s*kT", re.IGNORECASE
 )
 _CPP_COULOMBIC_RE = re.compile(r"Coulombic energy\s*:\s*([-+0-9.eE]+)\s*kT", re.IGNORECASE)
+# What DelPhi says it read, which is the only way to find out that it did not.
+_CPP_NET_CHARGE_RE = re.compile(r"Net assigned charge\s*:\s*([-+0-9.eE]+)", re.IGNORECASE)
+_CPP_N_CHARGES_RE = re.compile(r"Total number of assigned charges\s*:\s*(\d+)", re.IGNORECASE)
 _CPP_TOTAL_RE = re.compile(
     r"All required energy terms but grid energy\s*:\s*([-+0-9.eE]+)\s*kT", re.IGNORECASE
 )
@@ -161,6 +164,26 @@ def parse_cpp_polar_solvation(stdout: str) -> float | None:
     if total is None or coulombic is None:
         return None
     return float(total.group(1)) - float(coulombic.group(1))
+
+
+def parse_cpp_assignment(stdout: str) -> tuple[float, int] | None:
+    """The net charge and charged-atom count DelPhi reports having assigned.
+
+    DelPhi echoes what it parsed out of the PQR, and that echo is the only
+    evidence available that it parsed the file the way the file was written. It
+    reads by fixed column, so a field one place to the right is not an error to
+    it — it is a different number, and the solve proceeds on it.
+
+    Measured: acetate, whose four-character residue name shifted every column
+    after it, arrived as *two* charged atoms carrying +80.84 e where the file
+    says seven and -1, and the run returned -865,205 kJ/mol against APBS's
+    -196.90. DelPhi printed a warning; nothing read it.
+    """
+    charge = _CPP_NET_CHARGE_RE.search(stdout)
+    count = _CPP_N_CHARGES_RE.search(stdout)
+    if charge is None or count is None:
+        return None
+    return float(charge.group(1)), int(count.group(1))
 
 
 def parse_csv_energy(path: Path) -> float | None:

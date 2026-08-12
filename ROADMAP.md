@@ -634,6 +634,41 @@ other way on AMBER-like input, where `AS_GIVEN` reaches 55% and can return a
 right for what `sashimi_prepare_structure` produces, which is why it stays the
 default. Six corpus cases could not have shown this and twenty-four did.
 
+### The PQR a fixed-column reader sees
+
+Recording the DelPhi tier found a defect in `sashimi.pqr.format_pqr` that had
+been shipping since phase 4, in the module set §10 calls the most stable thing
+in the project.
+
+It wrote **minimum-width** fields, so a four-character residue name — `TARG` in
+the APBS example set, `MEOH` in another — pushed every field after it one column
+right. sashimi's own reader splits on whitespace and APBS's is lenient, so both
+round-tripped it perfectly. **DelPhi reads fixed columns.** It parsed acetate as
+two charged atoms carrying +80.84 e where the file says seven and -1, and
+returned **-865,205 kJ/mol against APBS's -196.90** — and the *identical* value
+for acetic acid, which is a different molecule. Two structures, one answer, to
+six decimals.
+
+Invisible for a year because DelPhi had only ever been run on the Born ion and
+ALA-GLY: residues `ION`, `ALA`, `GLY`, all three characters. Three of the
+nineteen shared corpus cases were affected the moment the tier was recorded.
+
+Two fixes, and the second matters more:
+
+- The fields are exact widths now, truncating names rather than overflowing.
+  Names that fit render byte-identically, which is why all 64 recorded APBS
+  cases reproduce unchanged.
+- **The backend checks DelPhi's own echo of what it read** — net charge and
+  charged-atom count — against the structure, and refuses rather than solving.
+  DelPhi printed a warning the whole time and nothing read it. This is the
+  structural-output verification §13 already applies to APBS, which likewise
+  exits 0 on failure.
+
+The lesson worth keeping: every test of the writer round-tripped it through a
+reader that splits on whitespace, so none of them could see a column. Round
+-tripping was necessary and never sufficient, and the only thing that found this
+was handing the file to a stricter consumer.
+
 **Test partitioning by architecture.** Protocol-layer tests are pure Python and
 run natively everywhere. Subprocess integration tests are gated behind
 `@pytest.mark.apbs` (later `@pytest.mark.delphi`, …) and only run where the real

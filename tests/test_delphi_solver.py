@@ -15,10 +15,12 @@ import os
 import numpy as np
 import pytest
 
+import sashimi.delphi.backend as backend_module
 from sashimi.delphi import DelphiSolver, discover_delphi
 from sashimi.delphi.discover import DelphiFlavour, DelphiNotFound
 from sashimi.delphi.options import SUPPORTED_SURFACES
-from sashimi.errors import UnsupportedRequest
+from sashimi.errors import SolverError, UnsupportedRequest
+from sashimi.pqr import parse_pqr
 from sashimi.protocol import (
     EnergyTerm,
     Equation,
@@ -174,3 +176,51 @@ def test_the_reported_energy_matches_the_declared_term(binary, ion):
         assert salted.provenance.energy_term is EnergyTerm.REACTION_FIELD
         assert salted.energy_kj_mol == pytest.approx(plain.energy_kj_mol, rel=1e-6)
         assert "polarization only" in salted.diagnostics["energy_term"]
+
+
+def test_delphi_reading_a_different_structure_is_caught_rather_than_solved(binary, monkeypatch):
+    """Structural verification of the output, not trust in the exit code.
+
+    DelPhi parses PQR by fixed column, so a field one place to the right is not
+    an error to it — it is a different number, and it solves happily on it. This
+    reproduces the writer that shipped until 2026-08-12, where a four-character
+    residue name shifted every column after it: acetate arrived as two charged
+    atoms carrying +80.84 e where the file says seven and -1, and the run
+    returned -865,205 kJ/mol against APBS's -196.90, with nothing raised.
+
+    The same discipline ROADMAP.md §13 applies to APBS, which also exits 0 on
+    failure: check the output against what was asked, rather than the status.
+    """
+
+    def minimum_width_writer(pqr) -> str:
+        lines = []
+        for i in range(pqr.n_atoms):
+            res_name, res_seq, atom_name = pqr.labels[i].split()
+            x, y, z = pqr.coords[i]
+            lines.append(
+                f"ATOM  {i + 1:5d} {atom_name:>4s} {res_name:>3s} {res_seq:>5s}    "
+                f"{x:8.3f}{y:8.3f}{z:8.3f} {pqr.charges[i]:7.4f} {pqr.radii[i]:6.4f}"
+            )
+        return "\n".join([*lines, "TER", "END", ""])
+
+    monkeypatch.setattr(backend_module, "format_pqr", minimum_width_writer)
+    acetate = parse_pqr(
+        "\n".join(
+            f"ATOM  {i:5d} {name:>4s} TARG     1    "
+            f"{i:8.3f}{0.0:8.3f}{0.0:8.3f} {charge:7.4f} {1.88:6.4f}"
+            for i, (name, charge) in enumerate(
+                [("C1", -0.137), ("C2", 0.78), ("O6", -0.91), ("O7", -0.91)], start=1
+            )
+        )
+    )
+
+    with pytest.raises(SolverError, match="read a different structure"):
+        DelphiSolver().solve(
+            FiniteDifferenceRequest(
+                structure=acetate,
+                solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+                grid=GridSpec(resolution=0.5, padding=6.0),
+                want_energy=True,
+                want_potential=False,
+            )
+        )
