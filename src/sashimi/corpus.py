@@ -114,8 +114,14 @@ class CaseTier(StrEnum):
     intuition, which had already drifted once: the 0.25 A cases look small
     because their solutes are, and a Kirkwood sphere at that spacing is 5.2 s
     against a Born ion's 0.47 s at 0.5 A. That put 52 seconds of work in a tier
-    whose contract says "seconds". Totals as measured on APBS 3.4.1:
-    `fast` 11 s, `standard` 93 s cumulative, `full` 138 s cumulative.
+    whose contract says "seconds". Totals as measured on APBS 3.4.1, osx-arm64:
+    `fast` 18 s, `standard` 129 s cumulative, `full` 270 s cumulative.
+
+    The cost is APBS's, which makes it a statement about this backend and no
+    other. A boundary-element solver's cost is its mesh: `fas2-molecular` is
+    `standard` and meshes in 48 s where `ion-protein-complex-molecular` is a
+    third the atoms and takes 450 s. `tests/test_tabipb_solver.py` therefore
+    names what it re-verifies per push rather than reading a tier from here.
     """
 
     FAST = "fast"  # ~10 s in total; `pytest` verifies this one
@@ -175,7 +181,7 @@ class Case:
 
         The corpus was finite-difference by construction: `Case` recorded grid
         geometry and `request()` built one request type, so `corpus --backend gb`
-        refused and a curated set of fifty physically meaningful systems was
+        refused and a curated set of physically meaningful systems was
         usable by exactly one backend. `System` is the seam phase 7 built for
         cross-family validation, and it is the same seam this needs — a case is a
         physical question, and which dialect it is asked in is the backend's
@@ -839,6 +845,203 @@ MANIFEST: tuple[Case, ...] = (
         source="apbs-examples/fas2.pqr",
         grid=GridSpec(resolution=0.35, padding=10.0),
         solvent=SolventModel(),
+        tier=CaseTier.FULL,
+    ),
+    # --- the shared surface, widened ----------------------------------------
+    #
+    # The surface-model section above made *five* cases askable by more than one
+    # backend, out of fifty. That is the corpus's own stated job — debye's
+    # acceptance gate, and the reference tier the approximate one is measured
+    # against — resting on five questions, one of which has a single atom.
+    #
+    # Every case below is a molecular-surface sibling of a case the corpus
+    # already has on `smoothed-molecular`, so each one carries an axis that was
+    # previously APBS-only into the set every backend can answer: the salt and
+    # temperature sweeps, the dielectric arm of the analytic sweep, both halves
+    # of an ionization pair, a binding pair, a nucleic acid, and the sign of the
+    # charge at protein scale. They add no new machinery and no new structures —
+    # only questions that more than one solver can be asked.
+    Case(
+        name="peptide-molecular-no-salt",
+        description=(
+            "ALA-GLY at zero ionic strength on the shared surface. With "
+            "`peptide-molecular` and `-high-salt` this is the salt arm as all "
+            "three solver families see it — screening is where an analytic tier "
+            "and a boundary-element one part company with a grid."
+        ),
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR, ionic_strength=0.0),
+    ),
+    Case(
+        name="peptide-molecular-high-salt",
+        description="500 mM on the shared surface: the high end of the cross-family salt arm.",
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR, ionic_strength=0.5),
+    ),
+    Case(
+        name="peptide-molecular-cold",
+        description=(
+            "277 K on the shared surface. `peptide-cold` makes this point on a "
+            "model only APBS supports, which is the wrong place for it: reading "
+            "temperature in the wrong unit is a *cross-backend* bug, and the one "
+            "that cost a day when DelPhi turned out to want Celsius (section 12)."
+        ),
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR, temperature=277.0),
+    ),
+    Case(
+        name="born-ion-molecular-eps2",
+        description=(
+            "The dielectric arm of the analytic sweep, on a surface more than "
+            "one backend supports. The closed form holds for any solute "
+            "dielectric, so this asks whether 1/eps_p - 1/eps_s is right rather "
+            "than merely unchanged — the only such question the shared set had "
+            "at eps_p other than 1."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        # Measured 2.263% for APBS and 3.093% for Generalized Born, which is the
+        # same 3.093% it shows on `born-ion-molecular` at eps_p = 1: the OBC2
+        # offset is a property of the method, not of the dielectric, and holding
+        # across both cases is evidence the dielectric factor itself is right.
+        analytic=_born(3.0, 1.0, 2.0, rtol=0.05),
+    ),
+    Case(
+        name="methoxide-molecular",
+        description=(
+            "The methanol anion on the shared surface. With `methanol-molecular` "
+            "it is an ionization pair every backend can be asked — the neutral "
+            "and charged halves of one chemistry, where a solvation model that "
+            "is only right about monopoles shows it."
+        ),
+        source="apbs-examples/methoxide.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0,
+            solvent_dielectric=78.00,
+            ionic_strength=0.0,
+            temperature=300.0,
+            surface_model=SurfaceModel.MOLECULAR,
+        ),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="aspartate-residue-molecular",
+        description=(
+            "One aspartate at -1e, 12 atoms, on the shared surface: between "
+            "`acetate-molecular`'s eight atoms and the peptide's twenty, which "
+            "is the size range where a boundary-element mesher stops being able "
+            "to answer. Measured: TABI-PB aborts on this one immediately, on "
+            "`stoul: no conversion` *after* reporting the surface built, where "
+            "acetate instead runs past its 600 s timeout. Same size class, two "
+            "unrelated mechanisms, so neither is 'too small' as a rule."
+        ),
+        source="apbs-examples/ASP66.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="fas2-molecular",
+        description=(
+            "906 atoms carrying +4.053 e on the shared surface. The only "
+            "non-integer net charge any backend but APBS can be handed."
+        ),
+        source="apbs-examples/fas2.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="acetic-acid-molecular",
+        description="The neutral half of the acetate ionization pair, on the shared surface.",
+        source="apbs-examples/acetic-acid.pqr",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="barstar-molecular",
+        description=(
+            "-5e on 1,403 atoms, on the shared surface. Every other protein a "
+            "second backend can take is positively charged, so this is the sign "
+            "of the charge at protein scale rather than on a sphere."
+        ),
+        source="apbs-examples/barstar.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="fkbp-apo-molecular",
+        description=(
+            "FKBP with an empty site, on the shared surface; pairs with `fkbp-dmso-molecular`."
+        ),
+        source="apbs-examples/fkbp-apo.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="fkbp-dmso-molecular",
+        description=(
+            "The bound form on the shared surface. A binding energy is the "
+            "difference of these two, and until now it was a difference only "
+            "APBS could take — which makes it the one quantity most users "
+            "actually want and the one the corpus could not check across tiers."
+        ),
+        source="apbs-examples/fkbp-dmso.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="protein-rna-molecular",
+        description=(
+            "2,065 atoms with a phosphate backbone, on the shared surface. No "
+            "backend but APBS had ever been handed a nucleic acid by the corpus, "
+            "and a radius set assigned per element is exactly the thing that has "
+            "no phosphorus entry until someone tries."
+        ),
+        source="apbs-examples/1a63.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="ion-protein-complex-molecular",
+        description=(
+            "260 atoms at +21.69 e on the shared surface: the most charged "
+            "solute in the corpus, and a united-atom structure with no hydrogens "
+            "at all, which is a second radius dialect (see `hca-molecular`)."
+        ),
+        source="apbs-examples/ion-protein-complex.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="hca-molecular",
+        description=(
+            "Carbonic anhydrase, 2,482 atoms, on the shared surface — and the "
+            "case that says where the approximate tier's default is wrong. It is "
+            "a polar-hydrogen structure, so its heavy-atom radii carry the volume "
+            "of hydrogens that are not in the file; Generalized Born substitutes "
+            "an all-atom set and over-solvates by 21%, against 2-4% on every "
+            "all-atom protein here. Measured, not assumed: the file's own radii "
+            "give 7.3% on this structure and 26-33% on the all-atom ones."
+        ),
+        source="apbs-examples/hca.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
         tier=CaseTier.FULL,
     ),
 )

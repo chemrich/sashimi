@@ -1,0 +1,50 @@
+{
+  "name": "peptide-molecular-cold",
+  "description": "277 K on the shared surface. `peptide-cold` makes this point on a model only APBS supports, which is the wrong place for it: reading temperature in the wrong unit is a *cross-backend* bug, and the one that cost a day when DelPhi turned out to want Celsius (section 12).",
+  "source": "ala-gly.pqr",
+  "tier": "fast",
+  "family": "boundary-element",
+  "backend": "tabipb+nanoshaper-0.7.5",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.5,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 277.0,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "temperature": 277.0,
+    "surface_radius": 1.4,
+    "tabipb": {
+      "mesh": "ses",
+      "sdens": 2.0,
+      "srad": 1.4,
+      "tree_degree": 1,
+      "tree_theta": 0.0,
+      "tree_max_per_leaf": 50,
+      "precondition": true
+    }
+  },
+  "energy_kj_mol": -217.383173,
+  "surface": {
+    "n_vertices": 1034,
+    "potential_stats_kT_e": {
+      "min": -9.720033,
+      "max": 10.563831,
+      "mean": 0.2025038994197292,
+      "std": 5.079793619893405
+    }
+  }
+}

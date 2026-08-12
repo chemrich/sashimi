@@ -178,22 +178,48 @@ def test_energy_only_request_skips_the_mesh_output(binary, peptide):
 # --- the golden corpus, for a backend whose binary is built from source -------
 
 
-def test_tabipb_reproduces_its_recorded_corpus_answer(binary):
-    """A boundary-element summary, recorded and re-verified.
+TABIPB_DIRECTORY = Path("tests/corpus/tabipb")
 
-    Only one case: `peptide-molecular` is the corpus case TABI-PB can actually
-    take. `born-ion-molecular` has one atom and `methanol-molecular` three,
-    below NanoShaper's four; `acetate-molecular` at eight atoms does not finish
-    inside the backend's own 600 s timeout, twice measured, which is recorded
-    here rather than worked around.
+# What the boundary-element tier can be asked, and what it costs. Measured on
+# osx-arm64, 2026-08-12; every one of these is a corpus case with an APBS
+# recording of the same question beside it.
+#
+# The tier a case declares is its APBS cost, which says nothing about this
+# backend: `fas2-molecular` is `standard` and meshes in 48 s, while
+# `ion-protein-complex-molecular` is a third the atoms and takes 450 s, because
+# the cost is the mesh and not the solute. So what `pytest` re-verifies is named
+# here rather than filtered from the manifest.
+TABIPB_PER_PUSH = (
+    "peptide-molecular",  # 0.1 s, 1,034 vertices
+    "peptide-molecular-no-salt",  # 0.1 s — the salt arm, as a surface solver sees it
+    "peptide-molecular-high-salt",  # 0.1 s
+    "peptide-molecular-cold",  # 0.1 s — temperature, the axis DelPhi's Celsius bug lived on
+)
+TABIPB_ON_DEMAND = (
+    "fas2-molecular",  # 48 s, 21,850 vertices, 1.26% from APBS
+    "ion-protein-complex-molecular",  # 450 s, 68,054 vertices, 1.02% from APBS
+)
+
+
+@pytest.mark.parametrize("name", TABIPB_PER_PUSH)
+def test_tabipb_reproduces_its_recorded_corpus_answer(binary, name):
+    """Boundary-element summaries, recorded and re-verified.
 
     What is compared is the vertex count and the statistics over the surface —
     not pinned probe coordinates, because the vertices are the mesher's choice
     and move when it is rebuilt. That matters for this backend in particular:
     CI compiles it, and its mesher's version is part of a result's identity.
+
+    Not every corpus case can be asked. `born-ion-molecular` has one atom and
+    `methanol-molecular` three, below NanoShaper's four; `acetate-molecular` at
+    eight atoms does not finish inside the backend's own 600 s timeout, twice
+    measured; and `aspartate-residue-molecular` at twelve atoms fails in the
+    mesher immediately and differently, on `stoul: no conversion` after it has
+    already reported building the surface. Three small-molecule failures, three
+    mechanisms, none of them size alone.
     """
-    case = next(c for c in MANIFEST if c.name == "peptide-molecular")
-    recorded = load_summary(case, Path("tests/corpus/tabipb"))
+    case = next(c for c in MANIFEST if c.name == name)
+    recorded = load_summary(case, TABIPB_DIRECTORY)
 
     found = verify_case(TabipbSolver(), case, recorded, family=SolverFamily.BOUNDARY_ELEMENT)
 
@@ -201,3 +227,10 @@ def test_tabipb_reproduces_its_recorded_corpus_answer(binary):
     assert recorded["family"] == "boundary-element"
     assert "geometry" not in recorded  # there is no volume to record
     assert recorded["surface"]["n_vertices"] > 0
+
+
+# `TABIPB_ON_DEMAND` is re-solved by
+# `sashimi corpus verify --backend tabipb --directory tests/corpus/tabipb
+# --case <name>`, which is eight minutes of meshing a per-push suite has no
+# business repeating. `tests/test_corpus_manifest.py` checks those recordings
+# are present and where they landed, without needing the binary at all.

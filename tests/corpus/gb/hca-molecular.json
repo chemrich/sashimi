@@ -1,0 +1,39 @@
+{
+  "name": "hca-molecular",
+  "description": "Carbonic anhydrase, 2,482 atoms, on the shared surface \u2014 and the case that says where the approximate tier's default is wrong. It is a polar-hydrogen structure, so its heavy-atom radii carry the volume of hydrogens that are not in the file; Generalized Born substitutes an all-atom set and over-solvates by 21%, against 2-4% on every all-atom protein here. Measured, not assumed: the file's own radii give 7.3% on this structure and 26-33% on the all-atom ones.",
+  "source": "apbs-examples/hca.pqr",
+  "tier": "full",
+  "family": "analytic",
+  "backend": "gb-obc2-1",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.5,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solute_dielectric": 2.0,
+    "solvent_dielectric": 78.54,
+    "ionic_strength": 0.15,
+    "temperature": 298.15,
+    "gb": {
+      "model": "obc2",
+      "radii": "mbondi",
+      "offset": 0.09,
+      "minimum_radius": 0.8,
+      "element_screening": true,
+      "debye_kappa_inverse_a": 0.127282
+    }
+  },
+  "energy_kj_mol": -7650.227113037438
+}

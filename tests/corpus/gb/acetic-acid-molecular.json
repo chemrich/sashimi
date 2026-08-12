@@ -1,0 +1,39 @@
+{
+  "name": "acetic-acid-molecular",
+  "description": "The neutral half of the acetate ionization pair, on the shared surface.",
+  "source": "apbs-examples/acetic-acid.pqr",
+  "tier": "full",
+  "family": "analytic",
+  "backend": "gb-obc2-1",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.25,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.0,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solute_dielectric": 2.0,
+    "solvent_dielectric": 78.54,
+    "ionic_strength": 0.0,
+    "temperature": 298.15,
+    "gb": {
+      "model": "obc2",
+      "radii": "mbondi",
+      "offset": 0.09,
+      "minimum_radius": 0.8,
+      "element_screening": true,
+      "debye_kappa_inverse_a": 0.0
+    }
+  },
+  "energy_kj_mol": -23.417237262755183
+}

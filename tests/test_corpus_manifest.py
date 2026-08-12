@@ -9,6 +9,7 @@ rather than merely obeying themselves.
 from __future__ import annotations
 
 import itertools
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -318,3 +319,80 @@ def test_an_analytic_reference_records_how_it_was_derived():
     reference = next(c for c in MANIFEST if c.analytic is not None).analytic
     assert isinstance(reference, AnalyticReference)
     assert reference.source
+
+
+# --- what the other backends recorded, from the files alone ------------------
+#
+# `tests/corpus/gb/` and `tests/corpus/tabipb/` hold answers to corpus questions
+# from solvers other than APBS. Re-solving them needs those backends installed —
+# a compiler and a mesher, in TABI-PB's case — but *comparing what they
+# recorded* needs nothing, and it is where the interesting statement lives:
+# `AccuracyTier` claims a reference tier and an approximate one behave
+# differently in kind, and these files are the measurement of that claim.
+
+CROSS_BACKEND_DIRECTORIES = {
+    "gb": Path("tests/corpus/gb"),
+    "tabipb": Path("tests/corpus/tabipb"),
+}
+
+# TABI-PB against APBS on every case both recorded. Measured 2026-08-12.
+# A boundary-element solver and a grid solver share no discretization, so this
+# is the honest width of "the reference tier agrees with itself".
+TABIPB_DEVIATION_CEILING = 0.02
+
+
+def cross_backend_cases(backend: str) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    """Every recorded (case, reference summary, other-backend summary) triple."""
+    directory = CROSS_BACKEND_DIRECTORIES[backend]
+    found = []
+    for case in MANIFEST:
+        path = directory / f"{case.name}.json"
+        if path.is_file():
+            found.append((case.name, load_summary(case), load_summary(case, directory)))
+    return found
+
+
+@pytest.mark.parametrize("backend", sorted(CROSS_BACKEND_DIRECTORIES))
+def test_every_cross_backend_recording_answers_a_manifest_case(backend: str):
+    """A summary whose case was renamed or dropped is a file nothing verifies."""
+    directory = CROSS_BACKEND_DIRECTORIES[backend]
+    recorded = {path.stem for path in directory.glob("*.json")}
+
+    assert recorded <= {case.name for case in MANIFEST}
+    assert recorded, f"no {backend} recordings found in {directory}"
+
+
+def test_the_boundary_element_tier_agrees_with_the_grid_tier():
+    """Two solver families, no shared discretization, and 1.0-1.6% between them.
+
+    This is the corpus's strongest correctness statement, and it needs no closed
+    form: TABI-PB meshes a surface where APBS fills a volume, so an error in
+    either one's charge handling, units or boundary conditions has no way to
+    cancel. It is also the number that makes the approximate tier's 0.7-28%
+    (`tests/test_corpus_gb.py`) read as a property of the method rather than as
+    corpus noise.
+    """
+    recorded = cross_backend_cases("tabipb")
+    assert len(recorded) >= 6
+
+    for name, reference, surface in recorded:
+        deviation = abs(surface["energy_kj_mol"] - reference["energy_kj_mol"]) / abs(
+            reference["energy_kj_mol"]
+        )
+        assert deviation < TABIPB_DEVIATION_CEILING, f"{name}: {deviation:.2%}"
+
+
+def test_the_expensive_boundary_element_recordings_are_present():
+    """Two protein-scale meshes `pytest` deliberately does not re-solve.
+
+    Eight minutes of meshing between them, so they are verified on demand rather
+    than per push — which makes "too slow to check here" one step from "quietly
+    absent", the exact shape of the bug that let the DelPhi tier skip every test
+    while CI stayed green. Their presence is checked here instead.
+    """
+    recorded = {name: surface for name, _, surface in cross_backend_cases("tabipb")}
+
+    for name in ("fas2-molecular", "ion-protein-complex-molecular"):
+        assert name in recorded, f"{name} has no boundary-element recording"
+        assert recorded[name]["surface"]["n_vertices"] > 20_000
+        assert recorded[name]["energy_kj_mol"] < 0

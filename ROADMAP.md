@@ -424,24 +424,30 @@ work had accumulated in a tier whose contract said "seconds".
 
 | tier | cases | cumulative | who runs it |
 |---|---|---|---|
-| `fast` | 21 | 14 s | `pytest`, so the local edit-test loop stays a loop |
-| `standard` | 42 | 113 s | a dedicated CI step per push |
-| `full` | 50 | 206 s | `sashimi corpus verify --tier full`, on demand |
+| `fast` | 25 | 18 s | `pytest`, so the local edit-test loop stays a loop |
+| `standard` | 49 | 129 s | a dedicated CI step per push |
+| `full` | 64 | 270 s | `sashimi corpus verify --tier full`, on demand |
+
+Those are APBS's costs, so they are a statement about one backend. A
+boundary-element solver's cost is its mesh rather than its atom count, which is
+why the TABI-PB tier names what it re-verifies instead of reading a tier from
+the manifest — see "Widening the shared set" below.
 
 The standard tier is its own CI step rather than a test, for the same reason
 CLAUDE.md treats a corpus diff as a real result change: it should read as a
 corpus failure, not as one failure among four hundred.
 
-The target was **50 cases**, and the corpus is there. The axis that mattered was
-what each case is checked against, not the count — 50 self-recorded cases would
-have been 50 change-detectors and a 50-line diff every time the physics
-legitimately moved. What 50 is made of:
+The target was **50 cases**, and the corpus passed it — 64 now, after the
+widening below. The axis that mattered was what each case is checked against,
+not the count: 64 self-recorded cases would be 64 change-detectors and a 64-line
+diff every time the physics legitimately moved. What they are made of, by what
+can contradict them:
 
 | kind | cases | checked against |
 |---|---|---|
-| Analytic | 15 | Born and Kirkwood closed forms, to a measured per-case tolerance |
-| Structures | 19 | recorded APBS, plus the invariants below |
-| Parameter variations | 16 | recorded APBS, and each other |
+| Closed form | 18 | Born and Kirkwood, to a measured per-case tolerance |
+| Real structures | 45 | recorded APBS, the invariants below, and — on the shared surface — a second and third backend |
+| Neither | 1 | recorded APBS alone: `born-ion-salt`, where two codes' ion conventions differ by 39% and pinning either would encode a choice as physics |
 
 Nineteen structures from 2 to 8,279 atoms: methanol and methoxide, an acetic
 acid / acetate ionization pair, a lone aspartate residue, a 906-atom protein
@@ -517,21 +523,75 @@ What this buys, in order of value:
 
 - **A regression net on our own code.** Generalized Born is a few hundred lines
   of numpy that will keep changing, and it had unit tests against closed forms
-  but no recorded answers on real structures. Five now, in `tests/corpus/gb/`,
-  and because there is no binary they are verified by `pytest` on every machine
-  — the one part of the corpus that cannot skip.
+  but no recorded answers on real structures. Five at first and nineteen now, in
+  `tests/corpus/gb/`, and because there is no binary they are verified by
+  `pytest` on every machine — the one part of the corpus that cannot skip.
 - **A golden for a backend CI compiles from source.** TABI-PB's mesher version
-  is part of a result's identity, and `tests/corpus/tabipb/` pins one.
+  is part of a result's identity, and `tests/corpus/tabipb/` pins six.
 - One fewer hand-assembled `System`: `sashimi validate` and the GB reference
   tests both went through their own copy of that construction, which stops
   matching the moment `Case` grows a field — `mesh_density` already did.
 
-**Coverage is honestly thin, and the reason is the surface model.** Generalized
-Born answers only on `molecular`, so it takes 5 of 50 cases; TABI-PB needs four
-atoms as well, and `acetate-molecular` at eight atoms does not finish inside its
-own 600 s timeout (measured twice), so it takes 1. Recording that is better than
-recording nothing, and the way to widen it is more molecular-surface cases
-rather than more machinery.
+**Coverage was thin, and the reason was the surface model.** Generalized Born
+answers only on `molecular`, so it took 5 of 50 cases; TABI-PB needs four atoms
+as well, and `acetate-molecular` at eight atoms does not finish inside its own
+600 s timeout (measured twice), so it took 1. Recording that was better than
+recording nothing, and the way to widen it was more molecular-surface cases
+rather than more machinery — which is what the next section did.
+
+### Widening the shared set
+
+Fourteen molecular-surface cases, no new machinery and no new structures: each
+one is a sibling of a case the corpus already had on `smoothed-molecular`, so it
+carries an axis that was APBS-only into the set every backend can answer. The
+salt and temperature sweeps, the dielectric arm of the analytic sweep, both
+halves of an ionization pair, a binding pair, a nucleic acid, and the sign of
+the charge at protein scale.
+
+| tier | cases | before | after |
+|---|---|---|---|
+| Reference, finite difference (APBS) | 64 | 50 | 64 |
+| Reference, boundary element (TABI-PB) | 6 | 1 | 6 |
+| Approximate, analytic (Generalized Born) | 19 | 5 | 19 |
+
+**The two reference-tier families agree to 1.0–1.6% on every case they share.**
+TABI-PB meshes a surface where APBS fills a volume, so they have no
+discretization in common and no way for an error in charge handling, units or
+boundary conditions to cancel between them. That band is the corpus's strongest
+correctness statement that needs no closed form, and it is what makes the
+approximate tier's 0.7–28% legible as a property of the method rather than as
+corpus noise. Both are checked from the recorded files, with no binary
+installed, in `tests/test_corpus_manifest.py` and `tests/test_corpus_gb.py`.
+
+**What the widening found, which is the reason to do it at all:**
+
+- **A binding difference is not a difference of approximations.** FKBP with and
+  without DMSO sits 2.6% and 3.2% from the reference tier — inside anything
+  anyone would call agreement — and the *difference* of those two numbers has
+  the wrong sign: APBS pays **+6.25 kJ/mol** to bury the ligand where
+  Generalized Born is handed **−8.32**. A binding energy is that difference, so
+  a small absolute error is not evidence the tier can be used for the quantity
+  most callers want. Handing GB the structure's own radii recovers the sign
+  (+21.6) and costs 50% on the absolute energy, so there is no setting that is
+  right for both. `AccuracyTier` already refuses to average this tier into a
+  spread; this is the sharper statement of why.
+- **A boundary-element solver's cost is its mesh, not its atom count.**
+  `fas2-molecular` is 906 atoms and meshes and solves in **48 s** at 21,850
+  vertices; `ion-protein-complex-molecular` is 260 atoms — a third as many — and
+  takes **450 s** at 68,054, because it is a united-atom structure whose large
+  radii produce a much bigger surface. A tier assignment derived from APBS cost
+  says nothing about this backend, so `tests/test_tabipb_solver.py` names what
+  `pytest` re-verifies per push rather than filtering the manifest by tier.
+- **Three small solutes, three unrelated failures.** `acetate-molecular` at 8
+  atoms runs past the 600 s timeout; `aspartate-residue-molecular` at 12 aborts
+  immediately on `stoul: no conversion` *after* NanoShaper reports the surface
+  built; `born-ion-molecular` at 1 and `methanol-molecular` at 3 are below the
+  mesher's four-atom floor. "Too small for BEM" is three different bugs wearing
+  one description.
+- **The Born case at eps_p = 2 pins the method's systematic.** Generalized Born
+  is 3.093% from the closed form there and 3.093% at eps_p = 1 — the same number
+  to four digits, which is OBC2's offset on a lone sphere and says the
+  dielectric factor itself is not where its error is.
 
 **What the first ten structures found immediately.** Generalized Born's
 deviation from APBS is 1.6–4.5% on proteins whose PQR carries AMBER
