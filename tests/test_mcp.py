@@ -16,6 +16,8 @@ from fastmcp.exceptions import ToolError
 from sashimi.dx import write_dx
 from sashimi.mcp import mcp
 from sashimi.protocol import PotentialGrid
+from sashimi.tabipb.discover import discover_tabipb
+from tests.helpers import installed_or_skip
 
 FIXTURE_PDB = Path(__file__).parent / "data" / "ala-gly.pdb"
 
@@ -384,8 +386,8 @@ class TestDiscoverySurface:
             )
         )
         assert result["ok"] is True
-        assert result["grid"]["dime"] == [65, 65, 65]
-        assert result["grid"]["estimated_map_mb"] > 0
+        assert result["cost"]["grid"]["native"]["dime"] == [65, 65, 65]
+        assert result["cost"]["grid"]["estimated_map_mb"] > 0
         # No map was written: this is arithmetic, not a solve.
         assert not list(tmp_path.glob("*.dx"))
 
@@ -427,5 +429,222 @@ class TestDiscoverySurface:
                 {"pqr_path": str(pqr), "resolution": 1.0, "padding": 6.0},
             )
         )
-        assert predicted["grid"]["dime"] == actual["grid"]["shape"]
-        assert predicted["grid"]["resolution_relaxed"] == actual["grid"]["resolution_relaxed"]
+        assert predicted["cost"]["grid"]["native"]["dime"] == actual["grid"]["shape"]
+        assert (
+            predicted["cost"]["grid"]["resolution_relaxed"] == actual["grid"]["resolution_relaxed"]
+        )
+
+
+class TestBackendSelection:
+    """Choosing a solver, and the shape of what each one returns.
+
+    Until this, `sashimi_solve` hardcoded APBS: four backends shipped, CI
+    exercised all four, and an agent could reach exactly one. The tier that
+    needs no binary — the only one guaranteed to be there — was the least
+    reachable of all.
+    """
+
+    def peptide(self, tmp_path):
+        source = Path(__file__).parent / "data" / "ala-gly.pqr"
+        pqr = tmp_path / "ala-gly.pqr"
+        pqr.write_text(source.read_text())
+        return pqr
+
+    async def test_the_in_process_backend_needs_no_binary(self, client, tmp_path):
+        """`gb` is the whole point of backend selection: it always works.
+
+        No APBS marker on this test, deliberately — it must pass on a machine
+        with nothing installed, which is the machine a consumer's fallback path
+        has to survive.
+        """
+        result = payload(
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "surface_model": "molecular",
+                    "compute_energy": True,
+                },
+            )
+        )
+
+        assert result["energy_kj_mol"] < 0
+        assert result["backend_name"] == "gb"
+        assert result["family"] == "analytic"
+        # The response shape follows the answer: no field was computed, so no
+        # map path is offered rather than a null one being invented.
+        assert "dx_path" not in result
+        assert "grid" not in result
+        assert "no field" in result["summary"]
+
+    async def test_asking_the_energy_only_backend_for_no_energy_is_refused(self, client, tmp_path):
+        """It computes one number. Not wanting it is a request for nothing."""
+        with pytest.raises(ToolError, match="asks it for nothing"):
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "surface_model": "molecular",
+                    "compute_energy": False,
+                },
+            )
+
+    async def test_an_unknown_backend_names_the_installed_ones(self, client, tmp_path):
+        with pytest.raises(ToolError, match="unknown backend"):
+            await client.call_tool(
+                "sashimi_solve",
+                {"pqr_path": str(self.peptide(tmp_path)), "backend": "apbs2"},
+            )
+
+    async def test_a_backend_that_cannot_take_the_surface_says_so_before_solving(
+        self, client, tmp_path
+    ):
+        """The pre-flight an agent needs now that it has a choice to get wrong.
+
+        `smoothed-molecular` is the default and three of the four backends
+        refuse it, so this is the common failure — and free to discover here
+        rather than after a structure has been prepared and a solve started.
+        """
+        report = payload(
+            await client.call_tool(
+                "sashimi_validate_inputs",
+                {"pqr_path": str(self.peptide(tmp_path)), "backend": "gb"},
+            )
+        )
+
+        assert report["ok"] is False
+        assert any("does not support" in p for p in report["problems"])
+        assert report["backend"]["name"] == "gb"
+
+    async def test_a_backend_with_no_grid_estimates_no_grid(self, client, tmp_path):
+        """A point count from the wrong model is worse than no point count."""
+        report = payload(
+            await client.call_tool(
+                "sashimi_validate_inputs",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "surface_model": "molecular",
+                },
+            )
+        )
+
+        assert report["ok"] is True
+        assert report["cost"]["grid"] is None
+        assert "no grid" in report["cost"]["note"]
+        assert "grid" not in report
+
+    @pytest.mark.apbs
+    async def test_the_default_backend_is_unchanged(self, client, tmp_path):
+        """Adding the parameter must not move what an existing caller gets."""
+        result = payload(
+            await client.call_tool(
+                "sashimi_solve",
+                {"pqr_path": str(self.peptide(tmp_path)), "compute_energy": True},
+            )
+        )
+
+        assert result["backend_name"] == "apbs"
+        assert result["dx_path"].endswith(".dx")
+
+    @pytest.fixture
+    def tabipb_installed(self):
+        """The marker selects; this is what actually skips.
+
+        Without it the test runs wherever TABI-PB is absent — which is the macOS
+        CI leg, since only the Linux one builds it.
+        """
+        return installed_or_skip(discover_tabipb, "SASHIMI_TABIPB_PATH")
+
+    @pytest.mark.tabipb
+    @pytest.mark.usefixtures("tabipb_installed")
+    async def test_a_boundary_element_solve_returns_a_surface_and_no_map(self, client, tmp_path):
+        """The third response shape: statistics over a mesh, with nothing to write.
+
+        A boundary-element solver has no volume, so `dx_path` would have to be
+        null or invented. The response omits it and says why in the summary,
+        which is the same rule the corpus summaries follow.
+        """
+        result = payload(
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "tabipb",
+                    "surface_model": "molecular",
+                    "compute_energy": True,
+                },
+            )
+        )
+
+        assert result["family"] == "boundary-element"
+        assert result["surface"]["n_vertices"] > 0
+        assert "dx_path" not in result
+        assert "No map written" in result["summary"]
+
+    @pytest.mark.tabipb
+    @pytest.mark.usefixtures("tabipb_installed")
+    async def test_mesh_density_is_the_boundary_element_resolution(self, client, tmp_path):
+        """The cost knob the pre-flight names must exist on the tool.
+
+        `sashimi_validate_inputs` tells a caller "mesh density is the knob" and
+        warns that a mesh can take 450 s; without this parameter there was no
+        knob to turn, and `resolution` — the obvious thing to reach for — was
+        accepted and silently dropped.
+        """
+        pqr = str(self.peptide(tmp_path))
+        args = {"surface_model": "molecular", "compute_energy": True, "backend": "tabipb"}
+
+        coarse = payload(await client.call_tool("sashimi_solve", {"pqr_path": pqr, **args}))
+        fine = payload(
+            await client.call_tool("sashimi_solve", {"pqr_path": pqr, "mesh_density": 3.0, **args})
+        )
+
+        assert fine["surface"]["n_vertices"] > coarse["surface"]["n_vertices"]
+
+    async def test_a_grid_parameter_is_refused_by_a_backend_with_no_grid(self, client, tmp_path):
+        """Refused, not ignored.
+
+        A caller told to make a 450-second mesh cheaper reaches for
+        `resolution`; accepting it silently leaves them believing they did.
+        """
+        with pytest.raises(ToolError, match="builds no grid"):
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "surface_model": "molecular",
+                    "compute_energy": True,
+                    "resolution": 0.5,
+                },
+            )
+
+    async def test_a_mesh_parameter_is_refused_by_a_backend_with_no_mesh(self, client, tmp_path):
+        """The same rule in the other direction, so neither family is special."""
+        with pytest.raises(ToolError, match="does not build one"):
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "apbs",
+                    "mesh_density": 3.0,
+                },
+            )
+
+    @pytest.mark.apbs
+    async def test_omitting_a_grid_parameter_still_means_the_protocol_default(
+        self, client, tmp_path
+    ):
+        """`resolution` became optional, which must not change what APBS does."""
+        result = payload(
+            await client.call_tool(
+                "sashimi_solve",
+                {"pqr_path": str(self.peptide(tmp_path)), "compute_energy": True},
+            )
+        )
+
+        assert result["grid"]["shape"] == [65, 65, 65]
+        assert result["grid"]["resolution_relaxed"] is False

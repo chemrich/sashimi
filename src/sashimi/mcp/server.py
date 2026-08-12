@@ -16,6 +16,7 @@ dressed up as a solver problem.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -25,19 +26,21 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from sashimi.analysis import potential_extrema, potential_in_sphere, residue_potentials
-from sashimi.apbs import ApbsSolver
 from sashimi.artifacts import content_address, describe_cleanup, map_path
+from sashimi.backends import get as get_backend
 from sashimi.capabilities import describe_capabilities, validate_request
 from sashimi.dx import read_dx
 from sashimi.errors import SashimiError
 from sashimi.pqr import read_pqr
 from sashimi.prep import ForceField, prepare_structure
 from sashimi.protocol import (
-    FiniteDifferenceRequest,
     GridSpec,
     PotentialGrid,
     SolventModel,
+    SolverFamily,
     SurfaceModel,
+    SurfacePotential,
+    System,
 )
 
 __all__ = ["mcp"]
@@ -60,6 +63,16 @@ mcp: FastMCP[Any] = FastMCP(
 def _fail(exc: SashimiError) -> ToolError:
     """Surface a typed sashimi failure with its message intact."""
     return ToolError(str(exc))
+
+
+def _grid_spec(resolution: float | None, padding: float | None) -> GridSpec:
+    """A grid spec where unset means the protocol's default, not this layer's."""
+    spec = GridSpec()
+    if resolution is not None:
+        spec = dataclasses.replace(spec, resolution=resolution)
+    if padding is not None:
+        spec = dataclasses.replace(spec, padding=padding)
+    return spec
 
 
 @mcp.tool
@@ -116,12 +129,40 @@ def sashimi_solve(
     *,
     pqr_path: Annotated[str, Field(description="Path to a PQR file.")],
     resolution: Annotated[
-        float, Field(description="Target fine-grid spacing, angstroms.", gt=0, le=5.0)
-    ] = 0.5,
+        float | None,
+        Field(
+            description=(
+                "Target fine-grid spacing, angstroms. Grid backends only "
+                "(apbs, delphi); setting it for a backend that builds no grid "
+                "is refused rather than ignored."
+            ),
+            gt=0,
+            le=5.0,
+        ),
+    ] = None,
     padding: Annotated[
-        float,
-        Field(description="Minimum solute-surface to grid-edge distance, angstroms.", ge=0),
-    ] = 10.0,
+        float | None,
+        Field(
+            description=(
+                "Minimum solute-surface to grid-edge distance, angstroms. Grid backends only."
+            ),
+            ge=0,
+        ),
+    ] = None,
+    mesh_density: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Vertices per square angstrom of dielectric surface \u2014 the "
+                "boundary-element cost knob, and the analogue of `resolution` "
+                "for a solver that meshes instead of filling a volume. tabipb "
+                "only, and it aborts below 1.5. Cost is the mesh rather than "
+                "the atom count: 906 atoms mesh in 48 s where a 260-atom "
+                "united-atom structure takes 450 s at three times the vertices."
+            ),
+            gt=0,
+        ),
+    ] = None,
     ionic_strength: Annotated[
         float, Field(description="1:1 salt concentration, molar.", ge=0)
     ] = 0.15,
@@ -141,23 +182,55 @@ def sashimi_solve(
             )
         ),
     ] = "smoothed-molecular",
+    backend: Annotated[
+        str,
+        Field(
+            description=(
+                "Which solver to run. `sashimi_capabilities` lists what this "
+                "installation has and what each supports. apbs and delphi fill a "
+                "volume and return a map; tabipb solves on the dielectric "
+                "surface and returns statistics over it, with no map to write; "
+                "gb approximates the energy in process, needs no binary at all, "
+                "and returns no field of any kind."
+            )
+        ),
+    ] = "apbs",
     output_dx: Annotated[
         str | None,
         Field(
             description=(
                 "Where to write the OpenDX map. Defaults to a content-addressed "
                 "name next to the PQR, so re-solving with different parameters "
-                "never overwrites an earlier map."
+                "never overwrites an earlier map. Ignored by backends that "
+                "produce no volumetric map."
             )
         ),
     ] = None,
 ) -> dict[str, Any]:
     """Solve the linearized Poisson-Boltzmann equation for a prepared structure.
 
-    Returns grid statistics, the path to an OpenDX map that PyMOL and ChimeraX
-    can load, the solvation energy when requested, and which backend produced
-    it. Note `spacing_achieved`: the memory guardrail may relax the requested
-    resolution, and the response says so rather than hiding it.
+    Returns the solvation energy when requested, which backend produced it, and
+    — for the backends that fill a volume — grid statistics and the path to an
+    OpenDX map that PyMOL and ChimeraX can load. Note `spacing_achieved`: the
+    memory guardrail may relax the requested resolution, and the response says
+    so rather than hiding it.
+
+    **The response shape follows what the backend actually returned**, rather
+    than a fixed schema it has to satisfy. A boundary-element solve carries
+    surface statistics and no `dx_path`, because there is no volume to write; an
+    analytic one carries an energy and nothing else, because it computed nothing
+    else. `sashimi_validate_inputs` answers whether a given backend can take a
+    request before it is run.
+
+    **A parameter the chosen backend cannot use is refused, not ignored.**
+    `resolution` and `padding` describe a grid; `mesh_density` describes a
+    triangulation; no backend has both. Silently accepting one that does nothing
+    is how a caller comes to believe it made a 450-second mesh cheaper by
+    halving a resolution the mesher never reads — and quietly-wrong parameters
+    are the failure this project has hit three times over (DelPhi reading
+    `temper` as Celsius, DelPhi reading a different PQR radius column,
+    Generalized Born being handed the wrong radius dialect). Every one produced
+    a plausible number from an input that was not what the caller thought.
 
     Maps are files, not inline data — a default-resolution grid is megabytes.
     """
@@ -168,69 +241,127 @@ def sashimi_solve(
         raise ToolError(f"could not read PQR {source}: {exc}") from exc
 
     try:
-        result = ApbsSolver().solve(
-            FiniteDifferenceRequest(
-                structure=pqr,
-                solvent=SolventModel(
-                    solvent_dielectric=solvent_dielectric,
-                    solute_dielectric=solute_dielectric,
-                    ionic_strength=ionic_strength,
-                    surface_model=SurfaceModel(surface_model),
-                ),
-                grid=GridSpec(resolution=resolution, padding=padding),
-                want_energy=compute_energy,
-                want_potential=True,
-            )
-        )
+        entry = get_backend(backend)
     except SashimiError as exc:
         raise _fail(exc) from exc
 
-    potential = result.potential
-    if not isinstance(potential, PotentialGrid):  # pragma: no cover — APBS is volumetric
-        raise ToolError(f"expected a volumetric map, got {type(potential).__name__}")
+    grid_parameters = {"resolution": resolution, "padding": padding}
+    named = {k: v for k, v in grid_parameters.items() if v is not None}
+    if named and entry.family is not SolverFamily.FINITE_DIFFERENCE:
+        raise ToolError(
+            f"{backend} builds no grid, so {', '.join(sorted(named))} would do nothing. "
+            + (
+                "Use mesh_density, which is what this backend's cost depends on."
+                if entry.family is SolverFamily.BOUNDARY_ELEMENT
+                else "It solves in process and has no discretization to set."
+            )
+        )
+    if mesh_density is not None and entry.family is not SolverFamily.BOUNDARY_ELEMENT:
+        raise ToolError(
+            f"mesh_density describes a triangulated surface and {backend} does not "
+            "build one. Use resolution for a grid backend."
+        )
 
-    # Content-addressed by default: two solves that differ in anything that
-    # changes the answer get different files, so re-solving cannot silently
-    # overwrite a previous map. An explicit output_dx is honored as given.
-    address = content_address(pqr, result.provenance.resolved_parameters)
-    destination = Path(output_dx).expanduser() if output_dx else map_path(source, address)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    potential.to_dx(destination)
+    field_expected = entry.family is not SolverFamily.ANALYTIC
+    if not field_expected and not compute_energy:
+        raise ToolError(
+            f"{backend} computes a solvation energy and no field, so this request "
+            "asks it for nothing. Set compute_energy=true, or choose a backend "
+            "that returns a map."
+        )
 
-    stats = potential.stats()
+    system = System(
+        structure=pqr,
+        solvent=SolventModel(
+            solvent_dielectric=solvent_dielectric,
+            solute_dielectric=solute_dielectric,
+            ionic_strength=ionic_strength,
+            surface_model=SurfaceModel(surface_model),
+        ),
+        # Unset means the protocol's own default rather than a number this
+        # layer invents; `System` and `BoundaryElementRequest` disagree about
+        # the mesh one and §14 has that open.
+        grid=_grid_spec(resolution, padding),
+        want_energy=compute_energy,
+        want_potential=field_expected,
+        **({} if mesh_density is None else {"mesh_density": mesh_density}),
+    )
+
+    try:
+        result = entry.solver().solve(system.request_for(entry.family))
+    except SashimiError as exc:
+        raise _fail(exc) from exc
+
     energy = (
         f" Polar solvation energy {result.energy_kj_mol:.3f} kJ/mol."
         if result.energy_kj_mol is not None
         else ""
     )
-    relaxed = result.diagnostics.get("resolution_relaxed", False)
-    note = " Requested resolution was relaxed to fit max_points." if relaxed else ""
-
-    return {
-        "dx_path": str(destination),
-        "content_address": address,
+    response: dict[str, Any] = {
         "energy_kj_mol": result.energy_kj_mol,
         "backend": result.provenance.summary(),
+        "backend_name": entry.name,
+        "family": entry.family.value,
         "resolved_parameters": result.provenance.resolved_parameters,
-        "grid": {
-            "shape": stats["shape"],
-            "origin": stats["origin"],
-            "spacing_achieved": result.diagnostics["spacing_achieved"],
-            "resolution_relaxed": relaxed,
-        },
-        "potential_kT_e": {
-            "min": stats["min"],
-            "max": stats["max"],
-            "mean": stats["mean"],
-            "std": stats["std"],
-        },
         "diagnostics": result.diagnostics,
-        "summary": (
-            f"Solved {source.name} on a {'x'.join(str(n) for n in stats['shape'])} grid "
-            f"at {result.diagnostics['spacing_achieved'][0]:.3f} A.{energy}{note} "
-            f"Map written to {destination.name} ({result.provenance.backend})."
-        ),
     }
+
+    potential = result.potential
+    if isinstance(potential, PotentialGrid):
+        # Content-addressed by default: two solves that differ in anything that
+        # changes the answer get different files, so re-solving cannot silently
+        # overwrite a previous map. An explicit output_dx is honored as given.
+        address = content_address(pqr, result.provenance.resolved_parameters)
+        destination = Path(output_dx).expanduser() if output_dx else map_path(source, address)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        potential.to_dx(destination)
+
+        stats = potential.stats()
+        relaxed = result.diagnostics.get("resolution_relaxed", False)
+        note = " Requested resolution was relaxed to fit max_points." if relaxed else ""
+        response |= {
+            "dx_path": str(destination),
+            "content_address": address,
+            "grid": {
+                "shape": stats["shape"],
+                "origin": stats["origin"],
+                "spacing_achieved": result.diagnostics["spacing_achieved"],
+                "resolution_relaxed": relaxed,
+            },
+            "potential_kT_e": {
+                "min": stats["min"],
+                "max": stats["max"],
+                "mean": stats["mean"],
+                "std": stats["std"],
+            },
+            "summary": (
+                f"Solved {source.name} on a {'x'.join(str(n) for n in stats['shape'])} grid "
+                f"at {result.diagnostics['spacing_achieved'][0]:.3f} A.{energy}{note} "
+                f"Map written to {destination.name} ({result.provenance.backend})."
+            ),
+        }
+        return response
+
+    if isinstance(potential, SurfacePotential):
+        stats = potential.stats()
+        response |= {
+            "surface": {
+                "n_vertices": potential.n_vertices,
+                "potential_kT_e": {key: stats[key] for key in ("min", "max", "mean", "std")},
+            },
+            "summary": (
+                f"Solved {source.name} on a {potential.n_vertices:,}-vertex dielectric "
+                f"surface.{energy} No map written: a boundary-element solver has no "
+                f"volume to sample ({result.provenance.backend})."
+            ),
+        }
+        return response
+
+    response["summary"] = (
+        f"Solved {source.name} in process.{energy} No map written: "
+        f"{entry.name} returns an energy and no field ({result.provenance.backend})."
+    )
+    return response
 
 
 @mcp.tool
@@ -499,6 +630,13 @@ def sashimi_validate_inputs(
         int | None,
         Field(description="Grid point budget. Omit for the default guardrail.", gt=0),
     ] = None,
+    backend: Annotated[
+        str, Field(description="Which solver the request is being checked against.")
+    ] = "apbs",
+    mesh_density: Annotated[
+        float | None,
+        Field(description="Vertices per square angstrom, for boundary-element backends.", gt=0),
+    ] = None,
 ) -> dict[str, Any]:
     """Check a solve before paying for it: grid shape, map size, whether it works.
 
@@ -506,6 +644,13 @@ def sashimi_validate_inputs(
     spacing, the estimated map size on disk and any blocking problem are all
     knowable in milliseconds — worth asking first when a solve can take a minute
     and write tens of megabytes.
+
+    Check the `backend` you actually intend to run. The common failure now that
+    one can be chosen is a surface model it does not support — three of the four
+    refuse `smoothed-molecular` — and that refusal is free here and expensive
+    after a structure has been prepared. The cost estimate is a grid one, so for
+    a boundary-element or analytic backend it is omitted rather than invented,
+    and the report says what governs cost instead.
 
     `ok` is false only for problems that would prevent the solve. A relaxed
     resolution is reported as a warning, because the solve would still run and
@@ -527,7 +672,12 @@ def sashimi_validate_inputs(
         padding=padding,
         **({"max_points": max_points} if max_points is not None else {}),
     )
-    return validate_request(structure, spec, solvent)
+    try:
+        return validate_request(
+            structure, spec, solvent, backend=backend, mesh_density=mesh_density
+        )
+    except SashimiError as exc:
+        raise _fail(exc) from exc
 
 
 def _load_grid(path: str) -> PotentialGrid:

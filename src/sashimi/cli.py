@@ -9,10 +9,11 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from sashimi import backends
 from sashimi.capabilities import comparable_surface_models, describe_capabilities
 from sashimi.corpus import (
     MANIFEST,
@@ -27,7 +28,7 @@ from sashimi.corpus import (
     write_summary,
 )
 from sashimi.errors import SashimiError
-from sashimi.protocol import FiniteDifferenceRequest, Solver, SurfaceModel
+from sashimi.protocol import Solver, SurfaceModel
 from sashimi.validate import (
     DEFAULT_APPROXIMATION_TOLERANCE,
     DEFAULT_ENERGY_TOLERANCE,
@@ -40,60 +41,10 @@ __all__ = ["main"]
 
 MIN_BACKENDS = 2  # a spread needs two things to spread between
 
-# Backends `--backend` can name. debye registers itself here when it exists;
-# the corpus is designed to be its acceptance gate.
-BACKENDS: dict[str, Callable[[], Solver[FiniteDifferenceRequest]]] = {}
-
-
-def _apbs_solver() -> Solver[FiniteDifferenceRequest]:
-    from sashimi.apbs import ApbsSolver  # noqa: PLC0415 — keeps `--help` binary-free
-
-    return ApbsSolver()
-
-
-def _delphi_solver() -> Solver[FiniteDifferenceRequest]:
-    from sashimi.delphi import DelphiSolver  # noqa: PLC0415 — keeps `--help` binary-free
-
-    return DelphiSolver()
-
-
-def _tabipb_solver() -> Solver[Any]:
-    from sashimi.tabipb import TabipbSolver  # noqa: PLC0415 — keeps `--help` binary-free
-
-    return TabipbSolver()
-
-
-def _gb_solver() -> Solver[Any]:
-    # Lazy for consistency with the others, though this one has nothing to find.
-    from sashimi.gb import GbSolver  # noqa: PLC0415
-
-    return GbSolver()
-
-
-BACKENDS["apbs"] = _apbs_solver
-BACKENDS["delphi"] = _delphi_solver
-BACKENDS["tabipb"] = _tabipb_solver
-BACKENDS["gb"] = _gb_solver
-
-# Which request family each backend speaks. `Solver` is generic in its request
-# type, so a checker already refuses to hand a boundary-element request to an FD
-# backend — but that guarantee is static, and dispatch here happens at runtime.
-FAMILIES: dict[str, SolverFamily] = {
-    "apbs": SolverFamily.FINITE_DIFFERENCE,
-    "delphi": SolverFamily.FINITE_DIFFERENCE,
-    "tabipb": SolverFamily.BOUNDARY_ELEMENT,
-    "gb": SolverFamily.ANALYTIC,
-}
-
-
-def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case, ...]:
-    if not names:
-        return cases
-    known = {case.name: case for case in cases}
-    unknown = [n for n in names if n not in known]
-    if unknown:
-        raise SystemExit(f"unknown case(s): {', '.join(unknown)}\navailable: {', '.join(known)}")
-    return tuple(known[n] for n in names)
+# Backends come from `sashimi.backends`, which is also what `sashimi_solve` and
+# `sashimi_capabilities` read. debye registers itself there when it exists; the
+# corpus is designed to be its acceptance gate, and this file needs no edit.
+BACKEND_NAMES = backends.names()
 
 
 def _corpus_solver(name: str) -> tuple[Solver[Any], SolverFamily]:
@@ -105,7 +56,17 @@ def _corpus_solver(name: str) -> tuple[Solver[Any], SolverFamily]:
     cases, TABI-PB only those with four atoms or more — and refusing a case it
     cannot take is the backend's own job, in its own words.
     """
-    return BACKENDS[name](), FAMILIES[name]
+    return backends.solver_for(name)
+
+
+def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case, ...]:
+    if not names:
+        return cases
+    known = {case.name: case for case in cases}
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise SystemExit(f"unknown case(s): {', '.join(unknown)}\navailable: {', '.join(known)}")
+    return tuple(known[n] for n in names)
 
 
 def _build(args: argparse.Namespace) -> int:
@@ -175,9 +136,8 @@ def _pick_surface_model(requested: str | None) -> SurfaceModel:
     and an explicit `--surface` that some backend cannot honour fails at solve
     time with that backend's own message rather than being quietly replaced.
 
-    Scoped to *installed* backends rather than the selected subset, which is the
-    same set while `BACKENDS` holds two entries. A third backend would make the
-    distinction real, and this is where it would be narrowed.
+    Scoped to *installed* backends rather than the selected subset, which is
+    where it would be narrowed if that distinction ever mattered.
     """
     if requested is not None:
         return SurfaceModel(requested)
@@ -207,6 +167,14 @@ def _backends_supporting(
     APBS's alone. Handing a backend a surface it refuses makes every case report
     as incomparable, which names neither the backend nor the reason.
 
+    **Not installed and does not support are different reasons**, and they used
+    to print the same sentence: an absent backend reports an empty
+    `surface_models`, which is indistinguishable from genuine non-support unless
+    `available` is read too. So a machine without DelPhi was told "excluding
+    delphi: does not support the molecular surface" — false, and the sort of
+    false that stops someone installing the project's primary cross-validation
+    partner.
+
     A backend the caller named explicitly is kept, so `--backend gb --surface
     van-der-waals` fails with GB's own message rather than being silently
     dropped: asking for something impossible should say so.
@@ -214,28 +182,39 @@ def _backends_supporting(
     if explicit:
         return names, {}
 
-    supported = {
-        report["name"]: report["surface_models"] for report in describe_capabilities()["backends"]
-    }
+    reports = {report["name"]: report for report in describe_capabilities()["backends"]}
     kept, excluded = [], {}
     for name in names:
-        models = supported.get(name)
-        if models is None or model.value in models:
+        report = reports.get(name)
+        if report is None or model.value in report["surface_models"]:
             kept.append(name)
+        elif not report["available"]:
+            excluded[name] = f"not installed — {report['detail'].splitlines()[0]}"
         else:
             excluded[name] = f"does not support the {model.value} surface"
     return kept, excluded
 
 
 def _validate(args: argparse.Namespace) -> int:
-    names = args.backend or sorted(BACKENDS)
-    unknown = [n for n in names if n not in BACKENDS]
+    # Installed, not registered. Defaulting to every *registered* backend put
+    # TABI-PB in the comparison on a machine that has never built it: it is
+    # unavailable but still advertises `molecular`, so the surface filter kept
+    # it, `solver_for` constructed it lazily without complaint, and every case
+    # then died on `TabipbNotFound`. On the README's own install — conda-forge
+    # APBS and nothing else — `sashimi validate` skipped all 64 cases and exited
+    # 1, while apbs against gb was a perfectly good comparison sitting right
+    # there. Same "what would a machine with only APBS do" bug this branch fixed
+    # in the cross-validation tests.
+    names = args.backend or backends.available_names()
+    unknown = [n for n in names if n not in BACKEND_NAMES]
     if unknown:
         raise SystemExit(f"unknown backend(s): {', '.join(unknown)}")
     if len(names) < MIN_BACKENDS:
+        installed = ", ".join(backends.available_names()) or "none"
         raise SystemExit(
             f"cross-validation needs at least two backends, got {len(names)}. "
-            "One backend trivially agrees with itself."
+            f"One backend trivially agrees with itself. Installed here: {installed}. "
+            "`sashimi capabilities` reports what each one needs."
         )
 
     model = _pick_surface_model(args.surface)
@@ -247,9 +226,9 @@ def _validate(args: argparse.Namespace) -> int:
             f"{model.value} surface. `sashimi capabilities` reports what each "
             "one supports; `--surface` chooses a different one."
         )
-    backends = [Backend(name, BACKENDS[name](), FAMILIES[name]) for name in names]
+    selected = [Backend(name, *backends.solver_for(name)) for name in names]
 
-    families = {b.family.value for b in backends}
+    families = {b.family.value for b in selected}
     across = f" across {len(families)} solver families" if len(families) > 1 else ""
     print(f"Comparing {', '.join(names)} on the {model.value} surface{across}.")
     for name, reason in excluded.items():
@@ -275,7 +254,7 @@ def _validate(args: argparse.Namespace) -> int:
         try:
             comparison = validate_system(
                 system,
-                backends,
+                selected,
                 tolerance=args.tolerance,
                 approximation_tolerance=args.approximation_tolerance,
                 allow_mismatch=args.allow_mismatched,
@@ -330,7 +309,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "--backend", choices=sorted(BACKENDS), default="apbs", help="solver to run (default: apbs)"
+        "--backend",
+        choices=sorted(BACKEND_NAMES),
+        default="apbs",
+        help="solver to run (default: apbs)",
     )
     common.add_argument("--case", action="append", help="limit to a named case; repeatable")
     common.add_argument("--directory", help="where summaries live (default: tests/corpus)")
@@ -366,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
     validator.add_argument(
         "--backend",
         action="append",
-        choices=sorted(BACKENDS),
+        choices=sorted(BACKEND_NAMES),
         help="backend to include; repeatable (default: all installed)",
     )
     validator.add_argument("--case", action="append", help="limit to a named case; repeatable")

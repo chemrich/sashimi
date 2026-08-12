@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # osx-arm64 costs 10x per minute, and a pull request iterates. So the macOS
+  # leg runs where it is worth that: on main after a merge, weekly against a
+  # moving conda-forge, and on demand. See "Which runners, and why" below.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 # A newer push to the same branch makes the in-flight run obsolete. main is
 # excluded so pushes there always produce a complete, citable result.
@@ -16,14 +22,31 @@ permissions:
 
 jobs:
   check:
-    name: check (${{ matrix.os }})
+    name: check (${{ matrix.os }}, ${{ matrix.profile }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Which runners, and why.
+      #
+      # `full` carries every backend this project can install. `apbs-only` is
+      # the README's own recommended install and nothing else, which is what
+      # most users and contributors will actually have — and it is the leg that
+      # catches the failure mode this project keeps hitting: a test that needs a
+      # binary without saying so. A marker selects and deselects; it does not
+      # skip. Two such bugs were found the day this leg was added, one of them
+      # five tests failing on the documented install since phase 7.
+      #
+      # linux-64 is the lab target. macos-latest is arm64, which ROADMAP.md
+      # phase 0 established as a first-class platform rather than a Rosetta
+      # fallback — but GitHub bills it at 10x, and at ~6 minutes a run it was
+      # roughly 90% of this project's CI spend and exhausted the account's
+      # Actions budget mid-day on 2026-08-12. It now runs on main, weekly and on
+      # demand rather than on every pull-request push. What it uniquely proves —
+      # that conda-forge ships a working osx-arm64 APBS 3.4.1 — is a fact about
+      # a third party that changes rarely, and every commit is exercised on
+      # osx-arm64 locally before it is pushed.
       matrix:
-        # linux-64 is the lab target; macos-latest is arm64, which ROADMAP.md phase 0
-        # established as a first-class platform rather than a Rosetta fallback.
-        os: [ubuntu-latest, macos-latest]
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"}]' || '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"},{"os":"macos-latest","profile":"full"}]') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -60,20 +83,25 @@ jobs:
 
       # DelPhi: the C++ reference build on Linux, pyDelPhi on macOS.
       #
-      # One flavour per runner, because they cover different things and neither
-      # covers both. The C++ build supports `molecular` and `van-der-waals` —
-      # the only surface models it shares with APBS — so it is what makes
-      # cross-solver validation possible at all, and `tests/test_cross_validation.py`
-      # runs only where it is present. pyDelPhi supports neither and so can
-      # validate nothing, but it installs anywhere and exercises the backend's
-      # plumbing. Splitting them across the matrix covers both per push.
+      # Both flavours on the `full` profile, because they differ in ways that
+      # produce wrong answers rather than errors: `temper` is Celsius in the C++
+      # build and kelvin in pyDelPhi, and their surface-model support differs.
+      #
+      # They used to be split one per runner, on the belief that pyDelPhi
+      # "supports neither shared surface model and so can validate nothing".
+      # That was the `surfmethod=vdw` misreading phase 7 corrected — it names
+      # the probe-rolling construction, not a van der Waals boundary, and
+      # reproduces the C++ build's `molecular` answer exactly. Both flavours can
+      # cross-validate, so both are installed and both are exercised; the split
+      # would have quietly dropped pyDelPhi to weekly when macOS came off the
+      # per-push path.
       #
       # Both are driven as subprocesses and never imported: DelPhi ships no
       # licence text at all and pyDelPhi is AGPL-3.0 where sashimi is MIT, which
       # is the boundary ROADMAP.md section 9 already draws around APBS.
 
       - name: Cache the DelPhi build
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.profile == 'full'
         id: delphi-cache
         uses: actions/cache@v4
         with:
@@ -92,7 +120,7 @@ jobs:
       # than turn sashimi's CI red.
       - name: Build DelPhi (C++ reference build)
         id: delphi_cpp
-        if: runner.os == 'Linux' && steps.delphi-cache.outputs.cache-hit != 'true'
+        if: runner.os == 'Linux' && matrix.profile == 'full' && steps.delphi-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -111,7 +139,7 @@ jobs:
       # (v0.2.0, last pushed 2025-11) with issues disabled.
       - name: Install pyDelPhi
         id: pydelphi
-        if: runner.os == 'macOS'
+        if: matrix.profile == 'full'
         continue-on-error: true
         run: |
           uv venv --python 3.13 .pydelphi
@@ -134,7 +162,7 @@ jobs:
       # publishes no release tarball, and allowed to fail so a third party's
       # outage skips the tier rather than reddening CI.
       - name: Cache the TABI-PB build
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.profile == 'full'
         id: tabipb-cache
         uses: actions/cache@v4
         with:
@@ -143,7 +171,7 @@ jobs:
 
       - name: Build TABI-PB
         id: tabipb
-        if: runner.os == 'Linux' && steps.tabipb-cache.outputs.cache-hit != 'true'
+        if: runner.os == 'Linux' && matrix.profile == 'full' && steps.tabipb-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -206,6 +234,16 @@ jobs:
         if: steps.delphi_path.outputs.found == 'true'
         run: uv run --frozen pytest -q -m delphi
 
+      # Discovery prefers the C++ build where both exist, so without this the
+      # pure-Python flavour would be installed and never run — a skipped tier
+      # and a passing tier look identical, which is the trap this workflow was
+      # already burned by once.
+      - name: Verify the pyDelPhi flavour actually ran
+        if: runner.os == 'Linux' && steps.pydelphi.outcome == 'success'
+        env:
+          SASHIMI_DELPHI_PATH: ${{ github.workspace }}/.pydelphi/bin/pydelphi-static
+        run: uv run --frozen pytest -q -m delphi
+
       - name: Verify the TABI-PB tier actually ran
         if: steps.tabipb_path.outputs.found == 'true'
         run: uv run --frozen pytest -q -m tabipb
@@ -215,7 +253,10 @@ jobs:
       # own step on purpose: a corpus diff is a real result change, and it
       # should read as one rather than as one failure among four hundred tests.
       # `full` is not run per push — `sashimi corpus verify --tier full`.
+      # Needs APBS and nothing else, so running it on both Linux legs would pay
+      # twice for the same numbers.
       - name: Verify the corpus (standard tier)
+        if: matrix.profile == 'full'
         run: uv run --frozen sashimi corpus verify --tier standard
 
   # Single stable check name for the branch ruleset to require. Matrix job names

@@ -19,20 +19,26 @@ explain the problem the one tool that cannot run.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
 from typing import Any
 
-from sashimi.apbs.grid import size_grid
-from sashimi.apbs.options import SURFACE_KEYWORD, ApbsOptions, resolve_surface
+from sashimi.apbs.options import ApbsOptions, resolve_surface
 from sashimi.artifacts import describe_cleanup, estimated_dx_bytes
-from sashimi.errors import BackendUnavailable, InputError, SashimiError
+from sashimi.backends import (
+    IMPLEMENTED_EQUATIONS,
+    BackendEntry,
+    BackendReport,
+    get,
+    reports,
+)
+from sashimi.errors import InputError, SashimiError
 from sashimi.protocol import (
-    AccuracyTier,
     Equation,
     GridSpec,
     PQRData,
     SolventModel,
+    SolverFamily,
     SurfaceModel,
+    System,
 )
 
 __all__ = [
@@ -50,196 +56,8 @@ UNITS = {
     "temperature": "kelvin",
 }
 
-# Equations sashimi will actually solve, as opposed to represent. ROADMAP.md
-# §14 Q1: nonlinear is expressible so BEM backends cannot be handed one, but no
-# tested code path produces it, and refusing beats returning untested numbers.
-IMPLEMENTED_EQUATIONS = (Equation.LINEAR,)
-
 # A spread needs two things to spread between.
 MIN_BACKENDS_TO_COMPARE = 2
-
-
-@dataclass(frozen=True)
-class BackendReport:
-    """One backend's state, including the reason it is unusable."""
-
-    name: str
-    available: bool
-    family: str
-    version: str | None = None
-    detail: str = ""
-    surface_models: tuple[str, ...] = ()
-    equations: tuple[str, ...] = ()
-    # Whether this backend discretizes the equation or approximates it. An agent
-    # choosing a backend for triage rather than for an answer needs to see the
-    # difference, and `sashimi validate` reports the two tiers separately.
-    accuracy_tier: str = AccuracyTier.REFERENCE.value
-    extras: dict[str, Any] = field(default_factory=dict)
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "available": self.available,
-            "family": self.family,
-            "version": self.version,
-            "detail": self.detail,
-            "surface_models": list(self.surface_models),
-            "equations": list(self.equations),
-            "accuracy_tier": self.accuracy_tier,
-            **self.extras,
-        }
-
-
-def _apbs_report() -> BackendReport:
-    from sashimi.apbs import discover_apbs  # noqa: PLC0415 — keeps import cost off other paths
-
-    supported = tuple(sorted(m.value for m in SURFACE_KEYWORD))
-    equations = tuple(e.value for e in IMPLEMENTED_EQUATIONS)
-    try:
-        binary = discover_apbs()
-    except BackendUnavailable as exc:
-        return BackendReport(
-            name="apbs",
-            available=False,
-            family="finite-difference",
-            detail=str(exc),
-            surface_models=supported,
-            equations=equations,
-        )
-    return BackendReport(
-        name="apbs",
-        available=True,
-        family="finite-difference",
-        version=binary.version,
-        detail=f"resolved to {binary.path}",
-        surface_models=supported,
-        equations=equations,
-        extras={
-            "binary_sha256": binary.sha256,
-            "representable_equations": [e.value for e in Equation],
-            "native_surface_escape_hatch": "ApbsOptions.srfm_override (spl2, spl4)",
-        },
-    )
-
-
-def _delphi_report() -> BackendReport:
-    """DelPhi's state, and which of its two executables was found.
-
-    Reported as one backend rather than two, because a caller asks "can I run
-    DelPhi", but the flavour is carried in `extras` and in the supported
-    surface models — which genuinely differ between them, so a single answer to
-    "which surfaces does DelPhi support" would be wrong.
-    """
-    from sashimi.delphi.discover import discover_delphi  # noqa: PLC0415
-    from sashimi.delphi.options import SUPPORTED_SURFACES, UNVALIDATED_SURFACES  # noqa: PLC0415
-
-    equations = tuple(e.value for e in IMPLEMENTED_EQUATIONS)
-    try:
-        binary = discover_delphi()
-    except BackendUnavailable as exc:
-        return BackendReport(
-            name="delphi",
-            available=False,
-            family="finite-difference",
-            detail=str(exc),
-            equations=equations,
-        )
-
-    supported = SUPPORTED_SURFACES[binary.flavour]
-    return BackendReport(
-        name="delphi",
-        available=True,
-        family="finite-difference",
-        version=binary.version,
-        detail=f"resolved to {binary.path} ({binary.flavour.value})",
-        surface_models=tuple(sorted(m.value for m in supported)),
-        equations=equations,
-        extras={
-            "flavour": binary.flavour.value,
-            "binary_sha256": binary.sha256,
-            "unvalidated_surface_models": sorted(
-                m.value for m in (supported & UNVALIDATED_SURFACES)
-            ),
-            "energy_term": "corrected reaction field; excludes the mobile-ion osmotic term",
-        },
-    )
-
-
-def _tabipb_report() -> BackendReport:
-    """TABI-PB's state. The first backend that is not a grid.
-
-    Reported with `family: boundary-element`, which is the field that tells a
-    caller why it answers different questions: it returns potentials on the
-    dielectric interface, so there is no volume to interpolate and no map to
-    write for a viewer.
-    """
-    from sashimi.tabipb.discover import discover_tabipb  # noqa: PLC0415
-    from sashimi.tabipb.options import SUPPORTED_SURFACES  # noqa: PLC0415
-    from sashimi.tabipb.run import LOWEST_RELIABLE_MESH_DENSITY, MIN_ATOMS  # noqa: PLC0415
-
-    supported = tuple(sorted(m.value for m in SUPPORTED_SURFACES))
-    equations = tuple(e.value for e in IMPLEMENTED_EQUATIONS)
-    try:
-        binary = discover_tabipb()
-    except BackendUnavailable as exc:
-        return BackendReport(
-            name="tabipb",
-            available=False,
-            family="boundary-element",
-            detail=str(exc),
-            surface_models=supported,
-            equations=equations,
-        )
-
-    return BackendReport(
-        name="tabipb",
-        available=True,
-        family="boundary-element",
-        version=binary.mesher_version,
-        detail=f"resolved to {binary.path}, meshing with {binary.mesher_path.name}",
-        surface_models=supported,
-        equations=equations,
-        extras={
-            "binary_sha256": binary.sha256,
-            "mesher": binary.mesher_path.name,
-            "returns": "potential on the dielectric interface, not a volumetric map",
-            "min_atoms": MIN_ATOMS,
-            "lowest_reliable_mesh_density": LOWEST_RELIABLE_MESH_DENSITY,
-        },
-    )
-
-
-def _gb_report() -> BackendReport:
-    """Generalized Born's state, which is always "available".
-
-    The only backend with nothing to discover: no binary, no environment
-    variable, no install step. `available` is therefore unconditionally true,
-    and the honest caveat is not availability but `accuracy_tier` — it
-    approximates the equation the others solve, and a caller choosing it for an
-    answer rather than for triage needs to see that before it picks.
-    """
-    from sashimi.gb import BACKEND_VERSION, GbOptions  # noqa: PLC0415
-    from sashimi.gb.options import SUPPORTED_SURFACES  # noqa: PLC0415
-
-    options = GbOptions()
-    return BackendReport(
-        name="gb",
-        available=True,
-        family="analytic",
-        version=BACKEND_VERSION,
-        detail="in process; no binary, nothing to install",
-        surface_models=tuple(sorted(m.value for m in SUPPORTED_SURFACES)),
-        equations=(Equation.LINEAR.value,),
-        accuracy_tier=AccuracyTier.APPROXIMATE.value,
-        extras={
-            "model": options.model.value,
-            "returns": "solvation energy only; no potential field exists to sample",
-            "expected_deviation": (
-                "tens of percent from a Poisson-Boltzmann solver by construction; "
-                "`sashimi validate` reports it as a deviation, not a disagreement"
-            ),
-        },
-    )
 
 
 def comparable_surface_models() -> list[str]:
@@ -268,8 +86,7 @@ def comparable_surface_models() -> list[str]:
     run: APBS against DelPhi on `van-der-waals`, which TABI-PB cannot mesh and
     which the intersection therefore hid.
     """
-    reports = [_apbs_report(), _delphi_report(), _tabipb_report(), _gb_report()]
-    supported = [set(r.surface_models) for r in reports if r.available]
+    supported = [set(r.surface_models) for r in reports() if r.available]
     if len(supported) < MIN_BACKENDS_TO_COMPARE:
         return []
     counts = Counter(model for models in supported for model in models)
@@ -278,7 +95,7 @@ def comparable_surface_models() -> list[str]:
 
 def describe_capabilities() -> dict[str, Any]:
     """Everything a caller needs to plan a request without trial and error."""
-    backends = [_apbs_report(), _delphi_report(), _tabipb_report(), _gb_report()]
+    backends = reports()
     usable = [b.name for b in backends if b.available]
     defaults = GridSpec()
 
@@ -325,6 +142,8 @@ def validate_request(
     *,
     equation: Equation = Equation.LINEAR,
     options: ApbsOptions | None = None,
+    backend: str = "apbs",
+    mesh_density: float | None = None,
 ) -> dict[str, Any]:
     """Would this solve work, and what would it cost? No subprocess involved.
 
@@ -332,10 +151,42 @@ def validate_request(
     a request is knowable before paying for it: the grid that would be used, its
     point count, the map size on disk, and whether the memory guardrail would
     quietly coarsen the resolution.
+
+    `backend` is checked for two things a caller can only otherwise discover by
+    running it: whether it is installed, and whether it supports the surface
+    model asked for. That second one is the common failure now that a backend
+    can be chosen — three of the four refuse `smoothed-molecular`, and the
+    refusal arrives after the structure has been prepared.
+
+    The cost estimate is the **chosen backend's own arithmetic**, not a
+    finite-difference estimate applied to everyone. Two FD backends do not agree
+    on what a grid is — APBS solves on a `dime = c*2^(l+1)+1` multigrid lattice
+    with per-axis spacing, DelPhi on an odd cubic one — so costing DelPhi with
+    APBS's sizer produced a point count, a map size and a relaxation warning
+    belonging to a solver the caller was not running. Backends that build no
+    grid report what governs their cost instead, and every answer arrives under
+    the same `cost` key so a caller does not have to know the family to read it.
+
+    `mesh_density` is accepted because it is the boundary-element cost knob, and
+    checking it here is the difference between a refusal now and an uncaught C++
+    exception after a structure has been prepared.
     """
     grid = grid or GridSpec()
     solvent = solvent or SolventModel()
     options = options or ApbsOptions()
+    entry = get(backend)
+    # `mesh_density=None` means "whatever the protocol defaults to", rather
+    # than a number this module invents. `System` and `BoundaryElementRequest`
+    # currently disagree about that default — ROADMAP.md §14 has it open — and
+    # duplicating either here would make a third place to fix.
+    system = System(
+        structure=structure,
+        solvent=solvent,
+        grid=grid,
+        want_energy=True,
+        want_potential=entry.family is not SolverFamily.ANALYTIC,
+        **({} if mesh_density is None else {"mesh_density": mesh_density}),
+    )
 
     problems: list[str] = []
     report: dict[str, Any] = {
@@ -349,43 +200,42 @@ def validate_request(
             f"the {equation.value} equation is representable but has no solver path yet; use linear"
         )
 
-    try:
-        resolved_surface, resolved_probe = resolve_surface(
-            solvent.surface_model, solvent.surface_radius, options
+    backend_report = entry.report()
+    surface = solvent.surface_model.value
+    if backend_report.surface_models and surface not in backend_report.surface_models:
+        problems.append(
+            f"{backend} does not support the {surface} surface. It supports: "
+            f"{', '.join(backend_report.surface_models)}. Surface model is the "
+            "largest modelling choice in the calculation, so it is refused "
+            "rather than substituted."
         )
-        report["surface"] = {
-            "requested": solvent.surface_model.value,
-            "resolved_keyword": resolved_surface,
-            "resolved_probe_radius_a": resolved_probe,
-        }
-    except InputError as exc:
-        problems.append(str(exc))
 
-    try:
-        sized = size_grid(structure, grid)
-    except SashimiError as exc:
-        problems.append(str(exc))
-    else:
-        relaxed = any(s > grid.resolution + 1e-9 for s in sized.spacing)
-        report["grid"] = {
-            "dime": list(sized.dime),
-            "n_points": sized.n_points,
-            "spacing_achieved_a": [round(s, 6) for s in sized.spacing],
-            "resolution_requested_a": grid.resolution,
-            "resolution_relaxed": relaxed,
-            "estimated_map_mb": round(estimated_dx_bytes(sized.n_points) / 1e6, 1),
-        }
-        if relaxed:
-            problems.append(
-                f"max_points={grid.max_points:,} caps the grid, so the achieved spacing "
-                f"would be {max(sized.spacing):.4f} A rather than the requested "
-                f"{grid.resolution} A. Raise max_points or accept the coarser grid."
+    report["surface"] = {"requested": surface}
+    if entry.name == "apbs":
+        # `resolve_surface` maps onto APBS's keywords, so the resolved value is
+        # only meaningful for APBS. Reporting another backend's request through
+        # it would print a keyword that backend has never heard of.
+        try:
+            resolved_surface, resolved_probe = resolve_surface(
+                solvent.surface_model, solvent.surface_radius, options
             )
+            report["surface"]["resolved_keyword"] = resolved_surface
+            report["surface"]["resolved_probe_radius_a"] = resolved_probe
+        except InputError as exc:
+            problems.append(str(exc))
 
-    backend = _apbs_report()
-    report["backend"] = {"name": backend.name, "available": backend.available}
-    if not backend.available:
-        problems.append(backend.detail)
+    problems.extend(entry.check(system))
+    report["cost"] = _cost(entry, structure, grid, problems)
+
+    backend_dict = {
+        "name": backend_report.name,
+        "available": backend_report.available,
+        "family": entry.family.value,
+        "accuracy_tier": backend_report.accuracy_tier,
+    }
+    report["backend"] = backend_dict
+    if not backend_report.available:
+        problems.append(backend_report.detail)
 
     # A relaxed grid is a warning, not a refusal: the solve would still run and
     # the result reports the relaxation. Anything else here would prevent it.
@@ -396,11 +246,85 @@ def validate_request(
     return report
 
 
+def _cost(
+    entry: BackendEntry,
+    structure: PQRData,
+    grid: GridSpec,
+    problems: list[str],
+) -> dict[str, Any]:
+    """What this request would cost, in the terms the chosen backend works in.
+
+    One key for every family, with `grid` null where there is no grid, so a
+    caller reads the same field whichever backend it picked. The alternative —
+    `grid` for finite difference and `cost` for everything else — meant knowing
+    the family before knowing which key existed.
+    """
+    cost: dict[str, Any] = {"family": entry.family.value, "grid": None}
+    if entry.size_grid is None:
+        cost["note"] = _NON_GRID_COST[entry.family]
+        return cost
+
+    try:
+        sized = entry.size_grid(structure, grid)
+    except SashimiError as exc:
+        problems.append(str(exc))
+        cost["note"] = "the grid could not be sized; see problems"
+        return cost
+
+    relaxed = any(s > grid.resolution + 1e-9 for s in sized.spacing)
+    cost["grid"] = {
+        "n_points": sized.n_points,
+        "spacing_achieved_a": [round(s, 6) for s in sized.spacing],
+        "resolution_requested_a": grid.resolution,
+        "resolution_relaxed": relaxed,
+        "estimated_map_mb": round(estimated_dx_bytes(sized.n_points) / 1e6, 1),
+        # The backend's own description of the lattice, in its own vocabulary:
+        # `dime` for APBS, `gsize` and `scale` for DelPhi. Above this line those
+        # are not interchangeable, which is the whole reason each backend sizes
+        # its own.
+        "native": sized.as_diagnostics(),
+    }
+    cost["note"] = f"{entry.name} sizes this grid itself; the shape above is its own"
+    if relaxed:
+        problems.append(
+            f"max_points={grid.max_points:,} caps the grid, so the achieved spacing "
+            f"would be {max(sized.spacing):.4f} A rather than the requested "
+            f"{grid.resolution} A. Raise max_points or accept the coarser grid."
+        )
+    return cost
+
+
+# What a caller should look at instead of a point count, when a grid is not what
+# the backend builds. Both are measured claims: see ROADMAP.md §7.
+_NON_GRID_COST = {
+    SolverFamily.BOUNDARY_ELEMENT: (
+        "no grid: cost is the surface mesh, which does not track atom count — "
+        "906 atoms mesh in 48 s where a 260-atom united-atom structure takes "
+        "450 s at three times the vertices. Mesh density is the knob."
+    ),
+    SolverFamily.ANALYTIC: (
+        "no grid and no field: cost is O(N^2) in atoms and runs in process — "
+        "under a second for a 2,500-atom protein. Returns an energy only."
+    ),
+}
+
+
 def _summarise(report: dict[str, Any], blocking: list[str], problems: list[str]) -> str:
-    grid = report.get("grid")
-    shape = "x".join(str(d) for d in grid["dime"]) if grid else "unknown"
-    size = f", ~{grid['estimated_map_mb']} MB map" if grid else ""
+    """One line an agent can act on, true for a backend that builds no grid.
+
+    This used to read "Would run on a unknown grid" for Generalized Born and
+    TABI-PB — contradicting the report's own `cost.grid: null` and inviting a
+    caller to lower `max_points` for a solver that has none.
+    """
     if blocking:
         return f"Would not run: {blocking[0]}"
+
     warned = f" {len(problems)} warning(s)." if problems else ""
-    return f"Would run on a {shape} grid{size}.{warned}"
+    cost = report.get("cost", {})
+    grid = cost.get("grid")
+    if grid is None:
+        return f"Would run: {cost.get('note', 'no grid to size')}.{warned}"
+    return (
+        f"Would run on {grid['n_points']:,} grid points at "
+        f"{max(grid['spacing_achieved_a']):.3f} A, ~{grid['estimated_map_mb']} MB map.{warned}"
+    )

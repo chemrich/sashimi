@@ -13,7 +13,6 @@ exercised them.
 from __future__ import annotations
 
 import dataclasses
-import os
 from pathlib import Path
 
 import pytest
@@ -30,8 +29,7 @@ from sashimi.protocol import (
     SurfaceModel,
 )
 from sashimi.tabipb import TabipbOptions, TabipbSolver, discover_tabipb
-from sashimi.tabipb.discover import TabipbNotFound
-from tests.helpers import surface
+from tests.helpers import installed_or_skip, surface
 
 pytestmark = pytest.mark.tabipb
 
@@ -41,12 +39,7 @@ BORN_ION_PQR = "ATOM      1  I   ION     1       0.000   0.000  0.000  1.00  3.0
 @pytest.fixture(scope="module")
 def binary():
     """The installed TABI-PB, or a skip that never hides a broken install."""
-    try:
-        return discover_tabipb()
-    except TabipbNotFound as exc:
-        if os.environ.get("SASHIMI_TABIPB_PATH"):
-            raise
-        pytest.skip(str(exc))
+    return installed_or_skip(discover_tabipb, "SASHIMI_TABIPB_PATH")
 
 
 @pytest.fixture(scope="module")
