@@ -16,6 +16,8 @@ from fastmcp.exceptions import ToolError
 from sashimi.dx import write_dx
 from sashimi.mcp import mcp
 from sashimi.protocol import PotentialGrid
+from sashimi.tabipb.discover import discover_tabipb
+from tests.helpers import installed_or_skip
 
 FIXTURE_PDB = Path(__file__).parent / "data" / "ala-gly.pdb"
 
@@ -545,7 +547,17 @@ class TestBackendSelection:
         assert result["backend_name"] == "apbs"
         assert result["dx_path"].endswith(".dx")
 
+    @pytest.fixture
+    def tabipb_installed(self):
+        """The marker selects; this is what actually skips.
+
+        Without it the test runs wherever TABI-PB is absent — which is the macOS
+        CI leg, since only the Linux one builds it.
+        """
+        return installed_or_skip(discover_tabipb, "SASHIMI_TABIPB_PATH")
+
     @pytest.mark.tabipb
+    @pytest.mark.usefixtures("tabipb_installed")
     async def test_a_boundary_element_solve_returns_a_surface_and_no_map(self, client, tmp_path):
         """The third response shape: statistics over a mesh, with nothing to write.
 
