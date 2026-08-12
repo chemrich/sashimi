@@ -269,9 +269,27 @@ plus a short human-readable summary.
 pdb2pqr; the returned warnings summary is the important part.
 
 `sashimi_solve(pqr_path, resolution, padding, ionic_strength, solute_dielectric,
-solvent_dielectric, compute_energy, output_dx)` — the workhorse. Returns grid
-stats, the DX path, energy when requested, backend provenance, and
-`resolution_relaxed` so a guardrail-relaxed grid is visible rather than silent.
+solvent_dielectric, compute_energy, surface_model, backend, output_dx)` — the
+workhorse. Returns energy when requested, backend provenance, and — for the
+backends that fill a volume — grid stats, the DX path and `resolution_relaxed`
+so a guardrail-relaxed grid is visible rather than silent.
+
+**`backend` selects the solver**, and **the response shape follows what that
+solver returned** rather than a schema it must satisfy — the same rule the
+corpus summaries follow (§7). A finite-difference solve carries a map; a
+boundary-element one carries surface statistics and no `dx_path`, because there
+is no volume to write; an analytic one carries an energy and nothing else,
+because it computed nothing else. Asking `gb` for a solve with
+`compute_energy=false` is refused rather than answered with an empty result: it
+computes one number, so not wanting it is a request for nothing.
+
+Backends come from `sashimi.backends`, a registry holding each one's name,
+request family, how to construct it and how it describes itself. It exists
+because that knowledge was previously in three places — the CLI's factories,
+`capabilities`' report functions, and nothing at all for a library consumer —
+which could disagree in a way nothing noticed: a backend `capabilities` reports
+as available but `--backend` cannot name is a report about a solver the caller
+then cannot run. debye registers there in one line.
 
 `sashimi_potential_at(dx_path, points)` — trilinear interpolation of a saved
 map. Out-of-grid points return null, never a clamped edge value, because a
@@ -1285,6 +1303,62 @@ architecture. The Proxmox VM and Tailscale (§11) belong here, not in phase 5.
 Sashimi itself should go quiet after this — a wrapper that needs constant
 attention has failed at its one job.
 
+### The order changed: functionality before shipping
+
+**2026-08-12, at Charlie's direction.** sashimi was born out of early protean
+work, and the goal is for it to *replace* that functionality rather than sit
+beside it. So the ordering is now: make it work, integrate it with protean and
+mcpymol, and ship it afterwards. **Phase 5's PyPI release and phase 6
+distribution are deferred** — not cancelled, and nothing here forecloses them.
+A git or path dependency is enough for protean to consume sashimi, so the
+release was never the blocker it looked like.
+
+What that reordering exposed, by reading the thing being replaced
+(`protean/src/protean_mcp/analysis/electrostatics.py`, 585 lines):
+
+| protean has | sashimi has |
+|---|---|
+| `prepare` — pdb2pqr, charges and radii | `sashimi.prep`, `sashimi.pqr` |
+| `run_apbs` — its own subprocess driver | `sashimi.apbs`, and three more backends |
+| `write_dx` / `read_dx` / `sample` | `sashimi.dx`, `sashimi.analysis` |
+| `coulombic` — a **field** with no binary installed | **nothing** |
+
+That last row is the whole reordering. protean's default backend is screened
+Coulomb precisely because it needs nothing installed, and it produces a grid,
+because colouring a surface needs one. `sashimi.gb` needs nothing installed too
+— and returns an energy, refusing `want_potential` outright. So sashimi can
+replace protean's APBS path today and cannot replace its default at all.
+
+**Hence phase 8 moves up.** A clean-room pure-Python PB solver is the honest
+answer to "a potential field on a machine with no binary", and it is the only
+one that does not put a known-wrong approximation on the critical path of a
+consumer. Porting screened Coulomb into sashimi was considered and rejected for
+that reason: it ignores the low-dielectric interior and the reaction field —
+the two things PB exists to model — and a shipped approximate tier is hard to
+withdraw once something depends on it. debye's acceptance gate is unchanged and
+now matters more: `sashimi corpus verify --backend debye`, against a corpus
+that is 64 cases with closed forms in it.
+
+**Two decisions taken with it**, both previously open in §14:
+
+- **The MCP surface grows a `backend` parameter now**, rather than when debye
+  exists as §10 assumed. Four backends shipped, CI exercised all four, and
+  `sashimi_solve` hardcoded `ApbsSolver()` — so the tier that needs no binary,
+  the only one guaranteed to be present, was the least reachable thing in the
+  package. `sashimi.backends` is the registry that made this one edit rather
+  than three, and debye registers there in a single line.
+- **The default surface model becomes `molecular`** — decided, landing in the
+  next change rather than this one. It resolves §14's last question in the
+  direction phase 7 pointed: it is the only model every shipped backend
+  supports, where `smoothed-molecular` is APBS's alone, so a default request
+  refuses on three of four backends. Measured cost of the switch: **0.80% on
+  ALA-GLY and 2.35% on hen lysozyme**, against the 1.0–1.6% the two
+  reference-tier families already differ by. It is separated because changing
+  `SolventModel`'s dataclass default rewrites the question every corpus case
+  relying on it is asking: those cases must name `smoothed-molecular`
+  explicitly first and be verified bit-identical before the default moves, and
+  that is a change the corpus should be able to prove on its own.
+
 ### Numbering history
 
 The two superseded documents numbered phases differently. For reading old
@@ -1367,10 +1441,11 @@ summarised here.
   protocol default that no shipped backend can honor is a smell, but the right
   value is solute-dependent and backend-specific, so raising it would be
   trading one arbitrary number for another. The backend names the cause today.
-- **Does `SMOOTHED_MOLECULAR` belong as the default?** Phase 7 made it
-  load-bearing in a way it was not before: sashimi's default surface model is
-  supported by exactly one backend, so every DelPhi solve at defaults raises
-  rather than running. Refusing is right — substituting would move the answer
-  by 2,000× the corpus tolerance — but a default that no second backend can
-  honor is worth revisiting now that there is a second backend to weigh it
-  against.
+- ~~**Does `SMOOTHED_MOLECULAR` belong as the default?**~~ **No — resolved
+  2026-08-12**, and the trigger was making the backend selectable: a default
+  that three of four backends refuse is a default that hides the other three.
+  `MOLECULAR` replaces it, measured at 0.80% on ALA-GLY and 2.35% on hen
+  lysozyme, which is inside the 1.0–1.6% two reference-tier families already
+  differ by. Refusing rather than substituting was still right and stays right;
+  what changed is which model the request starts from. Recorded in §12 with the
+  corpus-explicitness step it needs first.

@@ -4,9 +4,12 @@ Mostly binary-free. The point of `validate_request` is that it answers expensive
 questions cheaply, so a test that needed a solver would undercut it.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 
+from sashimi import backends
 from sashimi.apbs import discover
 from sashimi.apbs.options import ApbsOptions
 from sashimi.capabilities import (
@@ -19,6 +22,24 @@ from sashimi.capabilities import (
 from sashimi.delphi import discover as delphi_discover
 from sashimi.protocol import Equation, GridSpec, PQRData, SolventModel, SurfaceModel
 from sashimi.tabipb import discover as tabipb_discover
+
+
+def substitute(monkeypatch, **replacements: BackendReport) -> None:
+    """Make named backends report something else, at the registry.
+
+    The registry is the seam `describe_capabilities`, `--backend` and
+    `sashimi_solve` all read, so substituting an entry here is the one place
+    that changes every caller's view at once. Patching the private report
+    functions, which is what this used to do, only changed the ones that
+    happened to import them.
+    """
+    for name, report in replacements.items():
+        entry = backends.REGISTRY[name]
+
+        def describe(captured: BackendReport = report) -> BackendReport:
+            return captured
+
+        monkeypatch.setitem(backends.REGISTRY, name, dataclasses.replace(entry, describe=describe))
 
 
 @pytest.fixture
@@ -145,9 +166,9 @@ class TestCapabilities:
         monkeypatch.setenv("SASHIMI_DELPHI_PATH", "/nonexistent/delphi")
         monkeypatch.setenv("SASHIMI_TABIPB_PATH", "/nonexistent/tabipb")
         monkeypatch.setattr("shutil.which", which_apbs_only)
-        monkeypatch.setattr(
-            "sashimi.capabilities._gb_report",
-            lambda: BackendReport("gb", False, "analytic", detail="hidden for this test"),
+        substitute(
+            monkeypatch,
+            gb=BackendReport("gb", False, "analytic", detail="hidden for this test"),
         )
         try:
             assert comparable_surface_models() == []
@@ -170,33 +191,24 @@ class TestCapabilities:
             BackendReport("delphi", True, "finite-difference", surface_models=("molecular",)),
             BackendReport("gb", True, "analytic", surface_models=("van-der-waals",)),
         ]
-        monkeypatch.setattr("sashimi.capabilities._apbs_report", lambda: reports[0])
-        monkeypatch.setattr("sashimi.capabilities._delphi_report", lambda: reports[1])
-        monkeypatch.setattr("sashimi.capabilities._tabipb_report", lambda: reports[2])
-        monkeypatch.setattr(
-            "sashimi.capabilities._gb_report",
-            lambda: BackendReport("unused", False, "analytic"),
+        substitute(
+            monkeypatch,
+            apbs=reports[0],
+            delphi=reports[1],
+            tabipb=reports[2],
+            gb=BackendReport("unused", False, "analytic"),
         )
 
         assert comparable_surface_models() == ["molecular"]
 
     def test_a_model_only_one_backend_supports_is_not_comparable(self, monkeypatch):
         """Two or more, still — the property the intersection was there for."""
-        monkeypatch.setattr(
-            "sashimi.capabilities._apbs_report",
-            lambda: BackendReport("apbs", True, "fd", surface_models=("molecular", "smol")),
-        )
-        monkeypatch.setattr(
-            "sashimi.capabilities._delphi_report",
-            lambda: BackendReport("delphi", True, "fd", surface_models=("gaussian",)),
-        )
-        monkeypatch.setattr(
-            "sashimi.capabilities._tabipb_report",
-            lambda: BackendReport("tabipb", False, "bem", surface_models=("molecular",)),
-        )
-        monkeypatch.setattr(
-            "sashimi.capabilities._gb_report",
-            lambda: BackendReport("unused", False, "analytic"),
+        substitute(
+            monkeypatch,
+            apbs=BackendReport("apbs", True, "fd", surface_models=("molecular", "smol")),
+            delphi=BackendReport("delphi", True, "fd", surface_models=("gaussian",)),
+            tabipb=BackendReport("tabipb", False, "bem", surface_models=("molecular",)),
+            gb=BackendReport("unused", False, "analytic"),
         )
 
         assert comparable_surface_models() == []
