@@ -11,11 +11,11 @@ edit when debye arrives, and they can disagree in a way nothing notices: a
 backend `capabilities` reports as available but `--backend` cannot name is a
 report about a solver the caller then cannot run.
 
-So the registry holds the name, the request family it speaks, how to build it
-and how it describes itself, and everything else asks here. It deliberately
-does *not* hold an instance: constructing a solver discovers a binary, and
-`sashimi_capabilities` must be able to report a missing one rather than fail
-importing.
+So the registry holds the name, the request family it speaks, how to build it,
+how it describes itself, how it would size a grid and what it requires — and
+everything else asks here. It deliberately does *not* hold an instance:
+`sashimi_capabilities` must be able to report a missing binary rather than fail
+importing, so nothing here may depend on a solver being constructible.
 """
 
 from __future__ import annotations

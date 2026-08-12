@@ -1379,8 +1379,10 @@ that is 64 cases with closed forms in it.
   direction phase 7 pointed: it is the only model every shipped backend
   supports, where `smoothed-molecular` is APBS's alone, so a default request
   refuses on three of four backends. Measured cost of the switch: **0.80% on
-  ALA-GLY and 2.35% on hen lysozyme**, against the 1.0–1.6% the two
-  reference-tier families already differ by. It is separated because changing
+  ALA-GLY and 2.35% on hen lysozyme** — smaller than the 1.0–1.6% the two
+  reference-tier families differ by on a dipeptide, larger on a protein, and an
+  order of magnitude below the 25.7% a surface model is worth (§5), which is the
+  comparison that carries the decision. It is separated because changing
   `SolventModel`'s dataclass default rewrites the question every corpus case
   relying on it is asking: those cases must name `smoothed-molecular`
   explicitly first and be verified bit-identical before the default moves, and
@@ -1472,7 +1474,13 @@ summarised here.
   2026-08-12**, and the trigger was making the backend selectable: a default
   that three of four backends refuse is a default that hides the other three.
   `MOLECULAR` replaces it, measured at 0.80% on ALA-GLY and 2.35% on hen
-  lysozyme, which is inside the 1.0–1.6% two reference-tier families already
-  differ by. Refusing rather than substituting was still right and stays right;
-  what changed is which model the request starts from. Recorded in §12 with the
-  corpus-explicitness step it needs first.
+  lysozyme. This entry first argued that was "inside the 1.0–1.6% two
+  reference-tier families already differ by", which is arithmetically false for
+  the lysozyme figure and was written that way in the decision it justified.
+  The accurate comparison: the switch is smaller than that band on a dipeptide
+  and somewhat larger on a protein, and both are an order of magnitude below the
+  25.7% between `molecular` and `van-der-waals` (§5) — which is the number that
+  says a surface model is the largest modelling choice in the calculation. That
+  is the ground the decision rests on. Refusing rather than substituting was
+  still right and stays right; what changed is which model the request starts
+  from. Recorded in §12 with the corpus-explicitness step it needs first.

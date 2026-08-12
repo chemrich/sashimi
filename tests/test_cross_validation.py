@@ -41,7 +41,7 @@ from pathlib import Path
 
 import pytest
 
-from sashimi.apbs import ApbsSolver
+from sashimi.apbs import ApbsSolver, discover_apbs
 from sashimi.capabilities import comparable_surface_models
 from sashimi.delphi import DelphiSolver, discover_delphi
 from sashimi.delphi.discover import DelphiFlavour
@@ -60,12 +60,18 @@ pytestmark = [pytest.mark.apbs, pytest.mark.delphi]
 
 
 @pytest.fixture(autouse=True)
-def _delphi_installed():
+def _both_backends_installed():
     """Both backends, or a skip. The marker selects; this is what skips.
 
     Autouse so it cannot be forgotten on a test added later — which is how the
     equivalent guard came to be missing from the boundary-element MCP test.
+
+    *Both*, and the first version of this guard checked only DelPhi, which left
+    the same hole one backend over: pyDelPhi is a plain pip install available on
+    every platform, so a machine with it and no APBS ran every test here and
+    errored in `_compare` with `ApbsNotFound`.
     """
+    installed_or_skip(discover_apbs, "SASHIMI_APBS_PATH")
     installed_or_skip(discover_delphi, "SASHIMI_DELPHI_PATH")
 
 
