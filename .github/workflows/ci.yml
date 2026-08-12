@@ -272,15 +272,19 @@ jobs:
           from sashimi.protocol import SurfaceModel
           print(' '.join('--case ' + c.name for c in MANIFEST
                          if c.solvent.surface_model is SurfaceModel.MOLECULAR))")
+          # `--tier full` is load-bearing: verify defaults to `standard`, and
+          # the shared molecular cases include `full` ones, which are then
+          # rejected as unselectable. The first run of this step swallowed that
+          # in `|| true` and reported nothing while looking green.
           echo "::group::C++ build (linux-64) against recordings from osx-arm64"
-          uv run --frozen sashimi corpus verify --backend delphi \
-            --directory tests/corpus/delphi $cases || true
+          uv run --frozen sashimi corpus verify --backend delphi --tier full \
+            --directory tests/corpus/delphi $cases
           echo "::endgroup::"
           if [ -x .pydelphi/bin/pydelphi-static ]; then
             echo "::group::pyDelPhi against the same recordings"
             SASHIMI_DELPHI_PATH="$PWD/.pydelphi/bin/pydelphi-static" \
-              uv run --frozen sashimi corpus verify --backend delphi \
-              --directory tests/corpus/delphi $cases || true
+              uv run --frozen sashimi corpus verify --backend delphi --tier full \
+              --directory tests/corpus/delphi $cases
             echo "::endgroup::"
           fi
 

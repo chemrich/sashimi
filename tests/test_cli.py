@@ -13,7 +13,8 @@ from typing import Any
 
 import pytest
 
-from sashimi.cli import _backends_supporting, _validate
+from sashimi.cli import _backends_supporting, _select, _validate
+from sashimi.corpus import CaseTier, cases_for_tier
 from sashimi.protocol import SurfaceModel
 
 
@@ -107,3 +108,26 @@ def test_validate_defaults_to_installed_backends_not_registered_ones(monkeypatch
     message = str(caught.value)
     assert "needs at least two backends" in message
     assert "Installed here: apbs" in message
+
+
+def test_a_case_outside_the_tier_is_not_reported_as_unknown():
+    """Two different mistakes with two different fixes.
+
+    A CI step named ten real cases without `--tier full`, was told they did not
+    exist, swallowed the exit and reported nothing while looking green. "Raise
+    the tier" and "check the spelling" should not print the same sentence.
+    """
+    with pytest.raises(SystemExit) as caught:
+        _select(cases_for_tier(CaseTier.FAST), ["lysozyme-molecular"])
+
+    message = str(caught.value)
+    assert "not in the selected tier" in message
+    assert "--tier full" in message
+    assert "unknown case" not in message
+
+
+def test_a_misspelt_case_still_says_unknown():
+    with pytest.raises(SystemExit) as caught:
+        _select(cases_for_tier(CaseTier.FULL), ["lysozime"])
+
+    assert "unknown case" in str(caught.value)
