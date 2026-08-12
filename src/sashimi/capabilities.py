@@ -21,10 +21,15 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from sashimi.apbs.grid import size_grid
 from sashimi.apbs.options import ApbsOptions, resolve_surface
 from sashimi.artifacts import describe_cleanup, estimated_dx_bytes
-from sashimi.backends import IMPLEMENTED_EQUATIONS, BackendReport, get, reports
+from sashimi.backends import (
+    IMPLEMENTED_EQUATIONS,
+    BackendEntry,
+    BackendReport,
+    get,
+    reports,
+)
 from sashimi.errors import InputError, SashimiError
 from sashimi.protocol import (
     Equation,
@@ -33,6 +38,7 @@ from sashimi.protocol import (
     SolventModel,
     SolverFamily,
     SurfaceModel,
+    System,
 )
 
 __all__ = [
@@ -137,6 +143,7 @@ def validate_request(
     equation: Equation = Equation.LINEAR,
     options: ApbsOptions | None = None,
     backend: str = "apbs",
+    mesh_density: float | None = None,
 ) -> dict[str, Any]:
     """Would this solve work, and what would it cost? No subprocess involved.
 
@@ -151,15 +158,35 @@ def validate_request(
     can be chosen — three of the four refuse `smoothed-molecular`, and the
     refusal arrives after the structure has been prepared.
 
-    The cost estimate is a *finite-difference* one, because a grid is what it
-    estimates. For a boundary-element or analytic backend the grid section is
-    omitted rather than filled in with a number from the wrong model, and the
-    report says what governs cost instead.
+    The cost estimate is the **chosen backend's own arithmetic**, not a
+    finite-difference estimate applied to everyone. Two FD backends do not agree
+    on what a grid is — APBS solves on a `dime = c*2^(l+1)+1` multigrid lattice
+    with per-axis spacing, DelPhi on an odd cubic one — so costing DelPhi with
+    APBS's sizer produced a point count, a map size and a relaxation warning
+    belonging to a solver the caller was not running. Backends that build no
+    grid report what governs their cost instead, and every answer arrives under
+    the same `cost` key so a caller does not have to know the family to read it.
+
+    `mesh_density` is accepted because it is the boundary-element cost knob, and
+    checking it here is the difference between a refusal now and an uncaught C++
+    exception after a structure has been prepared.
     """
     grid = grid or GridSpec()
     solvent = solvent or SolventModel()
     options = options or ApbsOptions()
     entry = get(backend)
+    # `mesh_density=None` means "whatever the protocol defaults to", rather
+    # than a number this module invents. `System` and `BoundaryElementRequest`
+    # currently disagree about that default — ROADMAP.md §14 has it open — and
+    # duplicating either here would make a third place to fix.
+    system = System(
+        structure=structure,
+        solvent=solvent,
+        grid=grid,
+        want_energy=True,
+        want_potential=entry.family is not SolverFamily.ANALYTIC,
+        **({} if mesh_density is None else {"mesh_density": mesh_density}),
+    )
 
     problems: list[str] = []
     report: dict[str, Any] = {
@@ -197,13 +224,8 @@ def validate_request(
         except InputError as exc:
             problems.append(str(exc))
 
-    if entry.family is not SolverFamily.FINITE_DIFFERENCE:
-        report["cost"] = {
-            "grid": None,
-            "note": _NON_GRID_COST[entry.family],
-        }
-    else:
-        _add_grid_cost(structure, grid, report, problems)
+    problems.extend(entry.check(system))
+    report["cost"] = _cost(entry, structure, grid, problems)
 
     backend_dict = {
         "name": backend_report.name,
@@ -224,6 +246,54 @@ def validate_request(
     return report
 
 
+def _cost(
+    entry: BackendEntry,
+    structure: PQRData,
+    grid: GridSpec,
+    problems: list[str],
+) -> dict[str, Any]:
+    """What this request would cost, in the terms the chosen backend works in.
+
+    One key for every family, with `grid` null where there is no grid, so a
+    caller reads the same field whichever backend it picked. The alternative —
+    `grid` for finite difference and `cost` for everything else — meant knowing
+    the family before knowing which key existed.
+    """
+    cost: dict[str, Any] = {"family": entry.family.value, "grid": None}
+    if entry.size_grid is None:
+        cost["note"] = _NON_GRID_COST[entry.family]
+        return cost
+
+    try:
+        sized = entry.size_grid(structure, grid)
+    except SashimiError as exc:
+        problems.append(str(exc))
+        cost["note"] = "the grid could not be sized; see problems"
+        return cost
+
+    relaxed = any(s > grid.resolution + 1e-9 for s in sized.spacing)
+    cost["grid"] = {
+        "n_points": sized.n_points,
+        "spacing_achieved_a": [round(s, 6) for s in sized.spacing],
+        "resolution_requested_a": grid.resolution,
+        "resolution_relaxed": relaxed,
+        "estimated_map_mb": round(estimated_dx_bytes(sized.n_points) / 1e6, 1),
+        # The backend's own description of the lattice, in its own vocabulary:
+        # `dime` for APBS, `gsize` and `scale` for DelPhi. Above this line those
+        # are not interchangeable, which is the whole reason each backend sizes
+        # its own.
+        "native": sized.as_diagnostics(),
+    }
+    cost["note"] = f"{entry.name} sizes this grid itself; the shape above is its own"
+    if relaxed:
+        problems.append(
+            f"max_points={grid.max_points:,} caps the grid, so the achieved spacing "
+            f"would be {max(sized.spacing):.4f} A rather than the requested "
+            f"{grid.resolution} A. Raise max_points or accept the coarser grid."
+        )
+    return cost
+
+
 # What a caller should look at instead of a point count, when a grid is not what
 # the backend builds. Both are measured claims: see ROADMAP.md §7.
 _NON_GRID_COST = {
@@ -239,40 +309,22 @@ _NON_GRID_COST = {
 }
 
 
-def _add_grid_cost(
-    structure: PQRData,
-    grid: GridSpec,
-    report: dict[str, Any],
-    problems: list[str],
-) -> None:
-    """The finite-difference cost estimate: what grid, how many points, how big."""
-    try:
-        sized = size_grid(structure, grid)
-    except SashimiError as exc:
-        problems.append(str(exc))
-    else:
-        relaxed = any(s > grid.resolution + 1e-9 for s in sized.spacing)
-        report["grid"] = {
-            "dime": list(sized.dime),
-            "n_points": sized.n_points,
-            "spacing_achieved_a": [round(s, 6) for s in sized.spacing],
-            "resolution_requested_a": grid.resolution,
-            "resolution_relaxed": relaxed,
-            "estimated_map_mb": round(estimated_dx_bytes(sized.n_points) / 1e6, 1),
-        }
-        if relaxed:
-            problems.append(
-                f"max_points={grid.max_points:,} caps the grid, so the achieved spacing "
-                f"would be {max(sized.spacing):.4f} A rather than the requested "
-                f"{grid.resolution} A. Raise max_points or accept the coarser grid."
-            )
-
-
 def _summarise(report: dict[str, Any], blocking: list[str], problems: list[str]) -> str:
-    grid = report.get("grid")
-    shape = "x".join(str(d) for d in grid["dime"]) if grid else "unknown"
-    size = f", ~{grid['estimated_map_mb']} MB map" if grid else ""
+    """One line an agent can act on, true for a backend that builds no grid.
+
+    This used to read "Would run on a unknown grid" for Generalized Born and
+    TABI-PB — contradicting the report's own `cost.grid: null` and inviting a
+    caller to lower `max_points` for a solver that has none.
+    """
     if blocking:
         return f"Would not run: {blocking[0]}"
+
     warned = f" {len(problems)} warning(s)." if problems else ""
-    return f"Would run on a {shape} grid{size}.{warned}"
+    cost = report.get("cost", {})
+    grid = cost.get("grid")
+    if grid is None:
+        return f"Would run: {cost.get('note', 'no grid to size')}.{warned}"
+    return (
+        f"Would run on {grid['n_points']:,} grid points at "
+        f"{max(grid['spacing_achieved_a']):.3f} A, ~{grid['estimated_map_mb']} MB map.{warned}"
+    )

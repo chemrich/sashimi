@@ -386,8 +386,8 @@ class TestDiscoverySurface:
             )
         )
         assert result["ok"] is True
-        assert result["grid"]["dime"] == [65, 65, 65]
-        assert result["grid"]["estimated_map_mb"] > 0
+        assert result["cost"]["grid"]["native"]["dime"] == [65, 65, 65]
+        assert result["cost"]["grid"]["estimated_map_mb"] > 0
         # No map was written: this is arithmetic, not a solve.
         assert not list(tmp_path.glob("*.dx"))
 
@@ -429,8 +429,10 @@ class TestDiscoverySurface:
                 {"pqr_path": str(pqr), "resolution": 1.0, "padding": 6.0},
             )
         )
-        assert predicted["grid"]["dime"] == actual["grid"]["shape"]
-        assert predicted["grid"]["resolution_relaxed"] == actual["grid"]["resolution_relaxed"]
+        assert predicted["cost"]["grid"]["native"]["dime"] == actual["grid"]["shape"]
+        assert (
+            predicted["cost"]["grid"]["resolution_relaxed"] == actual["grid"]["resolution_relaxed"]
+        )
 
 
 class TestBackendSelection:

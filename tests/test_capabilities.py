@@ -5,6 +5,7 @@ questions cheaply, so a test that needed a solver would undercut it.
 """
 
 import dataclasses
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -20,6 +21,7 @@ from sashimi.capabilities import (
     validate_request,
 )
 from sashimi.delphi import discover as delphi_discover
+from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import Equation, GridSpec, PQRData, SolventModel, SurfaceModel
 from sashimi.tabipb import discover as tabipb_discover
 
@@ -228,18 +230,18 @@ class TestCapabilities:
 class TestValidateRequest:
     def test_reports_the_grid_that_would_be_used(self):
         report = validate_request(ion(), GridSpec(resolution=0.5, padding=10.0))
-        assert report["grid"]["dime"] == [65, 65, 65]
-        assert report["grid"]["n_points"] == 65**3
+        assert report["cost"]["grid"]["native"]["dime"] == [65, 65, 65]
+        assert report["cost"]["grid"]["n_points"] == 65**3
 
     def test_estimates_the_map_size_on_disk(self):
         """A caller should know it is about to write 12 MB before it happens."""
         report = validate_request(ion(), GridSpec(resolution=0.25, padding=10.0))
-        assert report["grid"]["estimated_map_mb"] == pytest.approx(29.0, rel=0.05)
+        assert report["cost"]["grid"]["estimated_map_mb"] == pytest.approx(29.0, rel=0.05)
 
     def test_a_relaxed_resolution_warns_but_does_not_block(self):
         """The solve would still run, and the result would say it was relaxed."""
         report = validate_request(ion(), GridSpec(resolution=0.05, max_points=65**3))
-        assert report["grid"]["resolution_relaxed"] is True
+        assert report["cost"]["grid"]["resolution_relaxed"] is True
         assert any("caps the grid" in p for p in report["problems"])
         assert report["ok"] is True
 
@@ -276,3 +278,80 @@ class TestValidateRequest:
         assert report["n_atoms"] == 1
         assert report["total_charge"] == pytest.approx(1.0)
         assert report["extent_a"] == [10.0, 10.0, 10.0]
+
+
+class TestPerBackendCost:
+    """What a request would cost, in the terms the chosen backend works in.
+
+    `validate_request` grew a `backend` parameter and kept costing everything
+    with APBS's grid sizer, which is a confident wrong number rather than a
+    missing one: a point count, a map size and a "resolution was relaxed"
+    warning belonging to a solver the caller is not running.
+    """
+
+    def peptide(self) -> PQRData:
+        return read_pqr(Path(__file__).resolve().parent / "data" / "ala-gly.pqr")
+
+    def molecular(self) -> SolventModel:
+        return SolventModel(surface_model=SurfaceModel.MOLECULAR)
+
+    def test_two_grid_backends_do_not_share_a_grid(self):
+        """APBS sizes a multigrid `dime` lattice, DelPhi an odd cubic one.
+
+        Measured against the real solves: APBS runs ALA-GLY at 65^3 / 0.467 A,
+        DelPhi at 61^3 / 0.498 A. Costing the second with the first's sizer is
+        what this asserts is no longer happening.
+        """
+        apbs = validate_request(self.peptide(), solvent=self.molecular(), backend="apbs")
+        delphi = validate_request(self.peptide(), solvent=self.molecular(), backend="delphi")
+
+        assert apbs["cost"]["grid"]["native"]["dime"] == [65, 65, 65]
+        assert delphi["cost"]["grid"]["native"]["gsize"] == 61
+        assert apbs["cost"]["grid"]["n_points"] != delphi["cost"]["grid"]["n_points"]
+
+    @pytest.mark.parametrize("backend", ["apbs", "delphi", "tabipb", "gb"])
+    def test_the_cost_is_always_under_the_same_key(self, backend: str):
+        """A caller should not have to know the family to know which key exists.
+
+        The estimate used to land under `report["grid"]` for finite difference
+        and `report["cost"]` for everything else, with no discriminator in the
+        response and a `KeyError` for reading the wrong one.
+        """
+        report = validate_request(self.peptide(), solvent=self.molecular(), backend=backend)
+
+        assert "grid" not in report
+        assert report["cost"]["family"] == report["backend"]["family"]
+        assert "note" in report["cost"]
+
+    @pytest.mark.parametrize("backend", ["tabipb", "gb"])
+    def test_a_backend_with_no_grid_says_so_in_the_summary(self, backend: str):
+        """It used to read "Would run on a unknown grid" — inviting a caller to
+        lower `max_points` for a solver that has none."""
+        report = validate_request(self.peptide(), solvent=self.molecular(), backend=backend)
+
+        assert report["cost"]["grid"] is None
+        assert "unknown grid" not in report["summary"]
+        assert "no grid" in report["summary"]
+
+    def test_the_mesher_floor_is_refused_before_a_solve_rather_than_inside_one(self):
+        """A one-atom Born ion is the corpus's own anchor case, and TABI-PB
+        cannot triangulate it. `min_atoms` was already published in the backend's
+        report and simply never checked, so this validated `ok` and then failed
+        in the mesher after the structure had been prepared."""
+        ion = parse_pqr("ATOM      1  I   ION     1       0.000   0.000  0.000  1.00  3.00\n")
+
+        report = validate_request(ion, solvent=self.molecular(), backend="tabipb")
+
+        assert report["ok"] is False
+        assert any("at least 4 atoms" in p for p in report["problems"])
+
+    def test_a_mesh_density_the_solver_aborts_on_is_refused(self):
+        """TABI-PB's abort below 1.5 is an uncaught C++ exception with no cause,
+        and `BoundaryElementRequest` still defaults to 1.0 — so the most obvious
+        first call is the one that fails unintelligibly."""
+        report = validate_request(
+            self.peptide(), solvent=self.molecular(), backend="tabipb", mesh_density=1.0
+        )
+
+        assert report["ok"] is False
+        assert any("mesh_density" in p for p in report["problems"])

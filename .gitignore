@@ -11,3 +11,7 @@ wheels/
 
 # APBS scratch (written to cwd on every invocation, including --version)
 io.mc
+
+# Solve artifacts: sashimi writes maps next to the PQR by default, so running
+# anything against a fixture drops megabytes into tests/data.
+tests/data/potential-*.dx

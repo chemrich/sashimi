@@ -22,10 +22,36 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from sashimi.errors import BackendUnavailable, InputError
-from sashimi.protocol import AccuracyTier, Equation, Solver, SolverFamily
+from sashimi.protocol import (
+    AccuracyTier,
+    Equation,
+    GridSpec,
+    PQRData,
+    Solver,
+    SolverFamily,
+    System,
+)
+
+
+class SizedGrid(Protocol):
+    """What a backend's grid sizer returns, in the part callers above it share.
+
+    `ApbsGrid` and `DelphiGrid` describe different lattices — a multigrid `dime`
+    against an odd cubic `gsize` — and neither shape belongs above its backend.
+    What they agree on is what a cost estimate needs.
+    """
+
+    @property
+    def spacing(self) -> tuple[float, float, float]: ...
+
+    @property
+    def n_points(self) -> int: ...
+
+    def as_diagnostics(self) -> dict[str, Any]: ...
+
 
 __all__ = [
     "REGISTRY",
@@ -262,6 +288,46 @@ def _build_gb() -> Solver[Any]:
     return GbSolver()
 
 
+# --- what each backend would cost, and what it requires ----------------------
+
+
+def _apbs_size_grid(structure: PQRData, spec: GridSpec) -> SizedGrid:
+    from sashimi.apbs.grid import size_grid  # noqa: PLC0415
+
+    return size_grid(structure, spec)
+
+
+def _delphi_size_grid(structure: PQRData, spec: GridSpec) -> SizedGrid:
+    from sashimi.delphi.grid import size_grid  # noqa: PLC0415
+
+    return size_grid(structure, spec)
+
+
+def _tabipb_preconditions(system: System) -> list[str]:
+    """What TABI-PB refuses, checked before a structure has been prepared.
+
+    Both numbers are already in its report; neither was checked, so a one-atom
+    Born ion — the corpus's own anchor case — validated as fine and then failed
+    inside the mesher. Measured for both, in ROADMAP.md §7.
+    """
+    from sashimi.tabipb.run import LOWEST_RELIABLE_MESH_DENSITY, MIN_ATOMS  # noqa: PLC0415
+
+    problems = []
+    if system.structure.n_atoms < MIN_ATOMS:
+        problems.append(
+            f"tabipb needs at least {MIN_ATOMS} atoms to triangulate a surface and this "
+            f"structure has {system.structure.n_atoms}. There is no mesh to solve on, "
+            "so the Born ion and other tiny solutes have no boundary-element answer."
+        )
+    if system.mesh_density < LOWEST_RELIABLE_MESH_DENSITY:
+        problems.append(
+            f"tabipb aborts below mesh_density {LOWEST_RELIABLE_MESH_DENSITY} and this "
+            f"request asks for {system.mesh_density}. The abort is an uncaught C++ "
+            "exception carrying no cause, which is why it is refused here instead."
+        )
+    return problems
+
+
 @dataclass(frozen=True)
 class BackendEntry:
     """One backend, as everything above the solver layer needs to know it."""
@@ -273,13 +339,35 @@ class BackendEntry:
     family: SolverFamily
     build: Callable[[], Solver[Any]]
     describe: Callable[[], BackendReport]
+    # How this backend would size a grid, where it builds one. Two
+    # finite-difference backends do not agree on what a grid is: APBS solves on
+    # a `dime = c*2^(l+1)+1` multigrid lattice with per-axis spacing, DelPhi on
+    # an odd cubic one. Costing one with the other's arithmetic produces a
+    # confident wrong number — a point count, a map size and a "resolution was
+    # relaxed" warning belonging to a solver the caller is not running.
+    size_grid: Callable[[PQRData, GridSpec], SizedGrid] | None = None
+    # What this backend requires beyond a surface model, in its own terms.
+    # TABI-PB's mesher cannot triangulate fewer than four atoms and its solver
+    # aborts below a mesh density of 1.5; both are already published in its
+    # report, and both are free to check before a structure has been prepared.
+    preconditions: Callable[[System], list[str]] | None = None
 
     def solver(self) -> Solver[Any]:
-        """Construct it. Raises `BackendUnavailable` if its binary is missing."""
+        """Construct it.
+
+        Does **not** raise when the binary is missing: every shipped backend
+        discovers lazily, so the failure arrives from `solve()`. That is
+        deliberate — `describe_capabilities` has to be able to report an absent
+        APBS, and it could not if naming a backend were enough to fail.
+        """
         return self.build()
 
     def report(self) -> BackendReport:
         return self.describe()
+
+    def check(self, system: System) -> list[str]:
+        """Backend-specific reasons this request would be refused, if any."""
+        return self.preconditions(system) if self.preconditions else []
 
 
 # Registry order is report order, which is roughly the order the backends
@@ -287,9 +375,27 @@ class BackendEntry:
 # exists, and that is the whole edit — `--backend`, `sashimi_solve` and
 # `sashimi_capabilities` all read from this.
 REGISTRY: dict[str, BackendEntry] = {
-    "apbs": BackendEntry("apbs", SolverFamily.FINITE_DIFFERENCE, _build_apbs, _apbs_report),
-    "delphi": BackendEntry("delphi", SolverFamily.FINITE_DIFFERENCE, _build_delphi, _delphi_report),
-    "tabipb": BackendEntry("tabipb", SolverFamily.BOUNDARY_ELEMENT, _build_tabipb, _tabipb_report),
+    "apbs": BackendEntry(
+        "apbs",
+        SolverFamily.FINITE_DIFFERENCE,
+        _build_apbs,
+        _apbs_report,
+        size_grid=_apbs_size_grid,
+    ),
+    "delphi": BackendEntry(
+        "delphi",
+        SolverFamily.FINITE_DIFFERENCE,
+        _build_delphi,
+        _delphi_report,
+        size_grid=_delphi_size_grid,
+    ),
+    "tabipb": BackendEntry(
+        "tabipb",
+        SolverFamily.BOUNDARY_ELEMENT,
+        _build_tabipb,
+        _tabipb_report,
+        preconditions=_tabipb_preconditions,
+    ),
     "gb": BackendEntry("gb", SolverFamily.ANALYTIC, _build_gb, _gb_report),
 }
 
