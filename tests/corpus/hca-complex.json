@@ -3,6 +3,7 @@
   "description": "Carbonic anhydrase with acetazolamide bound, and the only *net-neutral* protein in the corpus. Everything else has a monopole to dominate its solvation energy; this one does not.",
   "source": "apbs-examples/hca-complex.pqr",
   "tier": "full",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 4173281
     }
   },
+  "energy_kj_mol": -5853.896490378,
   "geometry": {
     "shape": [
       161,
@@ -81,7 +83,6 @@
       0.4807063
     ]
   },
-  "energy_kj_mol": -5853.896490378,
   "potential_stats_kT_e": {
     "min": -513.7968,
     "max": 1228.749,

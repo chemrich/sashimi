@@ -3,6 +3,7 @@
   "description": "277 K. Temperature enters both the Boltzmann factor and the kT/e the potential is reported in, and a solver that reads it in the wrong unit still returns a plausible number \u2014 which is exactly how DelPhi's Celsius parameter cost a day (section 12).",
   "source": "ala-gly.pqr",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -212.5076540633,
   "geometry": {
     "shape": [
       65,
@@ -81,7 +83,6 @@
       0.4003906
     ]
   },
-  "energy_kj_mol": -212.5076540633,
   "potential_stats_kT_e": {
     "min": -538.5484,
     "max": 388.5468,

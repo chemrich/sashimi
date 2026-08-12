@@ -3,6 +3,7 @@
   "description": "A protein-scale van der Waals boundary; the surface TABI-PB refuses.",
   "source": "apbs-examples/barnase.pqr",
   "tier": "full",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2679201
     }
   },
+  "energy_kj_mol": -3782.366130837,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.400175
     ]
   },
-  "energy_kj_mol": -3782.366130837,
   "potential_stats_kT_e": {
     "min": -534.9848,
     "max": 445.8947,

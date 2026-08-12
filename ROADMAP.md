@@ -490,13 +490,48 @@ passthrough §5 deliberately refuses. UHBD's numbers follow the same convention,
 so they go too. Recorded in `tests/data/apbs-examples/PROVENANCE.md`, where
 someone comparing sashimi against the APBS docs will find it before filing a bug.
 
-**What is still worth adding, now that the count is met.** The corpus has no
-`BackendReference` cases — four backends agreeing live is weaker evidence than a
-closed form and much stronger than none, and the engine for it already exists
-(§7). Every case is also still finite-difference by construction, because `Case`
-records grid geometry; re-basing it on `System`, which phase 7 built, is what
-would let TABI-PB and the GB tier into the corpus at all. Both are worth more
-than case 51.
+### The corpus stops being finite-difference by construction
+
+`Case` recorded grid geometry and `request()` built one request type, so a
+curated set of fifty physically meaningful systems was usable by exactly one
+backend and `corpus --backend gb` refused outright. `Case.system()` is the fix,
+and it is the seam phase 7 already built for cross-family validation: a case is
+a physical question, and which dialect it is asked in is the backend's business.
+
+**`System` and `SolverFamily` moved into `protocol.py`.** They were in
+`sashimi.validate`, which made the regression net depend on the product feature
+built on top of it. A statement about request types is protocol vocabulary, and
+an extracted `pb-protocol` (§10) would need it for the same reason the corpus
+does. `validate` re-exports them, so nothing downstream moved.
+
+**A summary's shape follows what the backend returned**, rather than a schema it
+must satisfy. A volumetric answer records geometry, statistics and pinned
+probes; a boundary-element answer records its vertex count and surface
+statistics *and no probes*, because vertices are the mesher's choice and move
+when it is rebuilt; an analytic answer records the energy and nothing else,
+because it computed nothing else. Comparing a recording of one shape against a
+solve of another is refused rather than partially attempted — that is a backend
+swap, not a drift.
+
+What this buys, in order of value:
+
+- **A regression net on our own code.** Generalized Born is a few hundred lines
+  of numpy that will keep changing, and it had unit tests against closed forms
+  but no recorded answers on real structures. Five now, in `tests/corpus/gb/`,
+  and because there is no binary they are verified by `pytest` on every machine
+  — the one part of the corpus that cannot skip.
+- **A golden for a backend CI compiles from source.** TABI-PB's mesher version
+  is part of a result's identity, and `tests/corpus/tabipb/` pins one.
+- One fewer hand-assembled `System`: `sashimi validate` and the GB reference
+  tests both went through their own copy of that construction, which stops
+  matching the moment `Case` grows a field — `mesh_density` already did.
+
+**Coverage is honestly thin, and the reason is the surface model.** Generalized
+Born answers only on `molecular`, so it takes 5 of 50 cases; TABI-PB needs four
+atoms as well, and `acetate-molecular` at eight atoms does not finish inside its
+own 600 s timeout (measured twice), so it takes 1. Recording that is better than
+recording nothing, and the way to widen it is more molecular-surface cases
+rather than more machinery.
 
 **What the first ten structures found immediately.** Generalized Born's
 deviation from APBS is 1.6–4.5% on proteins whose PQR carries AMBER

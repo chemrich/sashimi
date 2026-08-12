@@ -3,6 +3,7 @@
   "description": "+2e: the q^2 scaling, which must be 4x the +1e energy and is.",
   "source": "born-ion-divalent",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -914.4432039508854,
@@ -69,6 +70,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -920.1027846655,
   "geometry": {
     "shape": [
       65,
@@ -86,7 +88,6 @@
       0.40625
     ]
   },
-  "energy_kj_mol": -920.1027846655,
   "potential_stats_kT_e": {
     "min": 0.6337276,
     "max": 3435.934,

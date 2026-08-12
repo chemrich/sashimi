@@ -33,7 +33,6 @@ from sashimi.validate import (
     DEFAULT_ENERGY_TOLERANCE,
     Backend,
     SolverFamily,
-    System,
     validate_system,
 )
 
@@ -97,23 +96,20 @@ def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case,
     return tuple(known[n] for n in names)
 
 
-def _fd_solver(name: str) -> Solver[FiniteDifferenceRequest]:
-    """A corpus backend. The corpus is finite-difference by construction — every
-    case records a grid — so neither a BEM nor an analytic backend can build or
-    verify one."""
-    if FAMILIES[name] is not SolverFamily.FINITE_DIFFERENCE:
-        family = FAMILIES[name].value
-        article = "an" if family[0] in "aeiou" else "a"
-        raise SystemExit(
-            f"{name} is {article} {family} solver, and the corpus records grid "
-            "geometry for every case. Use `sashimi validate` to compare it against "
-            "the finite-difference backends."
-        )
-    return BACKENDS[name]()
+def _corpus_solver(name: str) -> tuple[Solver[Any], SolverFamily]:
+    """A corpus backend and the dialect to ask it in.
+
+    Any family, since a `Case` is a physical question rather than a grid: the
+    summary records whatever the backend returned. What each backend can
+    *answer* still varies — Generalized Born takes only the molecular-surface
+    cases, TABI-PB only those with four atoms or more — and refusing a case it
+    cannot take is the backend's own job, in its own words.
+    """
+    return BACKENDS[name](), FAMILIES[name]
 
 
 def _build(args: argparse.Namespace) -> int:
-    solver = _fd_solver(args.backend)
+    solver, family = _corpus_solver(args.backend)
     directory = Path(args.directory) if args.directory else None
     cases = _select(cases_for_tier(CaseTier(args.tier)), args.case)
 
@@ -122,7 +118,7 @@ def _build(args: argparse.Namespace) -> int:
         if path.exists() and not args.force:
             print(f"  skip  {case.name} (exists; pass --force to overwrite)")
             continue
-        summary = build_case(solver, case)
+        summary = build_case(solver, case, family)
         write_summary(summary, path)
         energy = summary["energy_kj_mol"]
         shown = f"{energy:.6f} kJ/mol" if energy is not None else "no energy"
@@ -133,7 +129,7 @@ def _build(args: argparse.Namespace) -> int:
 
 
 def _verify(args: argparse.Namespace) -> int:
-    solver = _fd_solver(args.backend)
+    solver, family = _corpus_solver(args.backend)
     directory = Path(args.directory) if args.directory else None
     cases = _select(cases_for_tier(CaseTier(args.tier)), args.case)
     tolerances = Tolerances(
@@ -150,7 +146,7 @@ def _verify(args: argparse.Namespace) -> int:
             failures.append(f"{case.name}: no recorded summary")
             continue
 
-        found = verify_case(solver, case, recorded, tolerances)
+        found = verify_case(solver, case, recorded, tolerances, family)
         if found:
             print(f"  FAIL  {case.name}")
             for item in found:
@@ -266,12 +262,15 @@ def _validate(args: argparse.Namespace) -> int:
     incomparable: list[str] = []
 
     for case in cases:
-        system = System(
-            structure=case.structure(),
+        # `Case.system()` is the seam; this only overrides the two things a
+        # cross-solver run has to choose for itself — the shared surface model,
+        # and a mesh density the corpus has no opinion about. Potentials are off
+        # because a volume and a triangulated surface have nothing to compare.
+        system = dataclasses.replace(
+            case.system(),
             solvent=dataclasses.replace(case.solvent, surface_model=model),
-            grid=case.grid,
             mesh_density=args.mesh_density,
-            want_energy=case.compute_energy,
+            want_potential=False,
         )
         try:
             comparison = validate_system(

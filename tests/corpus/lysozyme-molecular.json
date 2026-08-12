@@ -3,6 +3,7 @@
   "description": "Hen lysozyme where all four backends can be asked the same question.",
   "source": "apbs-examples/2LZT-ASP66.pqr",
   "tier": "full",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2679201
     }
   },
+  "energy_kj_mol": -5000.598188719,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.4270937
     ]
   },
-  "energy_kj_mol": -5000.598188719,
   "potential_stats_kT_e": {
     "min": -420.6731,
     "max": 362.608,

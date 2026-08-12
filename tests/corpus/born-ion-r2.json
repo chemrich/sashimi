@@ -3,6 +3,7 @@
   "description": "2 A sphere. Error falls to 0.8% once the ion spans a few grid points.",
   "source": "born-ion-r2",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -342.91620148158194,
@@ -69,6 +70,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -345.6455347033,
   "geometry": {
     "shape": [
       65,
@@ -86,7 +88,6 @@
       0.375
     ]
   },
-  "energy_kj_mol": -345.6455347033,
   "potential_stats_kT_e": {
     "min": 0.3432719,
     "max": 1783.315,

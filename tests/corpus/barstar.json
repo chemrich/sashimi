@@ -3,6 +3,7 @@
   "description": "1,403 atoms at -5e: the most negatively charged case here.",
   "source": "apbs-examples/barstar.pqr",
   "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2146689
     }
   },
+  "energy_kj_mol": -2969.144134611,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.4330547
     ]
   },
-  "energy_kj_mol": -2969.144134611,
   "potential_stats_kT_e": {
     "min": -543.4744,
     "max": 455.0205,

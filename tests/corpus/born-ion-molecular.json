@@ -3,6 +3,7 @@
   "description": "The Born ion on the molecular surface, which DelPhi and TABI-PB can also solve. Rolling a probe over a lone sphere cannot carve a re-entrant surface, so the boundary is the sphere and Born still holds.",
   "source": "born-ion",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -228.61080098772135,
@@ -69,6 +70,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -233.9996297277,
   "geometry": {
     "shape": [
       65,
@@ -86,7 +88,6 @@
       0.40625
     ]
   },
-  "energy_kj_mol": -233.9996297277,
   "potential_stats_kT_e": {
     "min": 0.3168643,
     "max": 1714.761,

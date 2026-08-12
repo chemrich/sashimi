@@ -3,6 +3,7 @@
   "description": "Hen lysozyme, 1,960 atoms at +8e. In the corpus at last: it is the structure that surfaced the 64-second extrema scan, the DX writer's first real consumer, and both Generalized Born mistakes.",
   "source": "apbs-examples/2LZT-ASP66.pqr",
   "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2679201
     }
   },
+  "energy_kj_mol": -4885.721179883,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.4270937
     ]
   },
-  "energy_kj_mol": -4885.721179883,
   "potential_stats_kT_e": {
     "min": -420.6495,
     "max": 364.9358,

@@ -46,28 +46,29 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any
 
 import numpy as np
 
 from sashimi.errors import InputError
+
+# `SolverFamily` and `System` moved to the protocol layer, where a statement
+# about request types belongs and where the corpus can reach them without
+# depending on this module. Re-exported so existing imports keep working.
 from sashimi.protocol import (
     DIMENSIONS,
     AccuracyTier,
-    BoundaryElementRequest,
     EnergyTerm,
     Equation,
     FiniteDifferenceRequest,
     FloatArray,
-    GridSpec,
     PotentialGrid,
-    PQRData,
-    SolventModel,
     Solver,
     SolveRequest,
     SolveResult,
+    SolverFamily,
     SurfaceModel,
+    System,
 )
 
 __all__ = [
@@ -113,79 +114,6 @@ DEFAULT_ENERGY_TOLERANCE = 0.10
 # costs 31% and feeding it pdb2pqr's radii instead of mbondi costs 35%. A
 # tolerance that tolerated those would have let both ship.
 DEFAULT_APPROXIMATION_TOLERANCE = 0.15
-
-
-class SolverFamily(StrEnum):
-    """Which request family a backend takes.
-
-    The `Solver` protocol is generic in its request type, so a type checker
-    already refuses to hand a `BoundaryElementRequest` to an FD backend. That
-    guarantee is static, and cross-family validation has to make the same
-    decision at runtime — hence an explicit declaration rather than
-    introspection, which cannot recover a type parameter.
-    """
-
-    FINITE_DIFFERENCE = "finite-difference"
-    BOUNDARY_ELEMENT = "boundary-element"
-    # Needs neither a grid nor a mesh, so it reads the base request. Generalized
-    # Born is the only member today, and it is a family rather than a flavour of
-    # the other two because nothing about its request is discretized.
-    ANALYTIC = "analytic"
-
-
-@dataclass(frozen=True)
-class System:
-    """One physical system, expressible as either family's request.
-
-    This is the seam ROADMAP.md section 2 designed `SolveRequest` for and never
-    had to use until a boundary-element backend existed. Everything a solve
-    needs regardless of family — structure, solvent, what to compute — lives on
-    the base class; `GridSpec` and `mesh_density` are the family-specific parts,
-    and this holds both so that one physical question can be put to solvers that
-    cannot read each other's requests.
-
-    `want_potential` defaults to False because the two families do not return
-    comparable fields: a volume and a triangulated surface have no shared
-    representation, so a cross-family comparison rests on energies alone.
-    Same-family runs can still ask for potentials and get the pointwise
-    comparison.
-    """
-
-    structure: PQRData
-    # Frozen dataclasses, so a shared instance is safe; the protocol's own
-    # request types default the same way.
-    solvent: SolventModel = SolventModel()  # noqa: RUF009
-    grid: GridSpec = GridSpec()  # noqa: RUF009
-    mesh_density: float = 2.0
-    want_energy: bool = True
-    want_potential: bool = False
-
-    def request_for(self, family: SolverFamily) -> SolveRequest:
-        """The same physical question, in the dialect that family can read."""
-        if family is SolverFamily.FINITE_DIFFERENCE:
-            return FiniteDifferenceRequest(
-                structure=self.structure,
-                solvent=self.solvent,
-                want_energy=self.want_energy,
-                want_potential=self.want_potential,
-                grid=self.grid,
-            )
-        if family is SolverFamily.ANALYTIC:
-            # The base request, unadorned: an analytic method discretizes
-            # nothing, so it has nothing to say about grids or meshes.
-            return SolveRequest(
-                structure=self.structure,
-                solvent=self.solvent,
-                want_energy=self.want_energy,
-                want_potential=self.want_potential,
-            )
-        return BoundaryElementRequest(
-            structure=self.structure,
-            solvent=self.solvent,
-            want_energy=self.want_energy,
-            want_potential=self.want_potential,
-            mesh_density=self.mesh_density,
-        )
 
 
 @dataclass(frozen=True)

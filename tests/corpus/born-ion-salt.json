@@ -3,6 +3,7 @@
   "description": "Born ion in 150 mM 1:1 salt. Exercises the ion-declaration path.",
   "source": "born-ion",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -230.7136824614,
   "geometry": {
     "shape": [
       65,
@@ -81,7 +83,6 @@
       0.40625
     ]
   },
-  "energy_kj_mol": -230.7136824614,
   "potential_stats_kT_e": {
     "min": 0.02035417,
     "max": 1717.412,

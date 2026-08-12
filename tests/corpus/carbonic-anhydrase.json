@@ -3,6 +3,7 @@
   "description": "2,482 atoms, the largest case; 13 s, which is why it is not standard.",
   "source": "apbs-examples/hca.pqr",
   "tier": "full",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 4173281
     }
   },
+  "energy_kj_mol": -6151.561602656,
   "geometry": {
     "shape": [
       161,
@@ -81,7 +83,6 @@
       0.4807063
     ]
   },
-  "energy_kj_mol": -6151.561602656,
   "potential_stats_kT_e": {
     "min": -421.558,
     "max": 1226.392,

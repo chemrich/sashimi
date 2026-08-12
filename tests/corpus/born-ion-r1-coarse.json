@@ -3,6 +3,7 @@
   "description": "1 A sphere at 0.5 A spacing: two grid points across the ion. The case that documents where the discretization gives up \u2014 5.1% off, and the corpus says so rather than pretending otherwise.",
   "source": "born-ion-r1",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -685.8324029631639,
@@ -69,6 +70,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -720.7157423032,
   "geometry": {
     "shape": [
       65,
@@ -86,7 +88,6 @@
       0.34375
     ]
   },
-  "energy_kj_mol": -720.7157423032,
   "potential_stats_kT_e": {
     "min": 0.3744805,
     "max": 1668.185,

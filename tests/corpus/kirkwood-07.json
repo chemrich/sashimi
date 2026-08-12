@@ -2,7 +2,8 @@
   "name": "kirkwood-07",
   "description": "0.7 out, where the reaction field is dominated by high multipoles.",
   "source": "kirkwood-07",
-  "tier": "fast",
+  "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -446.5626794421526,
@@ -69,6 +70,7 @@
       "n_points": 2146689
     }
   },
+  "energy_kj_mol": -447.0716743191,
   "geometry": {
     "shape": [
       129,
@@ -86,7 +88,6 @@
       0.203125
     ]
   },
-  "energy_kj_mol": -447.0716743191,
   "potential_stats_kT_e": {
     "min": 0.3015117,
     "max": 3402.243,

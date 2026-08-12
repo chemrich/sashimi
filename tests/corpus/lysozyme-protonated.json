@@ -3,6 +3,7 @@
   "description": "2LZT with Asp66 protonated: +9e against `lysozyme`'s +8e, the same 1,960 atoms otherwise. One titratable proton, which is the quantity a pKa calculation is a difference of.",
   "source": "apbs-examples/2LZT-ASH66.pqr",
   "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2679201
     }
   },
+  "energy_kj_mol": -5247.870332017,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.4270937
     ]
   },
-  "energy_kj_mol": -5247.870332017,
   "potential_stats_kT_e": {
     "min": -420.5891,
     "max": 365.029,

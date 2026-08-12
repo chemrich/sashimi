@@ -3,6 +3,7 @@
   "description": "Same peptide with a harder solute interior; catches dielectric plumbing.",
   "source": "ala-gly.pqr",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -427.3373726611,
   "geometry": {
     "shape": [
       65,
@@ -81,7 +83,6 @@
       0.3378906
     ]
   },
-  "energy_kj_mol": -427.3373726611,
   "potential_stats_kT_e": {
     "min": -1031.529,
     "max": 866.9479,

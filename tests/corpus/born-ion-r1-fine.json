@@ -2,7 +2,8 @@
   "name": "born-ion-r1-fine",
   "description": "The same undersized ion at 0.25 A: 5.1% becomes 3.2%, converging.",
   "source": "born-ion-r1",
-  "tier": "fast",
+  "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -685.8324029631639,
@@ -69,6 +70,7 @@
       "n_points": 912673
     }
   },
+  "energy_kj_mol": -707.7596974352,
   "geometry": {
     "shape": [
       97,
@@ -86,7 +88,6 @@
       0.2291667
     ]
   },
-  "energy_kj_mol": -707.7596974352,
   "potential_stats_kT_e": {
     "min": 0.3745149,
     "max": 2803.46,

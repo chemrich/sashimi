@@ -3,6 +3,7 @@
   "description": "Solvent dielectric 4, a membrane interior rather than water.",
   "source": "ala-gly.pqr",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -113.614347268,
   "geometry": {
     "shape": [
       65,
@@ -81,7 +83,6 @@
       0.4003906
     ]
   },
-  "energy_kj_mol": -113.614347268,
   "potential_stats_kT_e": {
     "min": -532.5944,
     "max": 372.9418,
