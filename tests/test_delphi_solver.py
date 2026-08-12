@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import dataclasses
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 import sashimi.delphi.backend as backend_module
+from sashimi.corpus import MANIFEST, load_summary, verify_case
 from sashimi.delphi import DelphiSolver, discover_delphi
 from sashimi.delphi.discover import DelphiFlavour, DelphiNotFound
 from sashimi.delphi.options import SUPPORTED_SURFACES
@@ -233,3 +235,77 @@ def test_delphi_reading_a_different_structure_is_caught_rather_than_solved(binar
                 want_potential=False,
             )
         )
+
+
+# --- the golden corpus, for the flavour that can reproduce it ----------------
+
+DELPHI_DIRECTORY = Path("tests/corpus/delphi")
+
+# Split by measured cost on osx-arm64, 2026-08-12. DelPhi's cost is its cubic
+# grid, which follows the bounding box rather than the solute: `fas2-molecular`
+# is 906 atoms and takes 11.5 s where `lysozyme-molecular` is 1,960 and takes
+# 5.8 s. So this is measured per case, like every other tier assignment here.
+DELPHI_PER_PUSH = (
+    "born-ion-molecular-eps2",  # 0.13 s
+    "born-ion-molecular",  # 0.16 s
+    "peptide-molecular-no-salt",  # 0.20 s
+    "peptide-molecular",  # 0.21 s
+    "peptide-molecular-cold",  # 0.21 s
+    "peptide-molecular-high-salt",  # 0.22 s
+    "methanol-molecular",  # 0.95 s — one of the three the column bug destroyed
+    "methoxide-molecular",  # 1.00 s
+    "acetate-molecular",  # 1.13 s — and another
+    "acetic-acid-molecular",  # 1.49 s — and the third
+    "aspartate-residue-molecular",  # 1.50 s
+)  # 7.2 s in total
+DELPHI_ON_DEMAND = (
+    "ion-protein-complex-molecular",  # 3.9 s
+    "lysozyme-molecular",  # 5.8 s
+    "barstar-molecular",  # 7.1 s
+    "fas2-molecular",  # 11.5 s
+    "fkbp-apo-molecular",  # 12.8 s
+    "fkbp-dmso-molecular",  # 13.0 s
+    "hca-molecular",  # 13.9 s
+    "protein-rna-molecular",  # 14.9 s
+)  # 83 s in total; `sashimi corpus verify --backend delphi --tier full
+#     --directory tests/corpus/delphi --case <name>`. Their presence and their
+#     agreement with the APBS recordings are checked without a binary in
+#     tests/test_corpus_manifest.py.
+
+
+@pytest.mark.parametrize("name", DELPHI_PER_PUSH)
+def test_delphi_reproduces_its_recorded_corpus_answer(binary, name):
+    """A third reference tier, recorded from the C++ build and verified by it.
+
+    **C++ only, and that is a measurement rather than a preference.** The
+    recordings were made on osx-arm64; CI verified all nineteen of them against
+    a linux-64 build of the same source at full corpus tolerance, so a C++
+    recording is portable. pyDelPhi fails fifteen of the nineteen — energies
+    0.047% to 0.426% out, the Born ion's potential minimum 2.5%, grid origins
+    differing in their last digits. That is not wrong: 0.4% is far tighter than
+    the 2.3% between DelPhi and APBS. It is a different implementation of an
+    iterative solver, and 4,000x the tolerance a recording is held to.
+
+    So the flavours are not interchangeable *as sources of a recorded number*,
+    while remaining interchangeable as backends. pyDelPhi keeps the behavioural
+    tier above; it does not verify numbers another program produced.
+    """
+    if binary.flavour is not DelphiFlavour.CPP:
+        pytest.skip("pyDelPhi is 0.05-0.4% from the C++ build; it cannot verify its recordings")
+
+    case = next(c for c in MANIFEST if c.name == name)
+    recorded = load_summary(case, DELPHI_DIRECTORY)
+
+    assert verify_case(DelphiSolver(), case, recorded) == []
+
+
+def test_the_expensive_delphi_cases_are_recorded_even_though_pytest_skips_them():
+    """83 s of solving a per-push suite has no business repeating.
+
+    Named here so "too slow to check per push" cannot decay into "quietly
+    absent" — the shape of the bug that let the DelPhi tier skip every test
+    while CI stayed green.
+    """
+    for name in DELPHI_ON_DEMAND:
+        case = next(c for c in MANIFEST if c.name == name)
+        assert load_summary(case, DELPHI_DIRECTORY)["energy_kj_mol"] < 0
