@@ -274,6 +274,18 @@ workhorse. Returns energy when requested, backend provenance, and — for the
 backends that fill a volume — grid stats, the DX path and `resolution_relaxed`
 so a guardrail-relaxed grid is visible rather than silent.
 
+**`mesh_density` is the boundary-element cost knob**, the analogue of
+`resolution` for a solver that meshes a surface instead of filling a volume, and
+**a parameter the chosen backend cannot use is refused rather than ignored**. No
+backend has both: `resolution` and `padding` describe a grid, `mesh_density` a
+triangulation. Silently accepting one that does nothing is how a caller comes to
+believe it made a 450-second mesh cheaper by halving a resolution the mesher
+never reads — and quietly-wrong parameters are this project's most expensive
+recurring failure (§12: DelPhi reading `temper` as Celsius, DelPhi reading a
+different PQR radius column, Generalized Born handed the wrong radius dialect).
+Each produced a plausible number from an input that was not what the caller
+thought it was.
+
 **`backend` selects the solver**, and **the response shape follows what that
 solver returned** rather than a schema it must satisfy — the same rule the
 corpus summaries follow (§7). A finite-difference solve carries a map; a

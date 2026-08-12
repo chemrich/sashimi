@@ -16,6 +16,7 @@ dressed up as a solver problem.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -62,6 +63,16 @@ mcp: FastMCP[Any] = FastMCP(
 def _fail(exc: SashimiError) -> ToolError:
     """Surface a typed sashimi failure with its message intact."""
     return ToolError(str(exc))
+
+
+def _grid_spec(resolution: float | None, padding: float | None) -> GridSpec:
+    """A grid spec where unset means the protocol's default, not this layer's."""
+    spec = GridSpec()
+    if resolution is not None:
+        spec = dataclasses.replace(spec, resolution=resolution)
+    if padding is not None:
+        spec = dataclasses.replace(spec, padding=padding)
+    return spec
 
 
 @mcp.tool
@@ -118,12 +129,40 @@ def sashimi_solve(
     *,
     pqr_path: Annotated[str, Field(description="Path to a PQR file.")],
     resolution: Annotated[
-        float, Field(description="Target fine-grid spacing, angstroms.", gt=0, le=5.0)
-    ] = 0.5,
+        float | None,
+        Field(
+            description=(
+                "Target fine-grid spacing, angstroms. Grid backends only "
+                "(apbs, delphi); setting it for a backend that builds no grid "
+                "is refused rather than ignored."
+            ),
+            gt=0,
+            le=5.0,
+        ),
+    ] = None,
     padding: Annotated[
-        float,
-        Field(description="Minimum solute-surface to grid-edge distance, angstroms.", ge=0),
-    ] = 10.0,
+        float | None,
+        Field(
+            description=(
+                "Minimum solute-surface to grid-edge distance, angstroms. Grid backends only."
+            ),
+            ge=0,
+        ),
+    ] = None,
+    mesh_density: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Vertices per square angstrom of dielectric surface \u2014 the "
+                "boundary-element cost knob, and the analogue of `resolution` "
+                "for a solver that meshes instead of filling a volume. tabipb "
+                "only, and it aborts below 1.5. Cost is the mesh rather than "
+                "the atom count: 906 atoms mesh in 48 s where a 260-atom "
+                "united-atom structure takes 450 s at three times the vertices."
+            ),
+            gt=0,
+        ),
+    ] = None,
     ionic_strength: Annotated[
         float, Field(description="1:1 salt concentration, molar.", ge=0)
     ] = 0.15,
@@ -183,6 +222,16 @@ def sashimi_solve(
     else. `sashimi_validate_inputs` answers whether a given backend can take a
     request before it is run.
 
+    **A parameter the chosen backend cannot use is refused, not ignored.**
+    `resolution` and `padding` describe a grid; `mesh_density` describes a
+    triangulation; no backend has both. Silently accepting one that does nothing
+    is how a caller comes to believe it made a 450-second mesh cheaper by
+    halving a resolution the mesher never reads — and quietly-wrong parameters
+    are the failure this project has hit three times over (DelPhi reading
+    `temper` as Celsius, DelPhi reading a different PQR radius column,
+    Generalized Born being handed the wrong radius dialect). Every one produced
+    a plausible number from an input that was not what the caller thought.
+
     Maps are files, not inline data — a default-resolution grid is megabytes.
     """
     source = Path(pqr_path).expanduser()
@@ -195,6 +244,23 @@ def sashimi_solve(
         entry = get_backend(backend)
     except SashimiError as exc:
         raise _fail(exc) from exc
+
+    grid_parameters = {"resolution": resolution, "padding": padding}
+    named = {k: v for k, v in grid_parameters.items() if v is not None}
+    if named and entry.family is not SolverFamily.FINITE_DIFFERENCE:
+        raise ToolError(
+            f"{backend} builds no grid, so {', '.join(sorted(named))} would do nothing. "
+            + (
+                "Use mesh_density, which is what this backend's cost depends on."
+                if entry.family is SolverFamily.BOUNDARY_ELEMENT
+                else "It solves in process and has no discretization to set."
+            )
+        )
+    if mesh_density is not None and entry.family is not SolverFamily.BOUNDARY_ELEMENT:
+        raise ToolError(
+            f"mesh_density describes a triangulated surface and {backend} does not "
+            "build one. Use resolution for a grid backend."
+        )
 
     field_expected = entry.family is not SolverFamily.ANALYTIC
     if not field_expected and not compute_energy:
@@ -212,9 +278,13 @@ def sashimi_solve(
             ionic_strength=ionic_strength,
             surface_model=SurfaceModel(surface_model),
         ),
-        grid=GridSpec(resolution=resolution, padding=padding),
+        # Unset means the protocol's own default rather than a number this
+        # layer invents; `System` and `BoundaryElementRequest` disagree about
+        # the mesh one and §14 has that open.
+        grid=_grid_spec(resolution, padding),
         want_energy=compute_energy,
         want_potential=field_expected,
+        **({} if mesh_density is None else {"mesh_density": mesh_density}),
     )
 
     try:
@@ -563,6 +633,10 @@ def sashimi_validate_inputs(
     backend: Annotated[
         str, Field(description="Which solver the request is being checked against.")
     ] = "apbs",
+    mesh_density: Annotated[
+        float | None,
+        Field(description="Vertices per square angstrom, for boundary-element backends.", gt=0),
+    ] = None,
 ) -> dict[str, Any]:
     """Check a solve before paying for it: grid shape, map size, whether it works.
 
@@ -599,7 +673,9 @@ def sashimi_validate_inputs(
         **({"max_points": max_points} if max_points is not None else {}),
     )
     try:
-        return validate_request(structure, spec, solvent, backend=backend)
+        return validate_request(
+            structure, spec, solvent, backend=backend, mesh_density=mesh_density
+        )
     except SashimiError as exc:
         raise _fail(exc) from exc
 

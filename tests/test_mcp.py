@@ -583,3 +583,68 @@ class TestBackendSelection:
         assert result["surface"]["n_vertices"] > 0
         assert "dx_path" not in result
         assert "No map written" in result["summary"]
+
+    @pytest.mark.tabipb
+    @pytest.mark.usefixtures("tabipb_installed")
+    async def test_mesh_density_is_the_boundary_element_resolution(self, client, tmp_path):
+        """The cost knob the pre-flight names must exist on the tool.
+
+        `sashimi_validate_inputs` tells a caller "mesh density is the knob" and
+        warns that a mesh can take 450 s; without this parameter there was no
+        knob to turn, and `resolution` — the obvious thing to reach for — was
+        accepted and silently dropped.
+        """
+        pqr = str(self.peptide(tmp_path))
+        args = {"surface_model": "molecular", "compute_energy": True, "backend": "tabipb"}
+
+        coarse = payload(await client.call_tool("sashimi_solve", {"pqr_path": pqr, **args}))
+        fine = payload(
+            await client.call_tool("sashimi_solve", {"pqr_path": pqr, "mesh_density": 3.0, **args})
+        )
+
+        assert fine["surface"]["n_vertices"] > coarse["surface"]["n_vertices"]
+
+    async def test_a_grid_parameter_is_refused_by_a_backend_with_no_grid(self, client, tmp_path):
+        """Refused, not ignored.
+
+        A caller told to make a 450-second mesh cheaper reaches for
+        `resolution`; accepting it silently leaves them believing they did.
+        """
+        with pytest.raises(ToolError, match="builds no grid"):
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "surface_model": "molecular",
+                    "compute_energy": True,
+                    "resolution": 0.5,
+                },
+            )
+
+    async def test_a_mesh_parameter_is_refused_by_a_backend_with_no_mesh(self, client, tmp_path):
+        """The same rule in the other direction, so neither family is special."""
+        with pytest.raises(ToolError, match="does not build one"):
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "apbs",
+                    "mesh_density": 3.0,
+                },
+            )
+
+    @pytest.mark.apbs
+    async def test_omitting_a_grid_parameter_still_means_the_protocol_default(
+        self, client, tmp_path
+    ):
+        """`resolution` became optional, which must not change what APBS does."""
+        result = payload(
+            await client.call_tool(
+                "sashimi_solve",
+                {"pqr_path": str(self.peptide(tmp_path)), "compute_energy": True},
+            )
+        )
+
+        assert result["grid"]["shape"] == [65, 65, 65]
+        assert result["grid"]["resolution_relaxed"] is False
