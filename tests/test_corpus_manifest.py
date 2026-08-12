@@ -29,7 +29,9 @@ from sashimi.protocol import (
     FiniteDifferenceRequest,
     PotentialGrid,
     Provenance,
+    SolveRequest,
     SolveResult,
+    SolverFamily,
 )
 
 
@@ -226,6 +228,43 @@ def test_the_salted_case_declines_an_analytic_reference():
     """Deliberate: the two backends disagree 39% on the mobile-ion term, so
     pinning either convention as "the" closed form would encode a choice as physics."""
     assert next(c for c in MANIFEST if c.name == "born-ion-salt").analytic is None
+
+
+# --- the family-agnostic seam ------------------------------------------------
+
+
+@pytest.mark.parametrize("case", MANIFEST[:6], ids=lambda c: c.name)
+def test_a_case_asked_as_a_system_is_the_same_finite_difference_question(case: Case):
+    """`Case.system()` must not quietly change what the corpus has been asking.
+
+    Fifty recorded summaries were built through `Case.request()`; the seam that
+    lets other families in has to produce the identical request for the family
+    that was there first, or every golden number silently means something else.
+    """
+    direct = case.request()
+    through_system = case.system().request_for(SolverFamily.FINITE_DIFFERENCE)
+
+    # Field by field: `PQRData` holds numpy arrays, so dataclass equality on the
+    # whole request raises rather than answering.
+    assert type(through_system) is type(direct)
+    assert through_system.grid == direct.grid
+    assert through_system.solvent == direct.solvent
+    assert through_system.equation == direct.equation
+    assert through_system.want_energy == direct.want_energy
+    assert through_system.want_potential == direct.want_potential
+    np.testing.assert_array_equal(through_system.structure.coords, direct.structure.coords)
+    np.testing.assert_array_equal(through_system.structure.charges, direct.structure.charges)
+    np.testing.assert_array_equal(through_system.structure.radii, direct.structure.radii)
+
+
+def test_the_analytic_family_gets_a_request_with_no_grid():
+    """Which is the point: an analytic backend has no grid to be given one."""
+    case = MANIFEST[0]
+    request = case.system().request_for(SolverFamily.ANALYTIC)
+
+    assert type(request) is SolveRequest
+    assert not hasattr(request, "grid")
+    assert request.structure.n_atoms == case.structure().n_atoms
 
 
 # --- the analytic check catches a wrong answer -------------------------------

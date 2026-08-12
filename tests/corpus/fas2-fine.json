@@ -3,6 +3,7 @@
   "description": "906 atoms at 0.35 A. The corpus tests convergence only on a single sphere otherwise; this is the same claim on a real charge distribution.",
   "source": "apbs-examples/fas2.pqr",
   "tier": "full",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 4173281
     }
   },
+  "energy_kj_mol": -1971.545864838,
   "geometry": {
     "shape": [
       161,
@@ -81,7 +83,6 @@
       0.3518312
     ]
   },
-  "energy_kj_mol": -1971.545864838,
   "potential_stats_kT_e": {
     "min": -734.0057,
     "max": 663.5366,

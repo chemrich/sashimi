@@ -3,6 +3,7 @@
   "description": "2,065 atoms. The only nucleic acid in the corpus, so the only case where phosphate backbone charges are exercised at all.",
   "source": "apbs-examples/1a63.pqr",
   "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 3211713
     }
   },
+  "energy_kj_mol": -4930.38173562,
   "geometry": {
     "shape": [
       193,
@@ -81,7 +83,6 @@
       0.4566719
     ]
   },
-  "energy_kj_mol": -4930.38173562,
   "potential_stats_kT_e": {
     "min": -538.2677,
     "max": 294.8367,

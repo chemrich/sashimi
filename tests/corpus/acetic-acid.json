@@ -2,7 +2,8 @@
   "name": "acetic-acid",
   "description": "Neutral acid, 8 atoms. With acetate this is an ionization pair.",
   "source": "apbs-examples/acetic-acid.pqr",
-  "tier": "fast",
+  "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2146689
     }
   },
+  "energy_kj_mol": -21.95786079527,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.2028672
     ]
   },
-  "energy_kj_mol": -21.95786079527,
   "potential_stats_kT_e": {
     "min": -915.6541,
     "max": 1278.512,

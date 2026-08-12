@@ -3,6 +3,7 @@
   "description": "A single aspartate at -1e. 12 atoms \u2014 a residue, not a molecule.",
   "source": "apbs-examples/ASP66.pqr",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2146689
     }
   },
+  "energy_kj_mol": -192.5011845415,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.200125
     ]
   },
-  "energy_kj_mol": -192.5011845415,
   "potential_stats_kT_e": {
     "min": -854.3691,
     "max": 857.656,

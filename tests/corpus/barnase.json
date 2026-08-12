@@ -3,6 +3,7 @@
   "description": "Barstar's binding partner at +2e; a charge-complementary pair.",
   "source": "apbs-examples/barnase.pqr",
   "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2679201
     }
   },
+  "energy_kj_mol": -2590.977607998,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.400175
     ]
   },
-  "energy_kj_mol": -2590.977607998,
   "potential_stats_kT_e": {
     "min": -538.1315,
     "max": 452.042,

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from sashimi.corpus import MANIFEST, load_summary, verify_case
 from sashimi.errors import InputError, SolverError, UnsupportedRequest
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
@@ -25,6 +26,7 @@ from sashimi.protocol import (
     EnergyTerm,
     PotentialGrid,
     SolventModel,
+    SolverFamily,
     SurfaceModel,
 )
 from sashimi.tabipb import TabipbOptions, TabipbSolver, discover_tabipb
@@ -171,3 +173,31 @@ def test_energy_only_request_skips_the_mesh_output(binary, peptide):
 
     assert result.energy_kj_mol is not None
     assert result.potential is None
+
+
+# --- the golden corpus, for a backend whose binary is built from source -------
+
+
+def test_tabipb_reproduces_its_recorded_corpus_answer(binary):
+    """A boundary-element summary, recorded and re-verified.
+
+    Only one case: `peptide-molecular` is the corpus case TABI-PB can actually
+    take. `born-ion-molecular` has one atom and `methanol-molecular` three,
+    below NanoShaper's four; `acetate-molecular` at eight atoms does not finish
+    inside the backend's own 600 s timeout, twice measured, which is recorded
+    here rather than worked around.
+
+    What is compared is the vertex count and the statistics over the surface —
+    not pinned probe coordinates, because the vertices are the mesher's choice
+    and move when it is rebuilt. That matters for this backend in particular:
+    CI compiles it, and its mesher's version is part of a result's identity.
+    """
+    case = next(c for c in MANIFEST if c.name == "peptide-molecular")
+    recorded = load_summary(case, Path("tests/corpus/tabipb"))
+
+    found = verify_case(TabipbSolver(), case, recorded, family=SolverFamily.BOUNDARY_ELEMENT)
+
+    assert found == []
+    assert recorded["family"] == "boundary-element"
+    assert "geometry" not in recorded  # there is no volume to record
+    assert recorded["surface"]["n_vertices"] > 0

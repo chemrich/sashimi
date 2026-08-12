@@ -63,16 +63,16 @@ def backends() -> list[Backend]:
 def system_for(case: Case, surface: SurfaceModel = SurfaceModel.MOLECULAR) -> System:
     """A corpus case as a `System`, on the one surface both tiers can answer.
 
-    The corpus runs on `smoothed-molecular`, which is APBS-only — the same
-    reason `sashimi validate` has to choose a model rather than take the
-    default.
+    Goes through `Case.system()` rather than rebuilding one: this file used to
+    assemble the fields by hand, which is a second copy of a construction that
+    silently stops matching the moment `Case` grows a field — `mesh_density`
+    already did. Overriding the surface stays here, because choosing a shared
+    model is the *comparison's* business and not the case's; the corpus runs on
+    `smoothed-molecular`, which is APBS-only.
     """
-    return System(
-        structure=case.structure(),
+    return dataclasses.replace(
+        case.system(want_potential=False),
         solvent=dataclasses.replace(case.solvent, surface_model=surface),
-        grid=case.grid,
-        want_energy=True,
-        want_potential=False,
     )
 
 

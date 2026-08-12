@@ -3,6 +3,7 @@
   "description": "FKBP with an empty binding site; pairs with `fkbp-dmso`.",
   "source": "apbs-examples/fkbp-apo.pqr",
   "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2679201
     }
   },
+  "energy_kj_mol": -2094.124887267,
   "geometry": {
     "shape": [
       161,
@@ -81,7 +83,6 @@
       0.4518125
     ]
   },
-  "energy_kj_mol": -2094.124887267,
   "potential_stats_kT_e": {
     "min": -512.5622,
     "max": 435.9905,

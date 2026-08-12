@@ -3,6 +3,7 @@
   "description": "ALA-GLY at zero ionic strength; the low end of the salt arm.",
   "source": "ala-gly.pqr",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -212.208072393,
   "geometry": {
     "shape": [
       65,
@@ -81,7 +83,6 @@
       0.4003906
     ]
   },
-  "energy_kj_mol": -212.208072393,
   "potential_stats_kT_e": {
     "min": -500.4665,
     "max": 361.0042,

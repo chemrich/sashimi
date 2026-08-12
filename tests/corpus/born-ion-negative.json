@@ -3,6 +3,7 @@
   "description": "-1e on the same 3 A sphere. Solvation goes as q^2, so this must return the +1e energy exactly; a sign handled wrongly anywhere in the charge pipeline shows up here and nowhere else in the corpus.",
   "source": "born-ion-negative",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -228.61080098772135,
@@ -69,6 +70,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -230.0256961664,
   "geometry": {
     "shape": [
       65,
@@ -86,7 +88,6 @@
       0.40625
     ]
   },
-  "energy_kj_mol": -230.0256961664,
   "potential_stats_kT_e": {
     "min": -1717.967,
     "max": -0.3168638,

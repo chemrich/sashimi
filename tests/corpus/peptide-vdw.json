@@ -3,6 +3,7 @@
   "description": "ALA-GLY with no probe. Against `peptide-molecular` this is the 25.7%.",
   "source": "ala-gly.pqr",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -226.8923689036,
   "geometry": {
     "shape": [
       65,
@@ -81,7 +83,6 @@
       0.4003906
     ]
   },
-  "energy_kj_mol": -226.8923689036,
   "potential_stats_kT_e": {
     "min": -497.1761,
     "max": 357.7793,

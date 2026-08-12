@@ -1,0 +1,39 @@
+{
+  "name": "methanol-molecular",
+  "description": "A 3-atom solute where the probe genuinely changes the boundary.",
+  "source": "apbs-examples/methanol.pqr",
+  "tier": "standard",
+  "family": "analytic",
+  "backend": "gb-obc2-1",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.25,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.0,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.0,
+    "ion_radius": 2.0,
+    "temperature": 300.0,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solute_dielectric": 2.0,
+    "solvent_dielectric": 78.0,
+    "ionic_strength": 0.0,
+    "temperature": 300.0,
+    "gb": {
+      "model": "obc2",
+      "radii": "mbondi",
+      "offset": 0.09,
+      "minimum_radius": 0.8,
+      "element_screening": true,
+      "debye_kappa_inverse_a": 0.0
+    }
+  },
+  "energy_kj_mol": -18.903961619716128
+}

@@ -2,7 +2,8 @@
   "name": "acetate",
   "description": "Its conjugate base at -1e; the charged half of the ionization pair.",
   "source": "apbs-examples/acetate.pqr",
-  "tier": "fast",
+  "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2146689
     }
   },
+  "energy_kj_mol": -195.177524282,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.2028672
     ]
   },
-  "energy_kj_mol": -195.177524282,
   "potential_stats_kT_e": {
     "min": -1357.556,
     "max": 1210.833,

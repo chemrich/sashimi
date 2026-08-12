@@ -3,6 +3,7 @@
   "description": "The same structure with Asp66 removed rather than protonated \u2014 also +9e, so it isolates geometry from charge against `lysozyme-protonated`.",
   "source": "apbs-examples/2LZT-noASP66.pqr",
   "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2679201
     }
   },
+  "energy_kj_mol": -5222.430589655,
   "geometry": {
     "shape": [
       129,
@@ -81,7 +83,6 @@
       0.4270937
     ]
   },
-  "energy_kj_mol": -5222.430589655,
   "potential_stats_kT_e": {
     "min": -420.5857,
     "max": 380.7465,

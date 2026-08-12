@@ -3,6 +3,7 @@
   "description": "The same protein with a DMSO molecule bound \u2014 ten more atoms and the same net charge. A binding energy is the difference of these two, which is what most real users of a PB solver actually want.",
   "source": "apbs-examples/fkbp-dmso.pqr",
   "tier": "standard",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": null,
   "grid_spec": {
@@ -64,6 +65,7 @@
       "n_points": 2679201
     }
   },
+  "energy_kj_mol": -2088.64513955,
   "geometry": {
     "shape": [
       161,
@@ -81,7 +83,6 @@
       0.4518125
     ]
   },
-  "energy_kj_mol": -2088.64513955,
   "potential_stats_kT_e": {
     "min": -513.1632,
     "max": 435.9268,

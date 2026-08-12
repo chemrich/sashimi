@@ -3,6 +3,7 @@
   "description": "Solute dielectric 4; with eps_p 1 and 2 this is the dielectric arm.",
   "source": "born-ion",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -54.94147893224385,
@@ -69,6 +70,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -55.25544624082,
   "geometry": {
     "shape": [
       65,
@@ -86,7 +88,6 @@
       0.40625
     ]
   },
-  "energy_kj_mol": -55.25544624082,
   "potential_stats_kT_e": {
     "min": 0.316868,
     "max": 431.3077,

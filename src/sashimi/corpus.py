@@ -32,11 +32,15 @@ from sashimi.protocol import (
     FiniteDifferenceRequest,
     FloatArray,
     GridSpec,
+    Potential,
     PotentialGrid,
     PQRData,
     SolventModel,
     Solver,
+    SolverFamily,
     SurfaceModel,
+    SurfacePotential,
+    System,
 )
 
 __all__ = [
@@ -154,16 +158,36 @@ class Case:
     compute_energy: bool = True
     tier: CaseTier = CaseTier.FAST
     analytic: AnalyticReference | None = None
+    mesh_density: float = 2.0  # vertices per square angstrom, for BEM backends
 
     def request(self) -> FiniteDifferenceRequest:
-        """The case as a solver request. Every case is finite-difference today;
-        a BEM case would build a `BoundaryElementRequest` here instead."""
+        """The case as a finite-difference request."""
         return FiniteDifferenceRequest(
             structure=self.structure(),
             solvent=self.solvent,
             grid=self.grid,
             want_energy=self.compute_energy,
             want_potential=True,
+        )
+
+    def system(self, *, want_potential: bool = True) -> System:
+        """The same case as a family-agnostic question.
+
+        The corpus was finite-difference by construction: `Case` recorded grid
+        geometry and `request()` built one request type, so `corpus --backend gb`
+        refused and a curated set of fifty physically meaningful systems was
+        usable by exactly one backend. `System` is the seam phase 7 built for
+        cross-family validation, and it is the same seam this needs — a case is a
+        physical question, and which dialect it is asked in is the backend's
+        business.
+        """
+        return System(
+            structure=self.structure(),
+            solvent=self.solvent,
+            grid=self.grid,
+            mesh_density=self.mesh_density,
+            want_energy=self.compute_energy,
+            want_potential=want_potential,
         )
 
     def structure(self) -> PQRData:
@@ -248,8 +272,10 @@ class BackendReference:
 class Discrepancy:
     case: str
     field: str
-    expected: float | list[int]
-    actual: float | list[int]
+    # `str` because some differences are not numeric: which solver family
+    # produced a recording, or whether a field was there at all.
+    expected: float | list[int] | str
+    actual: float | list[int] | str
     detail: str = ""
 
     def __str__(self) -> str:
@@ -840,17 +866,27 @@ def probe_points(origin: FloatArray, spacing: FloatArray, shape: tuple[int, ...]
     return np.asarray(centre + offsets, dtype=np.float64)
 
 
-def build_case(solver: Solver[FiniteDifferenceRequest], case: Case) -> dict[str, Any]:
-    """Solve one case and reduce it to a checkable summary."""
-    result = solver.solve(case.request())
-    grid = result.potential
-    if not isinstance(grid, PotentialGrid):
-        raise TypeError(
-            f"corpus case {case.name!r} expected a volumetric potential, got "
-            f"{type(grid).__name__}. A surface-returning backend needs its own case shape."
-        )
-    points = probe_points(grid.origin, grid.spacing, grid.shape)
-    stats = grid.stats()
+def build_case(
+    solver: Solver[Any],
+    case: Case,
+    family: SolverFamily = SolverFamily.FINITE_DIFFERENCE,
+) -> dict[str, Any]:
+    """Solve one case and reduce it to a checkable summary.
+
+    The summary's shape follows what the backend actually returns, which is what
+    lets a curated case be recorded for a solver that has no grid. A volumetric
+    answer carries geometry, statistics and pinned probes; a surface answer
+    carries its vertex count and value statistics; an analytic one carries the
+    energy and nothing else, because it computed nothing else.
+
+    `family` is the dialect to ask in, not a claim about the solver: handing an
+    FD backend `ANALYTIC` would simply drop the grid from the request.
+    """
+    # An analytic backend has no field to sample — not "does not implement one",
+    # but has none, which is what places it in that family at all. Asking anyway
+    # would make every corpus build fail on a refusal that is the correct answer.
+    want_potential = family is not SolverFamily.ANALYTIC
+    result = solver.solve(case.system(want_potential=want_potential).request_for(family))
 
     analytic: dict[str, Any] | None = None
     if case.analytic is not None and result.energy_kj_mol is not None:
@@ -865,11 +901,12 @@ def build_case(solver: Solver[FiniteDifferenceRequest], case: Case) -> dict[str,
             "relative_error": abs(result.energy_kj_mol - exact) / abs(exact),
         }
 
-    return {
+    summary: dict[str, Any] = {
         "name": case.name,
         "description": case.description,
         "source": case.source,
         "tier": case.tier.value,
+        "family": family.value,
         "backend": result.provenance.backend,
         "analytic": analytic,
         "grid_spec": {
@@ -879,19 +916,45 @@ def build_case(solver: Solver[FiniteDifferenceRequest], case: Case) -> dict[str,
         },
         "solvent_model": _solvent_dict(case.solvent),
         "resolved_parameters": result.provenance.resolved_parameters,
-        "geometry": {
-            "shape": list(grid.shape),
-            "origin": [float(v) for v in grid.origin],
-            "spacing": [float(v) for v in grid.spacing],
-        },
         "energy_kj_mol": result.energy_kj_mol,
-        "potential_stats_kT_e": {key: float(stats[key]) for key in ("min", "max", "mean", "std")},
-        "probes": {
-            "seed": PROBE_SEED,
-            "points": [[float(c) for c in p] for p in points],
-            "values_kT_e": [float(v) for v in grid.value_at(points)],
-        },
     }
+    return summary | _potential_summary(result.potential)
+
+
+def _potential_summary(potential: Potential | None) -> dict[str, Any]:
+    """Whatever there is to record about the field, which may be nothing."""
+    if isinstance(potential, PotentialGrid):
+        points = probe_points(potential.origin, potential.spacing, potential.shape)
+        stats = potential.stats()
+        return {
+            "geometry": {
+                "shape": list(potential.shape),
+                "origin": [float(v) for v in potential.origin],
+                "spacing": [float(v) for v in potential.spacing],
+            },
+            "potential_stats_kT_e": {
+                key: float(stats[key]) for key in ("min", "max", "mean", "std")
+            },
+            "probes": {
+                "seed": PROBE_SEED,
+                "points": [[float(c) for c in p] for p in points],
+                "values_kT_e": [float(v) for v in potential.value_at(points)],
+            },
+        }
+    if isinstance(potential, SurfacePotential):
+        # No probes: the vertices are the mesher's choice and move when it is
+        # rebuilt, so pinned coordinates would compare nothing. Statistics over
+        # the surface are what survives a remesh.
+        stats = potential.stats()
+        return {
+            "surface": {
+                "n_vertices": potential.n_vertices,
+                "potential_stats_kT_e": {
+                    key: float(stats[key]) for key in ("min", "max", "mean", "std")
+                },
+            }
+        }
+    return {}
 
 
 def _solvent_dict(solvent: SolventModel) -> dict[str, Any]:
@@ -937,37 +1000,67 @@ def build_manifest(
 
 
 def verify_case(
-    solver: Solver[FiniteDifferenceRequest],
+    solver: Solver[Any],
     case: Case,
     reference: Reference | dict[str, Any],
     tolerances: Tolerances = Tolerances(),  # noqa: B008 — frozen dataclass
+    family: SolverFamily = SolverFamily.FINITE_DIFFERENCE,
 ) -> list[Discrepancy]:
     """Re-solve a case and diff it against a reference.
 
     Accepts a bare summary dict as well as a `Reference`, because that is what
     the comparison actually needs and it keeps ad-hoc use simple.
+
+    What gets compared follows what both sides recorded: a grid answer is
+    checked on geometry, statistics and probes, a surface answer on its vertex
+    count and statistics, and an analytic one on the energy alone. Comparing a
+    recording of one shape against a solve of another is refused rather than
+    partially attempted — that is a backend swap, not a drift.
     """
     recorded = reference if isinstance(reference, dict) else reference.summary_for(case)
     found: list[Discrepancy] = []
-    fresh = build_case(solver, case)
+    fresh = build_case(solver, case, family)
 
-    if fresh["geometry"]["shape"] != recorded["geometry"]["shape"]:
-        # Geometry drift invalidates every pointwise comparison below, so stop.
+    recorded_family = recorded.get("family", SolverFamily.FINITE_DIFFERENCE.value)
+    if recorded_family != fresh["family"]:
         return [
             Discrepancy(
                 case.name,
-                "geometry.shape",
-                recorded["geometry"]["shape"],
-                fresh["geometry"]["shape"],
-                "grid sizing changed; pointwise comparison skipped",
+                "family",
+                recorded_family,
+                fresh["family"],
+                "the recording came from a different solver family; nothing else is comparable",
             )
         ]
 
-    for key in ("origin", "spacing"):
-        a = np.array(recorded["geometry"][key])
-        b = np.array(fresh["geometry"][key])
-        if not np.allclose(a, b, atol=tolerances.geometry_atol):
-            found.append(Discrepancy(case.name, f"geometry.{key}", a.tolist(), b.tolist()))
+    if "geometry" in recorded or "geometry" in fresh:
+        if "geometry" not in recorded or "geometry" not in fresh:
+            return [
+                Discrepancy(
+                    case.name,
+                    "geometry",
+                    "present" if "geometry" in recorded else "absent",
+                    "present" if "geometry" in fresh else "absent",
+                    "one side returned a volumetric field and the other did not",
+                )
+            ]
+        if fresh["geometry"]["shape"] != recorded["geometry"]["shape"]:
+            # Geometry drift invalidates every pointwise comparison below, so stop.
+            return [
+                Discrepancy(
+                    case.name,
+                    "geometry.shape",
+                    recorded["geometry"]["shape"],
+                    fresh["geometry"]["shape"],
+                    "grid sizing changed; pointwise comparison skipped",
+                )
+            ]
+
+        for key in ("origin", "spacing"):
+            a = np.array(recorded["geometry"][key])
+            b = np.array(fresh["geometry"][key])
+            if not np.allclose(a, b, atol=tolerances.geometry_atol):
+                found.append(Discrepancy(case.name, f"geometry.{key}", a.tolist(), b.tolist()))
 
     expected_energy, actual_energy = recorded["energy_kj_mol"], fresh["energy_kj_mol"]
     if (expected_energy is None) != (actual_energy is None):
@@ -987,13 +1080,50 @@ def verify_case(
             )
         )
 
-    for key, expected in recorded["potential_stats_kT_e"].items():
+    for key, expected in recorded.get("potential_stats_kT_e", {}).items():
         actual = fresh["potential_stats_kT_e"][key]
         if not _close(actual, expected, tolerances.stats_rtol, tolerances.potential_atol):
             found.append(Discrepancy(case.name, f"potential_stats.{key}", expected, actual))
 
+    found.extend(_verify_surface(case, recorded, fresh, tolerances))
     found.extend(_verify_analytic(case, fresh))
-    found.extend(_verify_probes(case, recorded, fresh, tolerances))
+    if "probes" in recorded and "probes" in fresh:
+        found.extend(_verify_probes(case, recorded, fresh, tolerances))
+    return found
+
+
+def _verify_surface(
+    case: Case,
+    recorded: dict[str, Any],
+    fresh: dict[str, Any],
+    tolerances: Tolerances,
+) -> list[Discrepancy]:
+    """Compare a boundary-element answer, which has no grid to compare.
+
+    The vertex count is checked exactly: a remesh that moves it means the
+    triangulation changed, and every statistic below is then a statistic of a
+    different surface. That is worth reporting rather than absorbing, because
+    the mesher's version is part of a TABI-PB result's identity.
+    """
+    if "surface" not in recorded or "surface" not in fresh:
+        return []
+
+    found: list[Discrepancy] = []
+    if recorded["surface"]["n_vertices"] != fresh["surface"]["n_vertices"]:
+        return [
+            Discrepancy(
+                case.name,
+                "surface.n_vertices",
+                recorded["surface"]["n_vertices"],
+                fresh["surface"]["n_vertices"],
+                "the mesh changed; its statistics describe a different surface",
+            )
+        ]
+
+    for key, expected in recorded["surface"]["potential_stats_kT_e"].items():
+        actual = fresh["surface"]["potential_stats_kT_e"][key]
+        if not _close(actual, expected, tolerances.stats_rtol, tolerances.potential_atol):
+            found.append(Discrepancy(case.name, f"surface.potential_stats.{key}", expected, actual))
     return found
 
 

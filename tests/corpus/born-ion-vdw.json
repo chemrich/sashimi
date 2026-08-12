@@ -3,6 +3,7 @@
   "description": "The same ion with the probe collapsed. For one sphere this must return the molecular answer exactly \u2014 the two surfaces coincide, and no other case in the corpus can catch a probe applied where it should not be.",
   "source": "born-ion",
   "tier": "fast",
+  "family": "finite-difference",
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -228.61080098772135,
@@ -69,6 +70,7 @@
       "n_points": 274625
     }
   },
+  "energy_kj_mol": -233.9996297277,
   "geometry": {
     "shape": [
       65,
@@ -86,7 +88,6 @@
       0.40625
     ]
   },
-  "energy_kj_mol": -233.9996297277,
   "potential_stats_kT_e": {
     "min": 0.3168643,
     "max": 1714.761,
