@@ -190,7 +190,16 @@ def test_delphi_reading_a_different_structure_is_caught_rather_than_solved(binar
 
     The same discipline ROADMAP.md §13 applies to APBS, which also exits 0 on
     failure: check the output against what was asked, rather than the status.
+
+    C++ only, and that is the honest shape of the guard rather than a
+    convenience: it reads DelPhi's printed echo of the charges it assigned, and
+    pyDelPhi reports through a CSV and prints no equivalent line. Asserting the
+    refusal on a flavour that cannot produce it would be asserting something
+    else — measured on CI, where pyDelPhi rejects this input at the parameter
+    file instead, which is a different failure that happens to look like a pass.
     """
+    if binary.flavour is not DelphiFlavour.CPP:
+        pytest.skip("the guard reads a line only the C++ build prints")
 
     def minimum_width_writer(pqr) -> str:
         lines = []
