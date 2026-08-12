@@ -1,0 +1,39 @@
+{
+  "name": "protein-rna-molecular",
+  "description": "2,065 atoms with a phosphate backbone, on the shared surface. No backend but APBS had ever been handed a nucleic acid by the corpus, and a radius set assigned per element is exactly the thing that has no phosphorus entry until someone tries.",
+  "source": "apbs-examples/1a63.pqr",
+  "tier": "full",
+  "family": "analytic",
+  "backend": "gb-obc2-1",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.5,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solute_dielectric": 2.0,
+    "solvent_dielectric": 78.54,
+    "ionic_strength": 0.15,
+    "temperature": 298.15,
+    "gb": {
+      "model": "obc2",
+      "radii": "mbondi",
+      "offset": 0.09,
+      "minimum_radius": 0.8,
+      "element_screening": true,
+      "debye_kappa_inverse_a": 0.127282
+    }
+  },
+  "energy_kj_mol": -5230.0903111910575
+}

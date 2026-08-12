@@ -238,13 +238,24 @@ Run it with `sashimi-mcp`, or register it:
 The golden corpus is a first-class feature:
 
 ```sh
-sashimi corpus verify              # re-solve the manifest, diff against record
+sashimi corpus verify              # the standard tier, diffed against record
+sashimi corpus verify --tier full  # all 64 cases
 sashimi corpus build --force       # re-record, deliberately
 ```
 
-Five cases, summaries in `tests/corpus/`. It is the regression net for the
-unpinned APBS today, and the acceptance gate for a second backend later —
-`sashimi corpus verify --backend debye` needs no APBS installed.
+Sixty-four cases, summaries in `tests/corpus/`, split by measured wall time into
+`fast` (what `pytest` runs), `standard` (a CI step per push) and `full` (on
+demand). It is the regression net for the unpinned APBS today, and the
+acceptance gate for a second backend later — `sashimi corpus verify --backend
+debye` needs no APBS installed.
+
+Nineteen of those cases are on a surface model more than one solver supports, so
+they carry answers from more than one backend: `tests/corpus/gb/` holds all
+nineteen from the in-process Generalized Born tier, and `tests/corpus/tabipb/`
+six from the boundary-element one. Comparing those files against
+`tests/corpus/` needs no binary at all, which is where the corpus says something
+neither recording could alone — the two reference-tier families agree to
+1.0–1.6%, and the approximate tier ranges from 0.7% to 28%.
 
 With two backends installed, they can be checked against *each other*:
 

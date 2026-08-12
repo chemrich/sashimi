@@ -1,0 +1,50 @@
+{
+  "name": "fas2-molecular",
+  "description": "906 atoms carrying +4.053 e on the shared surface. The only non-integer net charge any backend but APBS can be handed.",
+  "source": "apbs-examples/fas2.pqr",
+  "tier": "standard",
+  "family": "boundary-element",
+  "backend": "tabipb+nanoshaper-0.7.5",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.5,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "temperature": 298.15,
+    "surface_radius": 1.4,
+    "tabipb": {
+      "mesh": "ses",
+      "sdens": 2.0,
+      "srad": 1.4,
+      "tree_degree": 1,
+      "tree_theta": 0.0,
+      "tree_max_per_leaf": 50,
+      "precondition": true
+    }
+  },
+  "energy_kj_mol": -2020.689226,
+  "surface": {
+    "n_vertices": 21850,
+    "potential_stats_kT_e": {
+      "min": -9.101002,
+      "max": 16.579601,
+      "mean": 1.6520853896109842,
+      "std": 3.613609609943442
+    }
+  }
+}
