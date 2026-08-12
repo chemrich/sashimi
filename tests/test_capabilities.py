@@ -324,13 +324,32 @@ class TestPerBackendCost:
         assert "note" in report["cost"]
 
     @pytest.mark.parametrize("backend", ["tabipb", "gb"])
-    def test_a_backend_with_no_grid_says_so_in_the_summary(self, backend: str):
-        """It used to read "Would run on a unknown grid" — inviting a caller to
-        lower `max_points` for a solver that has none."""
+    def test_a_backend_with_no_grid_estimates_no_grid(self, backend: str):
+        """True whether or not the backend is installed, which is the point.
+
+        `validate_request` needs no binary: an absent backend still reports its
+        family and still has no grid. What changes when it is missing is the
+        *summary*, which becomes the install message — see the test below.
+        """
         report = validate_request(self.peptide(), solvent=self.molecular(), backend=backend)
 
         assert report["cost"]["grid"] is None
+        assert "no grid" in report["cost"]["note"]
         assert "unknown grid" not in report["summary"]
+
+    def test_the_summary_of_a_gridless_backend_names_what_it_costs_instead(self):
+        """It used to read "Would run on a unknown grid" — inviting a caller to
+        lower `max_points` for a solver that has none.
+
+        Asked of `gb` specifically, because it is the only backend that is always
+        available. This test first asked TABI-PB and failed on the APBS-only CI
+        leg within an hour of being written: an absent backend's summary is its
+        install instructions, which is a different and correct answer to a
+        different question.
+        """
+        report = validate_request(self.peptide(), solvent=self.molecular(), backend="gb")
+
+        assert report["ok"] is True
         assert "no grid" in report["summary"]
 
     def test_the_mesher_floor_is_refused_before_a_solve_rather_than_inside_one(self):
