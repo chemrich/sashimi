@@ -10,9 +10,21 @@ discipline of section 8 rather than a detail. Surface definition moves a
 dipeptide's solvation energy across 25.7% on this code, so a spread computed
 between an APBS `smoothed-molecular` and a DelPhi `molecular` would be a
 modelling difference misreported as a solver disagreement — worse than no
-number. `comparable_surface_models()` is the precondition, and it is empty
-whenever fewer than two backends are installed, in which case this file skips
-entirely rather than inventing a comparison.
+number. `comparable_surface_models()` is the precondition for *which model* to compare
+on, and this file skips entirely rather than inventing a comparison.
+
+It is not the precondition for whether the comparison can run at all, and
+reading it as one was a bug that survived from phase 7 to 2026-08-12. That
+function counts backends that share a model, and Generalized Born is always
+available and shares `molecular` with APBS — so on a machine with APBS and no
+DelPhi it returns `["molecular"]`, the skip does not fire, and `DelphiSolver()`
+raises `DelphiNotFound` five tests running. That is the README's own recommended
+install: APBS from conda-forge and nothing else. Neither CI leg saw it because
+both always carry a second *real* backend, and it was found by asking what a
+runner with only APBS would do.
+
+So the guard is now what the file's name says it is: both of the backends *this
+file compares* must be installed.
 
 The gate is deliberately loose. Two independent finite-difference codes on
 different grids will never agree to corpus tolerance, and pinning the measured
@@ -42,8 +54,20 @@ from sashimi.protocol import (
     SurfaceModel,
 )
 from sashimi.validate import Comparison, Incomparable, validate
+from tests.helpers import installed_or_skip
 
 pytestmark = [pytest.mark.apbs, pytest.mark.delphi]
+
+
+@pytest.fixture(autouse=True)
+def _delphi_installed():
+    """Both backends, or a skip. The marker selects; this is what skips.
+
+    Autouse so it cannot be forgotten on a test added later — which is how the
+    equivalent guard came to be missing from the boundary-element MCP test.
+    """
+    installed_or_skip(discover_delphi, "SASHIMI_DELPHI_PATH")
+
 
 # Two independent FD codes on different grids. Measured across the shared
 # models: 2.30% (Born ion), 2.31% (ALA-GLY molecular), 4.02% (ALA-GLY

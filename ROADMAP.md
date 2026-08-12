@@ -629,10 +629,36 @@ binary exists — which matters because there is no `linux-aarch64` APBS. debye
 inverts this: pure implementation, whole suite runs natively anywhere, and that
 portability is itself a tested differentiator.
 
-**CI**: GitHub Actions on `ubuntu-latest` and `macos-latest`, `uv sync --frozen`
-against the committed lockfile, with APBS installed from conda-forge via
-micromamba — whose only job is fetching that one binary. A single `ci-ok` gate
-job fronts the matrix so the required status-check name survives matrix changes.
+**CI**: GitHub Actions, `uv sync --frozen` against the committed lockfile, with
+APBS installed from conda-forge via micromamba — whose only job is fetching that
+one binary. A single `ci-ok` gate job fronts the matrix so the required
+status-check name survives matrix changes, which is what makes the matrix free
+to change.
+
+Two Linux legs run per push, and they cover different things:
+
+| leg | carries | what it is for |
+|---|---|---|
+| `ubuntu-latest, full` | APBS, DelPhi (both flavours), TABI-PB | every backend, the corpus, cross-validation |
+| `ubuntu-latest, apbs-only` | APBS | **the README's own recommended install**, and nothing else |
+| `macos-latest, full` | APBS, pyDelPhi | osx-arm64 as a first-class platform — main, weekly, on demand |
+
+The `apbs-only` leg exists because a test that needs a binary without saying so
+passes wherever that binary happens to be installed, and every leg used to carry
+at least two backends. It found two such bugs the day it was added, one of them
+five tests failing on the documented install since phase 7 —
+`comparable_surface_models()` counts Generalized Born, which is always
+available, so "fewer than two backends installed" stopped being the thing it
+tested. **A marker selects and deselects; it does not skip**, and
+`tests.helpers.installed_or_skip` is now the one guard that does.
+
+macOS moved off the per-push path on 2026-08-12 for cost: GitHub bills arm64
+macOS at 10x per minute, and at ~6 minutes a run it was roughly 90% of this
+project's CI spend — enough to exhaust the account's Actions budget mid-day.
+What it uniquely proves is that conda-forge still ships a working osx-arm64
+APBS 3.4.1, which is a fact about a third party that changes rarely, and every
+commit is exercised on osx-arm64 locally before it is pushed. It still runs on
+main after a merge, weekly against a moving conda-forge, and on demand.
 
 ## 8. Backend strategy beyond APBS
 
@@ -765,7 +791,8 @@ trimmed reproducible builds exist partly for this.
 | Environment | Arch | APBS source | Role | Status |
 |---|---|---|---|---|
 | Mac local | osx-arm64 | conda-forge native | dev loop, protocol tests | in use |
-| GitHub Actions | linux-64, osx-arm64 | conda-forge via micromamba | **full suite per push, both platforms** | in use |
+| GitHub Actions | linux-64 | conda-forge via micromamba | **full suite per push**, two legs: every backend, and APBS alone | in use |
+| GitHub Actions | osx-arm64 | conda-forge via micromamba | platform proof: main, weekly, on demand — 10x billing, see §7 | in use |
 | OrbStack container | linux/amd64 (Rosetta) | conda-forge | local linux reproduction when CI is too slow a loop | optional |
 | Proxmox Ubuntu VM | linux-64 native | conda-forge / owned build | stable timings for benchmarking | **deferred to phase 8** |
 | (future) arm64 Linux | linux-aarch64 | owned build | the platform gap of §9 | phase 6 |
