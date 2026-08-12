@@ -167,6 +167,14 @@ def _backends_supporting(
     APBS's alone. Handing a backend a surface it refuses makes every case report
     as incomparable, which names neither the backend nor the reason.
 
+    **Not installed and does not support are different reasons**, and they used
+    to print the same sentence: an absent backend reports an empty
+    `surface_models`, which is indistinguishable from genuine non-support unless
+    `available` is read too. So a machine without DelPhi was told "excluding
+    delphi: does not support the molecular surface" — false, and the sort of
+    false that stops someone installing the project's primary cross-validation
+    partner.
+
     A backend the caller named explicitly is kept, so `--backend gb --surface
     van-der-waals` fails with GB's own message rather than being silently
     dropped: asking for something impossible should say so.
@@ -174,28 +182,39 @@ def _backends_supporting(
     if explicit:
         return names, {}
 
-    supported = {
-        report["name"]: report["surface_models"] for report in describe_capabilities()["backends"]
-    }
+    reports = {report["name"]: report for report in describe_capabilities()["backends"]}
     kept, excluded = [], {}
     for name in names:
-        models = supported.get(name)
-        if models is None or model.value in models:
+        report = reports.get(name)
+        if report is None or model.value in report["surface_models"]:
             kept.append(name)
+        elif not report["available"]:
+            excluded[name] = f"not installed — {report['detail'].splitlines()[0]}"
         else:
             excluded[name] = f"does not support the {model.value} surface"
     return kept, excluded
 
 
 def _validate(args: argparse.Namespace) -> int:
-    names = args.backend or sorted(BACKEND_NAMES)
+    # Installed, not registered. Defaulting to every *registered* backend put
+    # TABI-PB in the comparison on a machine that has never built it: it is
+    # unavailable but still advertises `molecular`, so the surface filter kept
+    # it, `solver_for` constructed it lazily without complaint, and every case
+    # then died on `TabipbNotFound`. On the README's own install — conda-forge
+    # APBS and nothing else — `sashimi validate` skipped all 64 cases and exited
+    # 1, while apbs against gb was a perfectly good comparison sitting right
+    # there. Same "what would a machine with only APBS do" bug this branch fixed
+    # in the cross-validation tests.
+    names = args.backend or backends.available_names()
     unknown = [n for n in names if n not in BACKEND_NAMES]
     if unknown:
         raise SystemExit(f"unknown backend(s): {', '.join(unknown)}")
     if len(names) < MIN_BACKENDS:
+        installed = ", ".join(backends.available_names()) or "none"
         raise SystemExit(
             f"cross-validation needs at least two backends, got {len(names)}. "
-            "One backend trivially agrees with itself."
+            f"One backend trivially agrees with itself. Installed here: {installed}. "
+            "`sashimi capabilities` reports what each one needs."
         )
 
     model = _pick_surface_model(args.surface)
