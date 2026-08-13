@@ -23,7 +23,6 @@ from sashimi.analytic import born_solvation_energy
 from sashimi.apbs.grid import size_grid
 from sashimi.corpus import (
     CORPUS_DIR,
-    FIELD_DIRECTIONS,
     MANIFEST,
     TIER_ORDER,
     AnalyticReference,
@@ -36,6 +35,7 @@ from sashimi.corpus import (
     verify_case,
 )
 from sashimi.debye import DebyeSolver
+from sashimi.field import FIELD_DIRECTIONS
 from sashimi.protocol import (
     FiniteDifferenceRequest,
     PotentialGrid,

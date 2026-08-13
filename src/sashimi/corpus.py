@@ -31,6 +31,12 @@ from sashimi.analytic import (
     born_solvation_energy,
     kirkwood_solvation_energy,
 )
+from sashimi.field import (
+    FIELD_DIRECTION_NAMES,
+    FIELD_DIRECTIONS,
+    sample_points,
+    sample_radii,
+)
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
     DIMENSIONS,
@@ -190,36 +196,6 @@ class AnalyticReference:
         return self.rtol
 
 
-def _unit(x: float, y: float, z: float) -> FloatArray:
-    vector = np.array([x, y, z], dtype=float)
-    return vector / float(np.linalg.norm(vector))
-
-
-# The directions every field check samples, as one corpus-wide rule rather than
-# a per-case choice. ROADMAP.md section 12 states the general form: a rule
-# chosen per test is how two checks come to disagree about what they measured.
-#
-# The three cubic symmetry classes, because those are what a staircased sphere's
-# error varies over: <100> along the axes, <110> through the face diagonals,
-# <111> through the body diagonals. Two of the classes carry a sign-flipped
-# representative as well. Those are redundant for a centred sphere on an
-# odd-sized grid — the atom sits exactly on a node, so +x and -x must agree —
-# which is the point: `tests/test_corpus_field.py` asserts they do, and a grid
-# whose centring is off by half a cell is a defect nothing else here would see.
-FIELD_DIRECTIONS: tuple[tuple[str, FloatArray], ...] = (
-    ("+x", _unit(1, 0, 0)),
-    ("+y", _unit(0, 1, 0)),
-    ("+z", _unit(0, 0, 1)),
-    ("-x", _unit(-1, 0, 0)),
-    ("110", _unit(1, 1, 0)),
-    ("011", _unit(0, 1, 1)),
-    ("111", _unit(1, 1, 1)),
-    ("-1-1-1", _unit(-1, -1, -1)),
-)
-
-FIELD_DIRECTION_NAMES: tuple[str, ...] = tuple(name for name, _ in FIELD_DIRECTIONS)
-
-
 @dataclass(frozen=True)
 class AnalyticField:
     """A closed-form *potential* to check a solver's field against.
@@ -270,18 +246,7 @@ class AnalyticField:
         return self.rtol
 
     def sample_radii(self, spacing: float) -> list[float]:
-        return [self.radius_a + k * spacing for k in self.cells_out]
-
-    def sample_points(self, centre: FloatArray, spacing: float) -> FloatArray:
-        """Every (direction, radius) pair, radius-major, as (M, 3) coordinates.
-
-        Radius-major so the flat order matches `itertools.product(radii,
-        directions)`, which is how the summary's nested lists are built.
-        """
-        radii = self.sample_radii(spacing)
-        return np.array(
-            [centre + direction * radius for radius in radii for _, direction in FIELD_DIRECTIONS]
-        )
+        return sample_radii(self.radius_a, spacing, self.cells_out)
 
     def exact_at(self, radii: Sequence[float], solvent: SolventModel) -> list[float]:
         """The closed form, taking the solvent from the case rather than restating it.
@@ -1008,6 +973,59 @@ MANIFEST: tuple[Case, ...] = (
             rtol=0.038,
         ),
     ),
+    # --- the van der Waals field arm, for M1b -------------------------------
+    #
+    # ROADMAP.md section 12 M1b grades debye's field against the best reference
+    # solver installed, and debye builds only the van der Waals boundary — so
+    # before these, the whole milestone rested on two cases at one radius. These
+    # are the extremes of the radius arm above, on the surface debye can answer,
+    # which is the cheapest way to make the gate span a = 1 to 6 A.
+    #
+    # They are not duplicates of their `molecular` twins. A probe cannot carve a
+    # re-entrant surface out of a lone sphere, so the two boundaries describe the
+    # same geometry — and `srad 0` and `srad 1.4` still build different dielectric
+    # maps of it, which `born-ion-vdw-fine` measures as 0.787% against 0.621%.
+    Case(
+        name="born-ion-vdw-r1",
+        description=(
+            "1 A sphere on van der Waals: the small end of the field arm debye "
+            "is graded on, and the radius where the sampling rule is tightest."
+        ),
+        source="born-ion-r1",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        analytic=_born(1.0, rtol=0.09, delphi_rtol=0.001),  # measured 4.101% / 0.001%
+        analytic_field=AnalyticField(
+            radius_a=1.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            # All directions: 1.165% APBS / 1.727% DelPhi. debye reads 9.871%
+            # here — the worst it is anywhere on the corpus, and the case that
+            # makes M1b's gate about the small-radius near field.
+            rtol=0.035,
+        ),
+    ),
+    Case(
+        name="born-ion-vdw-r6",
+        description="6 A sphere on van der Waals: the long end of the same arm.",
+        source="born-ion-r6",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        analytic=_born(6.0, rtol=0.018, delphi_rtol=0.001),  # measured 0.856% / 0.001%
+        analytic_field=AnalyticField(
+            radius_a=6.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            # All directions: 1.877% APBS / 1.902% DelPhi, and debye 1.894% —
+            # all three on h = 0.5 A, which is what agreement looks like when
+            # nothing about the grid separates them.
+            rtol=0.038,
+        ),
+    ),
     Case(
         name="born-ion-molecular-negative",
         description=(
@@ -1696,10 +1714,10 @@ def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] |
     radii = reference.sample_radii(spacing)
     centre = case.structure().center()
 
-    got = grid.value_at(reference.sample_points(centre, spacing))
     exact = np.array(reference.exact_at(radii, case.solvent))
-    # Radius-major, so reshaping recovers [radius][direction] — see `sample_points`.
-    values = got.reshape(len(radii), len(FIELD_DIRECTIONS))
+    values = np.array(
+        [grid.value_at(sample_points(centre, radius)) for radius in radii]
+    )  # [radius][direction]
     errors = np.abs(values - exact[:, None]) / np.abs(exact)[:, None]
 
     worst = np.unravel_index(int(np.argmax(errors)), errors.shape)
