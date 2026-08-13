@@ -15,7 +15,7 @@ from fastmcp.exceptions import ToolError
 
 from sashimi.dx import write_dx
 from sashimi.mcp import mcp
-from sashimi.protocol import PotentialGrid
+from sashimi.protocol import PotentialGrid, SolventModel
 from sashimi.tabipb.discover import discover_tabipb
 from tests.helpers import installed_or_skip
 
@@ -419,6 +419,45 @@ class TestDiscoverySurface:
                 "sashimi_validate_inputs",
                 {"pqr_path": str(self.ion_pqr(tmp_path)), "surface_model": "banana"},
             )
+
+    async def test_the_tools_default_to_the_surface_model_the_protocol_does(self, client):
+        """Three literals, one decision, and nothing tying them together.
+
+        Both tool signatures spell the default as a string for the JSON schema's
+        sake, so they can drift from `SolventModel`'s — and an agent reading the
+        schema would then be told one boundary while a defaulted solve used
+        another. Read from the advertised schema rather than from the module, so
+        this checks what a caller is actually shown.
+        """
+        expected = SolventModel().surface_model.value
+        tools = {tool.name: tool for tool in await client.list_tools()}
+
+        for name in ("sashimi_solve", "sashimi_validate_inputs"):
+            schema = tools[name].inputSchema["properties"]["surface_model"]
+            assert schema["default"] == expected, f"{name} advertises {schema['default']!r}"
+
+    async def test_solve_rejects_an_unknown_surface_model_the_same_way(self, client, tmp_path):
+        """Both tools take this as a string; only one used to check it.
+
+        An unknown value reached `sashimi_solve` as a bare `ValueError`, so an
+        agent got a traceback naming what was wrong and not what would work.
+        The near-miss is the realistic case: `molecular` became the default on
+        2026-08-13, so asking for the old boundary means typing
+        `smoothed-molecular` by hand.
+        """
+        with pytest.raises(ToolError, match="unknown surface_model") as caught:
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.ion_pqr(tmp_path)),
+                    "backend": "gb",
+                    "compute_energy": True,
+                    "surface_model": "smoothed_molecular",
+                },
+            )
+
+        # The alternatives, which is the half a bare ValueError never carried.
+        assert "smoothed-molecular" in str(caught.value)
 
     @pytest.mark.apbs
     async def test_validate_agrees_with_what_solve_actually_does(self, client, tmp_path):

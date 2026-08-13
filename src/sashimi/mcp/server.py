@@ -65,6 +65,23 @@ def _fail(exc: SashimiError) -> ToolError:
     return ToolError(str(exc))
 
 
+def _surface_model(name: str) -> SurfaceModel:
+    """Parse a surface model, naming the alternatives when it is not one.
+
+    Both tools take this as a string, and only `sashimi_validate_inputs` used
+    to check it: an unknown value reached `sashimi_solve` as a bare `ValueError`
+    and an agent got a server-side traceback saying what was wrong but not what
+    would work. Moving the default to `molecular` made that likelier rather than
+    rarer — asking for the old boundary now means typing `smoothed-molecular`,
+    and `smoothed_molecular` is a near-miss that lands here.
+    """
+    try:
+        return SurfaceModel(name)
+    except ValueError as exc:
+        supported = ", ".join(sorted(m.value for m in SurfaceModel))
+        raise ToolError(f"unknown surface_model {name!r}; one of: {supported}") from exc
+
+
 def _grid_spec(resolution: float | None, padding: float | None) -> GridSpec:
     """A grid spec where unset means the protocol's default, not this layer's."""
     spec = GridSpec()
@@ -278,7 +295,7 @@ def sashimi_solve(
             solvent_dielectric=solvent_dielectric,
             solute_dielectric=solute_dielectric,
             ionic_strength=ionic_strength,
-            surface_model=SurfaceModel(surface_model),
+            surface_model=_surface_model(surface_model),
         ),
         # Unset means the protocol's own default rather than a number this
         # layer invents; `System` and `BoundaryElementRequest` disagree about
@@ -664,11 +681,7 @@ def sashimi_validate_inputs(
     except (OSError, ValueError) as exc:
         raise ToolError(f"could not read PQR {pqr_path}: {exc}") from exc
 
-    try:
-        solvent = SolventModel(surface_model=SurfaceModel(surface_model))
-    except ValueError as exc:
-        supported = ", ".join(sorted(m.value for m in SurfaceModel))
-        raise ToolError(f"unknown surface_model {surface_model!r}; one of: {supported}") from exc
+    solvent = SolventModel(surface_model=_surface_model(surface_model))
 
     spec = GridSpec(
         resolution=resolution,

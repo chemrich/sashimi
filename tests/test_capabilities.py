@@ -226,6 +226,23 @@ class TestCapabilities:
         models = describe_capabilities()["surface_models"]
         assert models["comparable_across_available_backends"] == []
 
+    def test_what_a_defaulted_request_will_actually_be_solved_on_is_discoverable(self):
+        """The grid half of this was reported and the physics half was not.
+
+        An agent could learn the spacing a defaulted solve would use but not the
+        boundary — and the boundary is the larger modelling choice of the two,
+        as this module's own note says. It moved once, on 2026-08-13, so it is
+        published rather than left to be assumed.
+        """
+        described = describe_capabilities()
+        defaults = SolventModel()
+
+        assert described["surface_models"]["default"] == defaults.surface_model.value
+        assert described["solvent_defaults"]["surface_model"] == defaults.surface_model.value
+        assert described["solvent_defaults"]["ionic_strength"] == defaults.ionic_strength
+        # Every field, so a new one cannot arrive undocumented.
+        assert set(described["solvent_defaults"]) == {f.name for f in dataclasses.fields(defaults)}
+
 
 class TestValidateRequest:
     def test_reports_the_grid_that_would_be_used(self):

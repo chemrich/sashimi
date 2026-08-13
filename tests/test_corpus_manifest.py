@@ -9,14 +9,18 @@ rather than merely obeying themselves.
 from __future__ import annotations
 
 import ast
+import inspect
 import itertools
+import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
 
+import sashimi.corpus
 from sashimi.corpus import (
+    CORPUS_DIR,
     MANIFEST,
     TIER_ORDER,
     AnalyticReference,
@@ -160,26 +164,58 @@ def test_every_case_names_its_surface_model_rather_than_inheriting_one():
     the question each one asks — and the recordings would have gone red with
     nothing to say which side was wrong. Reading the source is the only way to
     see this: at runtime an inherited value and a stated one are the same value.
+
+    The source comes from the imported module rather than from a path relative
+    to the working directory, so it is the same file `MANIFEST` was built from —
+    a cwd-relative read is one `pytest` invocation from parsing nothing, and one
+    non-editable install from parsing a different copy than it counts.
     """
-    source = Path("src/sashimi/corpus.py")
+    source = inspect.getsourcefile(sashimi.corpus)
+    assert source is not None
     manifest = next(
         node.value
-        for node in ast.walk(ast.parse(source.read_text()))
+        for node in ast.walk(ast.parse(Path(source).read_text()))
         if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "MANIFEST"
     )
     assert isinstance(manifest, ast.Tuple)
     assert len(manifest.elts) == len(MANIFEST)
 
     inherited = []
-    for element in manifest.elts:
-        assert isinstance(element, ast.Call)
-        name = next(k.value.value for k in element.keywords if k.arg == "name")  # type: ignore[attr-defined]
-        solvent = next(k.value for k in element.keywords if k.arg == "solvent")
+    for position, element in enumerate(manifest.elts):
+        assert isinstance(element, ast.Call), f"MANIFEST[{position}] is not a Case(...) call"
+        keywords = {k.arg: k.value for k in element.keywords}
+        label = keywords.get("name")
+        name = (
+            label.value
+            if isinstance(label, ast.Constant) and isinstance(label.value, str)
+            else f"MANIFEST[{position}]"
+        )
+        solvent = keywords.get("solvent")
         assert isinstance(solvent, ast.Call), f"{name} builds its solvent indirectly"
         if not any(k.arg == "surface_model" for k in solvent.keywords):
             inherited.append(name)
 
     assert inherited == [], f"cases inheriting the surface default: {inherited}"
+
+
+def test_every_recording_describes_the_case_it_answers():
+    """The one field in a summary that nothing else can check.
+
+    `verify_case` compares numbers, so a recording's prose can drift from the
+    manifest's and stay green forever — and two files had, since the case's
+    description was extended without rebuilding it. Harmless in itself, except
+    that the description is how a reader learns what a recorded number is *for*,
+    and it is the field a hand-edit touches when a case is re-explained rather
+    than re-solved. Cheap to check, so it is checked rather than trusted.
+    """
+    stale = []
+    for directory in [CORPUS_DIR, *CROSS_BACKEND_DIRECTORIES.values()]:
+        for case in MANIFEST:
+            path = directory / f"{case.name}.json"
+            if path.is_file() and json.loads(path.read_text())["description"] != case.description:
+                stale.append(str(path))
+
+    assert stale == [], f"recordings describing a case differently than the manifest: {stale}"
 
 
 def test_salt_makes_a_real_solute_more_favourably_solvated():

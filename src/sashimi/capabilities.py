@@ -18,6 +18,7 @@ explain the problem the one tool that cannot run.
 
 from __future__ import annotations
 
+import dataclasses
 from collections import Counter
 from typing import Any
 
@@ -93,11 +94,21 @@ def comparable_surface_models() -> list[str]:
     return sorted(model for model, n in counts.items() if n >= MIN_BACKENDS_TO_COMPARE)
 
 
+def _describe(solvent: SolventModel) -> dict[str, Any]:
+    """A solvent model as JSON, enums by value. Every field, so adding one shows."""
+    return {
+        field.name: value.value if isinstance(value, SurfaceModel) else value
+        for field in dataclasses.fields(solvent)
+        if (value := getattr(solvent, field.name)) is not None
+    }
+
+
 def describe_capabilities() -> dict[str, Any]:
     """Everything a caller needs to plan a request without trial and error."""
     backends = reports()
     usable = [b.name for b in backends if b.available]
     defaults = GridSpec()
+    solvent_defaults = SolventModel()
 
     return {
         "units": UNITS,
@@ -105,6 +116,11 @@ def describe_capabilities() -> dict[str, Any]:
         "available_backends": usable,
         "surface_models": {
             "portable": sorted(m.value for m in SurfaceModel),
+            # What a request that names no surface will actually be solved on.
+            # It moved once — `smoothed-molecular` to `molecular`, 2026-08-13 —
+            # so a caller that wants a specific boundary should read it here
+            # rather than assume this year's answer.
+            "default": solvent_defaults.surface_model.value,
             # Empty is a real and common answer, not a missing one: which models
             # two backends share is what decides whether they can be compared.
             "comparable_across_available_backends": comparable_surface_models(),
@@ -121,6 +137,11 @@ def describe_capabilities() -> dict[str, Any]:
             "padding": defaults.padding,
             "max_points": defaults.max_points,
         },
+        # The physics half of "what happens if I name nothing", which had no
+        # answer here while the grid half did — so an agent could discover the
+        # spacing a defaulted solve would use but not the boundary, and the
+        # boundary is the larger modelling choice of the two.
+        "solvent_defaults": _describe(solvent_defaults),
         "artifacts": describe_cleanup(),
         "not_supported": [
             "nonlinear Poisson-Boltzmann (representable in the request; no solver path yet)",
