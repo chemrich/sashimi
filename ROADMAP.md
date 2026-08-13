@@ -1614,8 +1614,49 @@ divides by radius is undefined there. That is the third appearance of "pdb2pqr's
 radii are not GB radii", and the corpus should encode the exclusion rather than
 rediscover it.
 
-**The cases to add**, all on sharp boundaries, all named explicitly per the
-manifest rule:
+### The axis this was missing, which matters more than another sphere
+
+**Every closed-form check in the corpus is on the energy** — one integrated
+scalar. The potential *field* is compared only against itself: `_verify_probes`
+diffs a recording against a fresh solve, so a backend wrong in the field from its
+first build stays wrong and passes. The one test that does check a field against
+physics, `test_potential_outside_the_ion_matches_closed_form`, stays at r ≥ 1.25a
+by construction and blames the smoothed surface for a "~70%" divergence at the
+boundary.
+
+That attribution is wrong, and the correction matters to the consumer this
+project exists for. APBS at 0.25 Å against the Born closed form for φ:
+
+| r/a | 1.00 | 1.05 | 1.10 | 1.25 | 1.50 | 2.00 |
+|---|---|---|---|---|---|---|
+| `smoothed-molecular` | 85.6% | 3.36% | 2.21% | 0.88% | 0.32% | 0.13% |
+| `molecular` | 108.4% | **0.34%** | 0.67% | 0.87% | 0.52% | 0.20% |
+| `van-der-waals` | 104.1% | 0.52% | 0.90% | 1.04% | 0.59% | 0.23% |
+
+**Sampling exactly on the dielectric boundary is ~100% wrong for every surface
+model, and that is not a solver defect.** φ is continuous there but ∂φ/∂n is not
+— ε∂φ/∂n is the conserved quantity, so at ε_s/ε_p ≈ 78.5 the gradient jumps by
+nearly two orders of magnitude, and trilinear interpolation across that kink is
+O(1) wrong by construction. It is an ill-posed question, not a target for debye
+to hit. This is the problem the interface-method literature exists for — the
+Immersed Interface Method and Matched Interface and Boundary — and **MIBPB, which
+§10 already names as the referee tier, is the PB solver built on it**. Those two
+paragraphs were written years apart in this document and are about the same
+thing.
+
+**One grid cell out, the sharp boundary is ten times better than the smoothed
+one** — 0.34% against 3.36% — so the default this phase just moved improves
+precisely the quantity protean and mcpymol display, which nobody had measured.
+
+And the field is where the touchstone stops being decisive: over 1.05a–2.0a
+APBS's worst is 0.87% and DelPhi C++'s is 0.75%, near-peers, where on the *energy*
+DelPhi is four thousand times sharper. Its advantage is the corrected reaction
+field, not the grid potential. So a field gate is not a restatement of an energy
+gate — it is an independent axis, and the one on which debye's actual purpose
+lives.
+
+**The cases and checks to add**, all on sharp boundaries, all naming their
+surface model explicitly per the manifest rule:
 
 | arm | cases | why |
 |---|---|---|
@@ -1625,13 +1666,27 @@ manifest rule:
 | Born convergence | `molecular` and `van-der-waals` at 0.25 Å | M1's *monotonic* claim needs a pair per surface |
 | Kirkwood | d/a ∈ {0.3, 0.5, 0.7} on `molecular` at 0.25 Å | M2's rungs |
 | Kirkwood, recorded not gated | d/a = 0.9 on `molecular` | documents where it gives up |
-| Kirkwood probe check | d/a = 0.5 on `van-der-waals` | the off-centre analogue of the lone-sphere pair |
 | Salt | *I* ∈ {0.15, 0.5} on `molecular` | M3, and no closed form, for the reason `born-ion-salt` states |
+| **Field, against the closed form** | Born φ at r/a ∈ {1.05, 1.1, 1.25, 1.5, 2.0}, `molecular` and `van-der-waals` | the axis above; the quantity the consumer reads |
 
-Roughly 15 cases. Cost, from the pilot: a sphere is ~0.4 s of APBS at 0.5 Å and
-~3.5 s at 0.25 Å, plus ~0.3 s of DelPhi, so the addition is **~45 s of APBS and
-~5 s of DelPhi** — assigned to tiers from measured cost, as §7 requires, with the
-0.5 Å cases landing in `fast` and the 0.25 Å ones in `standard`.
+Twelve or so cases plus the field check — two fewer than the first draft of this
+plan, which spent them on a `van-der-waals` Kirkwood and a wider eccentricity
+sweep. That budget buys the field axis instead, on the evidence in the table
+above: another sphere geometry re-measures what the existing rungs already
+measure, where the field is unmeasured entirely.
+
+**The sampling rule has to be part of the corpus, not left to each caller.**
+"At the surface" is not a well-posed grid question, so the corpus samples on a
+ray at fixed multiples of *a* starting at 1.05a — outside the interpolation
+stencil that straddles the interface — and says so where the numbers are
+recorded. A rule chosen per test is how two checks come to disagree about what
+they measured.
+
+Cost, from the pilot: a sphere is ~0.4 s of APBS at 0.5 Å and ~3.5 s at 0.25 Å,
+plus ~0.3 s of DelPhi, so the addition is **~40 s of APBS and ~5 s of DelPhi** —
+assigned to tiers from measured cost, as §7 requires, with the 0.5 Å cases
+landing in `fast` and the 0.25 Å ones in `standard`. The field check re-reads a
+map a case already solved, so it costs nothing beyond what is already paid.
 
 **One existing test has to be revisited, and it is a genuine finding rather than
 a chore.** `test_a_lone_sphere_has_the_same_molecular_and_van_der_waals_boundary`
@@ -1652,21 +1707,24 @@ what would have caught it, and it is what stops the next widening drifting back.
 
 *Exit criterion:* the Born and Kirkwood families each have closed-form cases on
 `molecular` and `van-der-waals` with per-case tolerances measured on this
-hardware; APBS and DelPhi C++ have recorded every one; GB has recorded the Born
-cases and is documented as excluded from Kirkwood; `AnalyticReference` can hold a
+hardware; **the corpus checks a potential against a closed form and not only an
+energy**, on a stated sampling rule that starts outside the interface stencil;
+APBS and DelPhi C++ have recorded every one; GB has recorded the Born cases and
+is documented as excluded from Kirkwood; `AnalyticReference` can hold a
 per-backend tolerance and does for the M1/M2 gate cases; and the number of cases
-a sharp-boundary solver can be verified against goes from 22 of 64 to ~37 of ~79,
+a sharp-boundary solver can be verified against goes from 22 of 64 to ~35 of ~76,
 with the fast tier from 8 to ~14.
 
 | | milestone | exit criterion |
 |---|---|---|
 | M0 | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against |
 | M1 | LPBE on a Cartesian grid, vdW surface | Born ion within 1% at 0.25 Å, converging monotonically under refinement — as a *per-backend* tolerance, since the shared one is 5% |
+| M1b | **The field, not just the energy** | Born φ within 1% over r/a ∈ [1.05, 2.0]; APBS manages 0.87% worst-case and DelPhi 0.75%, so 1% is a real bar rather than a generous one. Never sampled *on* the interface — that is ~100% wrong for every shipped solver and is not debye's to fix |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
 | M5 | Registry integration | `sashimi corpus verify --backend debye --tier fast` passes |
-| M6 | **Potential field out** | a DX map protean's viewer loads — **the protean-replacement milestone** |
+| M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone** |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
