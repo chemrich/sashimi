@@ -1,0 +1,39 @@
+{
+  "name": "born-ion-molecular-salt",
+  "description": "Screening on a sharp boundary at physiological salt. No closed form, for the reason `born-ion-salt` states: the two backends disagree 39% on the mobile-ion term because they do not share an ion-exclusion convention, and pinning either would encode a convention as physics. With the case below it this is M3's arm.",
+  "source": "born-ion",
+  "tier": "fast",
+  "family": "analytic",
+  "backend": "gb-obc2-1",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.5,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 1.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solute_dielectric": 1.0,
+    "solvent_dielectric": 78.54,
+    "ionic_strength": 0.15,
+    "temperature": 298.15,
+    "gb": {
+      "model": "obc2",
+      "radii": "mbondi",
+      "offset": 0.09,
+      "minimum_radius": 0.8,
+      "element_screening": true,
+      "debye_kappa_inverse_a": 0.127282
+    }
+  },
+  "energy_kj_mol": -236.62206582998857
+}

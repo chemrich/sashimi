@@ -11,6 +11,37 @@
     "source": "Born: q=1e, a=3 A, eps_p=1",
     "relative_error": 0.023572065347289065
   },
+  "analytic_field": {
+    "spacing_used_a": 0.40625,
+    "cells_out": [
+      2,
+      4,
+      8
+    ],
+    "radii_a": [
+      3.8125,
+      4.625,
+      6.25
+    ],
+    "exact_kT_e": [
+      1.8717306320597937,
+      1.54291308858983,
+      1.141755685556474
+    ],
+    "values_kT_e": [
+      1.9313728461538453,
+      1.5652012307692305,
+      1.1477431538461538
+    ],
+    "relative_errors": [
+      0.03186474221903222,
+      0.014445494269396059,
+      0.005244088875950257
+    ],
+    "max_relative_error": 0.03186474221903222,
+    "rtol": 0.065,
+    "source": "Born potential: q=1e outside a 3 A sphere, sampled at a + k*h"
+  },
   "grid_spec": {
     "resolution": 0.5,
     "padding": 10.0,

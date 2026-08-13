@@ -257,7 +257,30 @@ DELPHI_PER_PUSH = (
     "acetate-molecular",  # 1.13 s — and another
     "acetic-acid-molecular",  # 1.49 s — and the third
     "aspartate-residue-molecular",  # 1.50 s
-)  # 7.2 s in total
+    # The sharp-boundary ladder (ROADMAP.md section 12, M0). Every one of these
+    # carries a `delphi_rtol` — a closed-form tolerance three orders tighter
+    # than the shared one, because DelPhi is 0.0006% from Born where APBS is
+    # 2.36% — and a per-backend tolerance nothing re-solves is not a tolerance.
+    # They were recorded and then left out of this list at first, which made all
+    # sixteen of them dead weight: the tight gates existed and nothing drove
+    # them. Cheap enough that "too slow per push" was never the reason.
+    "born-ion-molecular-r1",  # 0.08 s
+    "born-ion-molecular-r2",  # 0.10 s
+    "born-ion-molecular-negative",  # 0.13 s
+    "born-ion-molecular-divalent",  # 0.14 s
+    "born-ion-molecular-eps4",  # 0.13 s
+    "born-ion-molecular-salt",  # 0.13 s
+    "born-ion-molecular-high-salt",  # 0.13 s
+    "born-ion-vdw",  # 0.13 s
+    "born-ion-molecular-r4",  # 0.16 s
+    "born-ion-molecular-r6",  # 0.23 s
+    "kirkwood-molecular-07",  # 1.09 s
+    "born-ion-vdw-fine",  # 1.11 s
+    "kirkwood-molecular-09",  # 1.11 s
+    "kirkwood-molecular-05",  # 1.13 s
+    "born-ion-molecular-fine",  # 1.13 s
+    "kirkwood-molecular-03",  # 1.14 s
+)  # 15.3 s in total
 DELPHI_ON_DEMAND = (
     "ion-protein-complex-molecular",  # 3.9 s
     "lysozyme-molecular",  # 5.8 s

@@ -15,16 +15,47 @@ from pathlib import Path
 
 import pytest
 
-from sashimi.corpus import MANIFEST, Case, load_summary, verify_case
+from sashimi.corpus import MANIFEST, SYNTHETIC, Case, load_summary, verify_case
 from sashimi.gb import GbSolver
+from sashimi.gb.options import GbOptions
+from sashimi.gb.radii import input_radii
 from sashimi.protocol import SolverFamily, SurfaceModel
 
 GB_DIRECTORY = Path("tests/corpus/gb")
 
-# Generalized Born answers on the molecular surface and nowhere else, so these
-# are the corpus cases it can be asked at all. `sashimi.gb.options` records why
-# the intuitive `van-der-waals` reading is wrong.
-GB_CASES = tuple(c for c in MANIFEST if c.solvent.surface_model is SurfaceModel.MOLECULAR)
+
+# Generalized Born answers on the molecular surface and nowhere else, so that
+# is the first half of the cases it can be asked at all. `sashimi.gb.options`
+# records why the intuitive `van-der-waals` reading is wrong.
+#
+# The second half is *whether it would be answering about this structure*, and
+# the answer differs between a real molecule and a synthetic one in a way that
+# is easy to get backwards. GB substitutes radii from a name-keyed mbondi table.
+# On a real structure that substitution is the method working: pdb2pqr's radii
+# are Lennard-Jones parameters, mbondi radii are the ones OBC was parameterised
+# against, and `sashimi.gb.radii` exists to say so. On a synthetic geometry the
+# radii *are* the model — a Kirkwood sphere is a 3 A dielectric boundary and a
+# zero-radius charge — and substituting them replaces the question. GB turns
+# that pair into a 1.62 A atom and a 0.79 A one and answers 187% from the closed
+# form, about a different molecule.
+#
+# So the rule is: a synthetic case whose radii GB would replace is one GB cannot
+# be asked. By property rather than by name, because the next synthetic geometry
+# has not been written yet and would evade a list. The Born ion passes — `I`
+# matches no table entry, so its radius survives — which is why those recordings
+# mean what they say.
+def gb_would_replace_the_geometry(case: Case) -> bool:
+    if case.source not in SYNTHETIC:
+        return False
+    _, n_substituted = input_radii(case.structure(), GbOptions())
+    return n_substituted > 0
+
+
+GB_CASES = tuple(
+    c
+    for c in MANIFEST
+    if c.solvent.surface_model is SurfaceModel.MOLECULAR and not gb_would_replace_the_geometry(c)
+)
 
 
 @pytest.fixture(scope="module")
@@ -105,6 +136,25 @@ GB_DEVIATION: dict[str, float] = {
     # dielectric factor itself is not where the error is.
     "born-ion-molecular": 0.0072,
     "born-ion-molecular-eps2": 0.0081,
+    # The sharp-boundary ladder (ROADMAP.md section 12, M0). Read as a set these
+    # say something the single sphere could not: the deviation is a function of
+    # *radius*, 14.6% at 1 A falling to 0.85% at 6 A, because OBC2's 0.09 A
+    # offset is a fixed length and a 1 A sphere is where a fixed length hurts
+    # most. It is flat in charge — -1e and +2e give the identical 0.72% as +1e,
+    # so nothing in the descreening depends on sign or magnitude — and nearly
+    # flat in salt. The 2.46% on `-fine` against 0.72% on the coarse pair is not
+    # GB moving at all: GB has no grid, so both are the same number, and what
+    # changed underneath is APBS refining toward exact.
+    "born-ion-molecular-r1": 0.1459,
+    "born-ion-molecular-r2": 0.0240,
+    "born-ion-molecular-r4": 0.0187,
+    "born-ion-molecular-r6": 0.0085,
+    "born-ion-molecular-negative": 0.0072,
+    "born-ion-molecular-divalent": 0.0072,
+    "born-ion-molecular-eps4": 0.0097,
+    "born-ion-molecular-fine": 0.0246,
+    "born-ion-molecular-salt": 0.0082,
+    "born-ion-molecular-high-salt": 0.0095,
     # All-atom AMBER structures, where mbondi is the right radius set.
     "fkbp-apo-molecular": 0.0255,
     "acetate-molecular": 0.0256,

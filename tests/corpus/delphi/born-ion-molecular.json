@@ -7,9 +7,40 @@
   "backend": "delphicpp-8.6",
   "analytic": {
     "energy_kj_mol": -228.61080098772135,
-    "rtol": 0.05,
+    "rtol": 0.001,
     "source": "Born: q=1e, a=3 A, eps_p=1",
     "relative_error": 6.0527227198388e-06
+  },
+  "analytic_field": {
+    "spacing_used_a": 0.49999996702544125,
+    "cells_out": [
+      2,
+      4,
+      8
+    ],
+    "radii_a": [
+      3.9999999340508827,
+      4.999999868101765,
+      6.99999973620353
+    ],
+    "exact_kT_e": [
+      1.7839932880951865,
+      1.4271946445944836,
+      1.019424757664088
+    ],
+    "values_kT_e": [
+      1.784229448192034,
+      1.4293396436913006,
+      1.0205998175829927
+    ],
+    "relative_errors": [
+      0.00013237723394106136,
+      0.001502947831917103,
+      0.0011526695914244691
+    ],
+    "max_relative_error": 0.001502947831917103,
+    "rtol": 0.004,
+    "source": "Born potential: q=1e outside a 3 A sphere, sampled at a + k*h"
   },
   "grid_spec": {
     "resolution": 0.5,

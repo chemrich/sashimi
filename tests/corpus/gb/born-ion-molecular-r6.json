@@ -1,0 +1,44 @@
+{
+  "name": "born-ion-molecular-r6",
+  "description": "6 A sphere, the long end of the sharp radius arm.",
+  "source": "born-ion-r6",
+  "tier": "fast",
+  "family": "analytic",
+  "backend": "gb-obc2-1",
+  "analytic": {
+    "energy_kj_mol": -114.30540049386067,
+    "rtol": 0.015,
+    "source": "Born: q=1e, a=6 A, eps_p=1",
+    "relative_error": 0.015228426395938919
+  },
+  "grid_spec": {
+    "resolution": 0.5,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 1.0,
+    "ionic_strength": 0.0,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solute_dielectric": 1.0,
+    "solvent_dielectric": 78.54,
+    "ionic_strength": 0.0,
+    "temperature": 298.15,
+    "gb": {
+      "model": "obc2",
+      "radii": "mbondi",
+      "offset": 0.09,
+      "minimum_radius": 0.8,
+      "element_screening": true,
+      "debye_kappa_inverse_a": 0.0
+    }
+  },
+  "energy_kj_mol": -116.04609187193975
+}
