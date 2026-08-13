@@ -15,10 +15,24 @@ every sample must clear *its* interface cell — and the consequence is that a
 coarser grid is sampled further out, where the error is smaller. Comparing those
 numbers across backends reads a sampling difference as an accuracy difference.
 
-These tests need a reference solver to grade against, so unlike the rest of
+These tests need reference solvers to grade against, so unlike the rest of
 debye's suite they are marked and they skip on a bare machine. That is the
 honest shape of "as good as the incumbents": without an incumbent there is no
 claim to check.
+
+**They pin the reference set to APBS *and* DelPhi C++ rather than grading
+against whatever is installed, and that is not caution — it is required for the
+verdict to exist.** The first draft fell back to APBS alone when DelPhi was
+absent, and `born-ion-vdw` flips from 5.24x to 1.60x under that fallback: the
+sample radii come from the coarsest grid in the comparison, so dropping DelPhi's
+h = 0.5 A moves them, and the yardstick changes from DelPhi's 0.789% to APBS's
+2.453%. Both moves favour debye. A milestone whose verdict depends on what
+happens to be installed is not a gate, and CI would have found this the hard
+way: the strict xfails would have XPASSed on the `apbs-only` leg.
+
+`grade_field` itself stays flexible — grading against whatever you have is a
+legitimate thing for a library to do. It is the *claim* that has to pin its
+incumbents.
 """
 
 from __future__ import annotations
@@ -29,8 +43,6 @@ from sashimi.apbs import ApbsSolver
 from sashimi.corpus import MANIFEST, Case
 from sashimi.debye import DebyeSolver
 from sashimi.delphi import DelphiSolver
-from sashimi.delphi.discover import discover_delphi
-from sashimi.errors import BackendUnavailable
 from sashimi.protocol import PotentialGrid, SolveResult
 from sashimi.validate import (
     DEFAULT_FIELD_FACTOR,
@@ -63,20 +75,18 @@ def case_named(name: str) -> Case:
     return next(case for case in MANIFEST if case.name == name)
 
 
-def delphi_available() -> bool:
-    try:
-        discover_delphi()
-    except BackendUnavailable:
-        return False
-    return True
-
-
 def graded(case: Case, factor: float = DEFAULT_FIELD_FACTOR):
-    """Solve the case through every reference backend present, and grade debye."""
+    """Solve the case through both incumbents and debye, and grade debye.
+
+    The reference set is fixed, not discovered. See the module docstring: with
+    DelPhi omitted, `born-ion-vdw` reads 1.60x instead of 5.24x.
+    """
     request = case.request()
-    solvers: list[tuple[str, object]] = [("apbs", ApbsSolver()), ("debye", DebyeSolver())]
-    if delphi_available():
-        solvers.insert(1, ("delphicpp", DelphiSolver()))
+    solvers: list[tuple[str, object]] = [
+        ("apbs", ApbsSolver()),
+        ("delphicpp", DelphiSolver()),
+        ("debye", DebyeSolver()),
+    ]
 
     runs = []
     for name, solver in solvers:
@@ -99,6 +109,7 @@ def graded(case: Case, factor: float = DEFAULT_FIELD_FACTOR):
 
 
 @pytest.mark.apbs
+@pytest.mark.delphi
 @pytest.mark.parametrize("name", AT_PARITY)
 def test_debye_is_within_a_factor_of_the_best_incumbent_where_the_sphere_is_resolved(name):
     """M1b's exit criterion, on the cases that meet it.
@@ -114,6 +125,7 @@ def test_debye_is_within_a_factor_of_the_best_incumbent_where_the_sphere_is_reso
 
 
 @pytest.mark.apbs
+@pytest.mark.delphi
 @pytest.mark.parametrize("name", UNDER_RESOLVED)
 @pytest.mark.xfail(
     strict=True,
@@ -132,6 +144,7 @@ def test_debye_is_within_a_factor_of_the_best_incumbent_where_it_is_not(name):
 
 
 @pytest.mark.apbs
+@pytest.mark.delphi
 def test_the_grade_samples_every_backend_at_the_same_radii():
     """The property that makes a cross-backend field number mean anything.
 
