@@ -1599,7 +1599,7 @@ both:
 
 **d/a = 0.9 is not a usable gate and must not become one.** Both codes get
 *worse* under refinement, non-monotonically, and disagree with each other by up
-to 22 points — the charge sits 0.3 Å inside the boundary and the near-interface
+to 20.3 points at 0.5 Å — the charge sits 0.3 Å inside the boundary and the near-interface
 self-energy is what the grid cannot resolve. It is worth *recording*, in the way
 `born-ion-r1-coarse` records 5.1% and says so; it is not worth gating a new
 solver on a number no existing solver reproduces. M2's rungs are d/a ∈
@@ -1648,12 +1648,26 @@ thing.
 one** — 0.34% against 3.36% — so the default this phase just moved improves
 precisely the quantity protean and mcpymol display, which nobody had measured.
 
-And the field is where the touchstone stops being decisive: over 1.05a–2.0a
-APBS's worst is 0.87% and DelPhi C++'s is 0.75%, near-peers, where on the *energy*
-DelPhi is four thousand times sharper. Its advantage is the corrected reaction
-field, not the grid potential. So a field gate is not a restatement of an energy
-gate — it is an independent axis, and the one on which debye's actual purpose
-lives.
+And the field is where the touchstone stops being decisive. Worst error over
+r/a ∈ [1.05, 2.0] at 0.25 Å:
+
+| | `molecular` | `van-der-waals` |
+|---|---|---|
+| APBS | 0.87% | **1.04%** |
+| DelPhi C++ | 0.75% | 0.75% |
+
+Near-peers, where on the *energy* DelPhi is four thousand times sharper: its
+advantage is the corrected reaction field, not the grid potential. So a field
+gate is not a restatement of an energy gate — it is an independent axis, and the
+one debye's actual purpose lives on.
+
+**Read the `van-der-waals` column before setting a bar there**, because M1
+climbs that surface and APBS does not clear 1% on it. The bar is still 1%:
+DelPhi manages 0.75% on both surfaces, so it is achievable rather than
+aspirational, and it sits deliberately above one of the two reference solvers on
+the surface M1 uses. That is a statement about interface handling — the thing
+§10's referee tier exists for — and it should be stated rather than quietly
+widened to 1.25% so that everything passes.
 
 **The cases and checks to add**, all on sharp boundaries, all naming their
 surface model explicitly per the manifest rule:
@@ -1669,24 +1683,48 @@ surface model explicitly per the manifest rule:
 | Salt | *I* ∈ {0.15, 0.5} on `molecular` | M3, and no closed form, for the reason `born-ion-salt` states |
 | **Field, against the closed form** | Born φ at r/a ∈ {1.05, 1.1, 1.25, 1.5, 2.0}, `molecular` and `van-der-waals` | the axis above; the quantity the consumer reads |
 
-Twelve or so cases plus the field check — two fewer than the first draft of this
-plan, which spent them on a `van-der-waals` Kirkwood and a wider eccentricity
-sweep. That budget buys the field axis instead, on the evidence in the table
-above: another sphere geometry re-measures what the existing rungs already
-measure, where the field is unmeasured entirely.
+Fifteen cases plus the field check — one fewer than the first draft of this
+plan, which also spent a case on a `van-der-waals` Kirkwood. That budget buys the
+field axis instead, on the evidence in the table above: another sphere geometry
+re-measures what the existing rungs already measure, where the field is
+unmeasured entirely.
 
-**The sampling rule has to be part of the corpus, not left to each caller.**
-"At the surface" is not a well-posed grid question, so the corpus samples on a
-ray at fixed multiples of *a* starting at 1.05a — outside the interpolation
-stencil that straddles the interface — and says so where the numbers are
-recorded. A rule chosen per test is how two checks come to disagree about what
-they measured.
+**The sampling rule has to be part of the corpus, not left to each caller, and
+it has to be in grid cells rather than in fractions of *a*.** "At the surface" is
+not a well-posed grid question. The obvious rule — sample at 1.05a — is wrong,
+and wrong for the radii this plan adds: the margin it leaves is 0.05a, which has
+to beat the spacing, and at small *a* it does not. Computed with `size_grid` at
+padding 10 Å and 0.25 Å:
+
+| a | dime | h (Å) | cell containing 1.05a | straddles r = a? |
+|---|---|---|---|---|
+| 1 | 97 | 0.2292 | [0.9167, 1.1458] | **yes — the sample is inside it** |
+| 2 | 97 | 0.2500 | [2.0000, 2.2500] | **corner exactly on the interface** |
+| 3 | 129 | 0.2031 | [3.0469, 3.2500] | no, by 0.047 Å |
+| 4 | 129 | 0.2188 | [4.1562, 4.3750] | no |
+| 6 | 129 | 0.2500 | [6.2500, 6.5000] | no |
+
+The Born radius arm is *a* ∈ {1, 2, 4, 6}. At *a* = 1 the sample sits inside the
+straddling cell — the O(1)-wrong configuration described three paragraphs above —
+and at *a* = 2 a stencil corner lands on the boundary. The field numbers in this
+section were all taken at *a* = 3, the one radius where 1.05a happens to clear,
+and it clears by 0.23 h of grid alignment rather than by construction.
+
+**So the rule is r = a + k·h on the achieved spacing, k ≥ 2**, which puts the
+whole interpolation cell outside the interface for every radius. It follows that
+the gate numbers above are measured at the wrong positions for the rule and get
+**re-measured at r = a + k·h when the cases are built** — they are quoted here as
+evidence that a field check is worth having, not as the tolerances themselves.
+A rule chosen per test is how two checks come to disagree about what they
+measured; a rule chosen per *radius* is how one silently measures nothing.
 
 Cost, from the pilot: a sphere is ~0.4 s of APBS at 0.5 Å and ~3.5 s at 0.25 Å,
-plus ~0.3 s of DelPhi, so the addition is **~40 s of APBS and ~5 s of DelPhi** —
-assigned to tiers from measured cost, as §7 requires, with the 0.5 Å cases
-landing in `fast` and the 0.25 Å ones in `standard`. The field check re-reads a
-map a case already solved, so it costs nothing beyond what is already paid.
+plus ~0.3 s of DelPhi. Nine cases sit at 0.5 Å (the radius, charge, dielectric
+and salt arms) and six at 0.25 Å (the two convergence cases and the four
+Kirkwood), so the addition is **~25 s of APBS and ~5 s of DelPhi** — tiers
+assigned from measured cost, as §7 requires, which should put the nine in `fast`
+and the six in `standard`. The field check re-reads a map a case already solved,
+so it costs nothing beyond what is already paid.
 
 **One existing test has to be revisited, and it is a genuine finding rather than
 a chore.** `test_a_lone_sphere_has_the_same_molecular_and_van_der_waals_boundary`
@@ -1708,18 +1746,45 @@ what would have caught it, and it is what stops the next widening drifting back.
 *Exit criterion:* the Born and Kirkwood families each have closed-form cases on
 `molecular` and `van-der-waals` with per-case tolerances measured on this
 hardware; **the corpus checks a potential against a closed form and not only an
-energy**, on a stated sampling rule that starts outside the interface stencil;
-APBS and DelPhi C++ have recorded every one; GB has recorded the Born cases and
-is documented as excluded from Kirkwood; `AnalyticReference` can hold a
-per-backend tolerance and does for the M1/M2 gate cases; and the number of cases
-a sharp-boundary solver can be verified against goes from 22 of 64 to ~35 of ~76,
-with the fast tier from 8 to ~14.
+energy**, on the `a + k·h` sampling rule above; APBS and DelPhi C++ have recorded
+every one; `AnalyticReference` can hold a per-backend tolerance and does for the
+M1/M2 gate cases; the two code changes below are made rather than described; and
+the number of cases a sharp-boundary solver can be verified against goes from
+**22 of 64 to 37 of 79**, with the reachable fast tier from 8 to 17.
+
+**Two code changes this needs, which "documented" does not cover.**
+
+*GB's case set is derived, not curated.* `tests/test_corpus_gb.py` builds it as
+every `MANIFEST` case whose surface model is `MOLECULAR`, so the planned
+Kirkwood-on-molecular cases **enrol GB automatically**, and
+`test_every_shared_case_has_a_recorded_deviation` — which asserts the recorded
+deviations and the derived case set are the same list — fails until the predicate
+gains an exclusion. Worse than the 187% suggests: GB reports
+`n_radii_substituted: 2` on a Kirkwood structure, meaning it replaced *both*
+radii from its name-keyed table and answered about a different molecule
+altogether — the 3 Å dielectric sphere became a 1.62 Å atom and the zero-radius
+charge a 0.79 Å one. The Born cases are untouched (`0/1`, radius 3.0 → 2.91 by
+the mbondi offset), so those recordings stand. **The exclusion must therefore be
+by property, not by name**: a case whose radii *are* the geometry cannot be
+answered by a backend that substitutes radii, and `n_radii_substituted == 0` is
+the assertion that says so for every case present and future. Fourth appearance
+of "assume every new consumer wants a different dialect of the same file".
+
+*"Recorded, not gated" has no mechanism today.* `_verify_analytic` returns early
+only when `case.analytic is None`, so **any** `AnalyticReference` is gated, and
+the only way to record d/a = 0.9 without gating it is an `rtol` slack enough to
+absorb 9.85% and 26.67% — which is `kirkwood-09`'s existing `rtol=0.12`, and is
+exactly the check that cannot fail this section condemns four paragraphs earlier.
+`AnalyticReference` needs an explicit record-only flag so the summary carries the
+closed form and the deviation while `verify_case` declines to judge it, and the
+reason travels with the case rather than living in a tolerance nobody can read as
+deliberate.
 
 | | milestone | exit criterion |
 |---|---|---|
-| M0 | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against |
+| M0 | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
 | M1 | LPBE on a Cartesian grid, vdW surface | Born ion within 1% at 0.25 Å, converging monotonically under refinement — as a *per-backend* tolerance, since the shared one is 5% |
-| M1b | **The field, not just the energy** | Born φ within 1% over r/a ∈ [1.05, 2.0]; APBS manages 0.87% worst-case and DelPhi 0.75%, so 1% is a real bar rather than a generous one. Never sampled *on* the interface — that is ~100% wrong for every shipped solver and is not debye's to fix |
+| M1b | **The field, not just the energy** | Born φ within 1% on the corpus's `a + k·h` samples. DelPhi C++ manages 0.75% on both surfaces, so the bar is achievable; APBS is 0.87% on `molecular` and **1.04% on `van-der-waals`**, so it sits above one reference solver on the surface M1 climbs — deliberately. Never sampled *on* the interface: that is ~100% wrong for every shipped solver and is not debye's to fix |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
