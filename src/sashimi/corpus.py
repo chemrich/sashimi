@@ -426,6 +426,7 @@ def _born(
     *,
     rtol: float,
     delphi_rtol: float | None = None,
+    debye_rtol: float | None = None,
 ) -> AnalyticReference:
     """A Born case's closed form, computed from CODATA constants rather than quoted.
 
@@ -437,12 +438,25 @@ def _born(
     sharp boundary is three to four orders of magnitude closer to exact than
     APBS. Without it the shared tolerance — which has to accommodate APBS —
     would let DelPhi drift by percent and call it agreement.
+
+    `debye_rtol` is where the convention is deliberately *not* applied. It
+    carries ROADMAP.md section 12's milestone bar rather than twice a
+    measurement: M1 says the Born ion within 1% at 0.25 A, so the fine case is
+    0.01 against a measured 0.853% and not the 0.017 that doubling would give.
+    A milestone tolerance set from what the solver already does is a milestone
+    that cannot be failed — which is the shape section 7 keeps finding, and it
+    is worth one comment to say the difference is intended.
     """
+    per_backend: list[tuple[str, float]] = []
+    if delphi_rtol is not None:
+        per_backend.append(("delphicpp", delphi_rtol))
+    if debye_rtol is not None:
+        per_backend.append(("debye", debye_rtol))
     return AnalyticReference(
         energy_kj_mol=born_solvation_energy(radius, charge, solute_dielectric, 78.54),
         rtol=rtol,
         source=f"Born: q={charge:g}e, a={radius:g} A, eps_p={solute_dielectric:g}",
-        per_backend_rtol=() if delphi_rtol is None else (("delphicpp", delphi_rtol),),
+        per_backend_rtol=tuple(per_backend),
     )
 
 
@@ -829,7 +843,10 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
         ),
-        analytic=_born(3.0, rtol=0.05, delphi_rtol=0.001),  # measured 2.357% / 0.001%
+        # debye: measured 1.576%, twice it is 0.032. The gate M1 names is on the
+        # fine case below; this one is its convergence partner, and a pair only
+        # states convergence if both ends are held.
+        analytic=_born(3.0, rtol=0.05, delphi_rtol=0.001, debye_rtol=0.032),
         analytic_field=AnalyticField(
             radius_a=3.0,
             charge_e=1.0,
@@ -1000,7 +1017,9 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
         ),
-        analytic=_born(3.0, rtol=0.016, delphi_rtol=0.001),  # measured 0.787% / 0.001%
+        # This is M1's gate case. debye measures 0.853% and is held to 1.0%,
+        # the milestone's own number rather than twice the measurement.
+        analytic=_born(3.0, rtol=0.016, delphi_rtol=0.001, debye_rtol=0.01),
         analytic_field=AnalyticField(
             radius_a=3.0,
             charge_e=1.0,
