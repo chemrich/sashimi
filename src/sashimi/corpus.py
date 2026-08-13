@@ -18,6 +18,7 @@ the solver rather than the structure-prep pipeline.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -25,10 +26,15 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from sashimi.analytic import born_solvation_energy, kirkwood_solvation_energy
+from sashimi.analytic import (
+    born_potential,
+    born_solvation_energy,
+    kirkwood_solvation_energy,
+)
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
     DIMENSIONS,
+    AccuracyTier,
     FiniteDifferenceRequest,
     FloatArray,
     GridSpec,
@@ -37,6 +43,7 @@ from sashimi.protocol import (
     PQRData,
     SolventModel,
     Solver,
+    SolveResult,
     SolverFamily,
     SurfaceModel,
     SurfacePotential,
@@ -145,11 +152,88 @@ class AnalyticReference:
     `rtol` is per-case because the gap is discretization, not arithmetic: it
     shrinks as the grid refines, and a Born ion at 0.5 A is legitimately 2.4%
     from exact where the same case at 0.125 A is 0.4%.
+
+    **`per_backend_rtol` exists because one tolerance per case is set by the
+    worst backend that runs it.** On a sharp boundary APBS is 2.36% from the
+    Born closed form where DelPhi C++ is 0.0006%, so a shared tolerance wide
+    enough for APBS cannot catch a second solver being percent-wrong — and that
+    is the tolerance a future backend's acceptance gate would inherit. Keys are
+    matched as a *prefix* of the recorded backend identity (`delphicpp` matches
+    `delphicpp-8.6` across versions, and does not match `pydelphi`), because
+    that identity is what the summary carries and what accuracy actually
+    belongs to.
+
+    **`gated` is how a case can be recorded without being judged.** Kirkwood at
+    d/a = 0.9 puts the charge 0.3 A inside the boundary, where the continuum
+    model's reaction field diverges: APBS reports 6.40/9.85/9.05% under
+    refinement and DelPhi 26.67/4.29/7.50%, both non-monotonic. That is worth
+    recording and worth nobody gating on. Without this flag the only way to
+    express it is an `rtol` slack enough to absorb 27%, which is a check that
+    cannot fail wearing the costume of one that can.
     """
 
     energy_kj_mol: float
     rtol: float
-    source: str  # how the number was derived, for the summary
+    source: str
+    per_backend_rtol: tuple[tuple[str, float], ...] = ()
+    gated: bool = True
+
+    def rtol_for(self, backend: str) -> float:
+        """The tolerance that applies to this backend's answer.
+
+        A tuple of pairs rather than a mapping so the reference stays hashable,
+        which `Case` being frozen would otherwise quietly lose.
+        """
+        for prefix, tolerance in self.per_backend_rtol:
+            if backend.startswith(prefix):
+                return tolerance
+        return self.rtol  # how the number was derived, for the summary
+
+
+@dataclass(frozen=True)
+class AnalyticField:
+    """A closed-form *potential* to check a solver's field against.
+
+    Every other analytic check in this corpus is on the energy — one integrated
+    scalar — and the field is compared only against its own recording, so a
+    backend wrong in the field from its first build stays wrong and passes
+    forever. That is the half a consumer actually displays: protean colours a
+    surface with a potential, and `sashimi.gb` exists because it could not.
+
+    **Sampling is in grid cells beyond the boundary, not in fractions of the
+    radius**, and the difference is not pedantry. Interpolating across the
+    dielectric interface is O(1) wrong by construction — phi is continuous there
+    but its normal derivative is not, and at eps_s/eps_p ~ 78.5 the gradient
+    jumps by nearly two orders of magnitude — so a sample must land in a cell
+    that does not contain the interface. A fixed `1.05a` does not guarantee
+    that: at a = 1 A and 0.25 A spacing the sample sits *inside* the straddling
+    cell, and at a = 2 A a cell corner lands exactly on the boundary. `a + k*h`
+    holds for every radius, and `k >= 2` keeps the whole stencil clear.
+
+    Sampling *on* the interface is left alone deliberately. Every shipped solver
+    is ~100% wrong there and that is not a defect any of them can fix; it is an
+    ill-posed question about a grid.
+    """
+
+    radius_a: float  # the dielectric boundary, A
+    charge_e: float
+    cells_out: tuple[int, ...]  # k, in achieved grid cells beyond the boundary
+    rtol: float
+    solvent_dielectric: float = 78.54
+    per_backend_rtol: tuple[tuple[str, float], ...] = ()
+
+    def rtol_for(self, backend: str) -> float:
+        """The tolerance that applies to this backend's field, by identity prefix."""
+        for prefix, tolerance in self.per_backend_rtol:
+            if backend.startswith(prefix):
+                return tolerance
+        return self.rtol
+
+    def sample_radii(self, spacing: float) -> list[float]:
+        return [self.radius_a + k * spacing for k in self.cells_out]
+
+    def exact_at(self, radii: Sequence[float]) -> list[float]:
+        return [born_potential(r, self.charge_e, self.solvent_dielectric) for r in radii]
 
 
 @dataclass(frozen=True)
@@ -164,6 +248,7 @@ class Case:
     compute_energy: bool = True
     tier: CaseTier = CaseTier.FAST
     analytic: AnalyticReference | None = None
+    analytic_field: AnalyticField | None = None
     mesh_density: float = 2.0  # vertices per square angstrom, for BEM backends
 
     def request(self) -> FiniteDifferenceRequest:
@@ -300,28 +385,47 @@ SYNTHETIC: dict[str, str] = {
 }
 
 
-def _kirkwood(offset_fraction: float, *, rtol: float) -> AnalyticReference:
+def _kirkwood(
+    offset_fraction: float,
+    *,
+    rtol: float,
+    delphi_rtol: float | None = None,
+    gated: bool = True,
+) -> AnalyticReference:
     """The off-centre closed form for a 3 A sphere, computed not quoted."""
     return AnalyticReference(
         energy_kj_mol=kirkwood_solvation_energy(3.0, 3.0 * offset_fraction, 1.0, 1.0, 78.54),
         rtol=rtol,
         source=f"Kirkwood: q=1e at d/a={offset_fraction:g} in a 3 A sphere, eps_p=1",
+        per_backend_rtol=() if delphi_rtol is None else (("delphicpp", delphi_rtol),),
+        gated=gated,
     )
 
 
 def _born(
-    radius: float, charge: float = 1.0, solute_dielectric: float = 1.0, *, rtol: float
+    radius: float,
+    charge: float = 1.0,
+    solute_dielectric: float = 1.0,
+    *,
+    rtol: float,
+    delphi_rtol: float | None = None,
 ) -> AnalyticReference:
     """A Born case's closed form, computed from CODATA constants rather than quoted.
 
     `rtol` is measured, not chosen: it is roughly twice the discretization error
     APBS 3.4.1 actually shows on that geometry. Loose enough to survive a
     platform, tight enough that a unit error or a factor of two cannot hide.
+
+    `delphi_rtol` is the same convention applied to the C++ flavour, which on a
+    sharp boundary is three to four orders of magnitude closer to exact than
+    APBS. Without it the shared tolerance — which has to accommodate APBS —
+    would let DelPhi drift by percent and call it agreement.
     """
     return AnalyticReference(
         energy_kj_mol=born_solvation_energy(radius, charge, solute_dielectric, 78.54),
         rtol=rtol,
         source=f"Born: q={charge:g}e, a={radius:g} A, eps_p={solute_dielectric:g}",
+        per_backend_rtol=() if delphi_rtol is None else (("delphicpp", delphi_rtol),),
     )
 
 
@@ -687,6 +791,13 @@ MANIFEST: tuple[Case, ...] = (
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
         ),
         analytic=_born(3.0, rtol=0.05),  # measured 2.36%
+        analytic_field=AnalyticField(
+            radius_a=3.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.065,  # measured 3.187% APBS / 0.150% DelPhi
+            per_backend_rtol=(("delphicpp", 0.004),),
+        ),
     ),
     Case(
         name="born-ion-vdw",
@@ -702,6 +813,273 @@ MANIFEST: tuple[Case, ...] = (
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
         ),
         analytic=_born(3.0, rtol=0.05),
+        analytic_field=AnalyticField(
+            radius_a=3.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.065,  # measured 3.187% APBS / 0.150% DelPhi
+            per_backend_rtol=(("delphicpp", 0.004),),
+        ),
+    ),
+    # --- the sharp-boundary ladder ------------------------------------------
+    #
+    # ROADMAP.md section 12, M0. Fifteen of the eighteen closed-form cases above
+    # sit on `smoothed-molecular` — APBS's harmonic averaging, which no other
+    # backend implements and which a clean-room solver has no reason to. That
+    # made the whole analytic sweep unusable for grading anything but APBS, and
+    # all four Kirkwood cases were on the wrong side of it, so the milestone
+    # "the Kirkwood cases within their measured tolerances" could not be met by
+    # construction. These are the same physics on a boundary every backend can
+    # build.
+    #
+    # They cost more than their smoothed twins to be right about: smoothing *is*
+    # APBS's discretization-error reduction, so APBS is roughly four times worse
+    # here — 2.36% against 0.62% on the same ion at the same spacing — while
+    # DelPhi C++, which resolves the sphere exactly, is 0.0006%. That spread is
+    # why `per_backend_rtol` exists: a shared tolerance wide enough for APBS
+    # cannot notice DelPhi drifting by percent.
+    Case(
+        name="born-ion-molecular-r1",
+        description=(
+            "1 A sphere on a sharp boundary, where the smoothed twin is 5.1% out "
+            "and this is 4.1%. The radius arm has to start where the "
+            "discretization is visibly failing, or it only measures the easy end."
+        ),
+        source="born-ion-r1",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(1.0, rtol=0.09, delphi_rtol=0.001),  # measured 4.101% / 0.001%
+        analytic_field=AnalyticField(
+            radius_a=1.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.035,  # measured 1.165% APBS / 1.727% DelPhi
+        ),
+    ),
+    Case(
+        name="born-ion-molecular-r2",
+        description="2 A sphere; with 1, 3, 4 and 6 this is the radius arm on a sharp boundary.",
+        source="born-ion-r2",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(2.0, rtol=0.05, delphi_rtol=0.001),  # measured 2.254% / 0.001%
+        analytic_field=AnalyticField(
+            radius_a=2.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.10,  # measured 4.744% APBS / 1.556% DelPhi
+        ),
+    ),
+    Case(
+        name="born-ion-molecular-r4",
+        description=(
+            "4 A sphere, and the best-resolved of the sharp radius arm at 0.42% "
+            "— better than 6 A, which is grid alignment rather than physics and "
+            "is the reason the arm is a sweep and not one point."
+        ),
+        source="born-ion-r4",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(4.0, rtol=0.01, delphi_rtol=0.001),  # measured 0.421% / 0.007%
+        analytic_field=AnalyticField(
+            radius_a=4.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.03,  # measured 1.412% APBS / 1.126% DelPhi
+        ),
+    ),
+    Case(
+        name="born-ion-molecular-r6",
+        description="6 A sphere, the long end of the sharp radius arm.",
+        source="born-ion-r6",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(6.0, rtol=0.015, delphi_rtol=0.001),  # measured 0.667% / 0.001%
+        analytic_field=AnalyticField(
+            radius_a=6.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.02,  # measured 0.900% APBS / 0.723% DelPhi
+        ),
+    ),
+    Case(
+        name="born-ion-molecular-negative",
+        description=(
+            "-1e on a sharp boundary. Solvation goes as q^2, so this must return "
+            "the +1e energy exactly on any surface model; the smoothed twin "
+            "cannot show that the sign path is right for a sharp one."
+        ),
+        source="born-ion-negative",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(3.0, -1.0, rtol=0.05, delphi_rtol=0.001),  # measured 2.357% / 0.001%
+    ),
+    Case(
+        name="born-ion-molecular-divalent",
+        description="+2e on a sharp boundary: the q^2 scaling, four times the +1e energy.",
+        source="born-ion-divalent",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(3.0, 2.0, rtol=0.05, delphi_rtol=0.001),  # measured 2.357% / 0.001%
+    ),
+    Case(
+        name="born-ion-molecular-eps4",
+        description=(
+            "Solute dielectric 4 on a sharp boundary; with eps_p 1 and 2 this "
+            "completes the dielectric arm on a surface debye can build."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=4.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(3.0, 1.0, 4.0, rtol=0.045, delphi_rtol=0.001),  # measured 2.101% / 0.014%
+    ),
+    Case(
+        name="born-ion-molecular-fine",
+        description=(
+            "The sharp-boundary convergence pair with `born-ion-molecular`: "
+            "2.36% at 0.5 A becomes 0.62% at 0.25 A. M1's claim is that the "
+            "error falls monotonically under refinement, and a single case "
+            "cannot state it."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_born(3.0, rtol=0.013, delphi_rtol=0.001),  # measured 0.621% / 0.001%
+        analytic_field=AnalyticField(
+            radius_a=3.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.017,  # measured 0.827% APBS / 0.736% DelPhi
+        ),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="born-ion-vdw-fine",
+        description=(
+            "The same pair on van der Waals, which is the surface debye climbs "
+            "first. It also shows what the coarse pair hides: `born-ion-vdw` and "
+            "`born-ion-molecular` agree exactly at 0.5 A and do not here — "
+            "0.787% against 0.621% — because `srad 0` and `srad 1.4` build "
+            "different dielectric maps of the same boundary."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        analytic=_born(3.0, rtol=0.016, delphi_rtol=0.001),  # measured 0.787% / 0.001%
+        analytic_field=AnalyticField(
+            radius_a=3.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.021,  # measured 1.019% APBS / 0.736% DelPhi
+        ),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-molecular-03",
+        description="Charge placement on a sharp boundary: d/a = 0.3, the gentlest rung.",
+        source="kirkwood-03",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_kirkwood(0.3, rtol=0.018, delphi_rtol=0.003),  # measured 0.844% / 0.097%
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-molecular-05",
+        description="d/a = 0.5 on a sharp boundary; the middle rung of M2's ladder.",
+        source="kirkwood-05",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_kirkwood(0.5, rtol=0.019, delphi_rtol=0.005),  # measured 0.902% / 0.205%
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-molecular-07",
+        description=(
+            "d/a = 0.7, the last rung anything reproduces. APBS is 3.8% here "
+            "against 0.11% on the smoothed twin, which is the sharp boundary "
+            "costing what it costs rather than a solver misbehaving."
+        ),
+        source="kirkwood-07",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        analytic=_kirkwood(0.7, rtol=0.08, delphi_rtol=0.01),  # measured 3.800% / 0.416%
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-molecular-09",
+        description=(
+            "d/a = 0.9: recorded, deliberately not gated. The charge sits 0.3 A "
+            "inside the boundary, where the continuum reaction field diverges, "
+            "and both reference codes get *worse* under refinement and "
+            "non-monotonically — APBS 6.40/9.85/9.05% and DelPhi "
+            "26.67/4.29/7.50% at 0.5/0.25/0.125 A. Gating a new solver on a "
+            "number no shipped solver reproduces would be a check that cannot "
+            "fail; recording it says where the method gives up, which is worth "
+            "having. The closed form is not in doubt: the series is converged to "
+            "the last digit by 100 terms."
+        ),
+        source="kirkwood-09",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
+        ),
+        # rtol is unused while `gated=False` and is set to the measured APBS
+        # error rather than to something roomy, so that turning the gate on
+        # would fail loudly instead of passing vacuously.
+        analytic=_kirkwood(0.9, rtol=0.0985, gated=False),  # measured 9.848% / 4.288%
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="born-ion-molecular-salt",
+        description=(
+            "Screening on a sharp boundary at physiological salt. No closed "
+            "form, for the reason `born-ion-salt` states: the two backends "
+            "disagree 39% on the mobile-ion term because they do not share an "
+            "ion-exclusion convention, and pinning either would encode a "
+            "convention as physics. With the case below it this is M3's arm."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.15, surface_model=SurfaceModel.MOLECULAR
+        ),
+    ),
+    Case(
+        name="born-ion-molecular-high-salt",
+        description=(
+            "0.5 M on the same sphere. The pair states the direction screening "
+            "moves the energy, which is what M3 is gated on — a relationship "
+            "between two recordings rather than a number either has to hit."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.5, surface_model=SurfaceModel.MOLECULAR
+        ),
     ),
     Case(
         name="peptide-molecular",
@@ -1149,7 +1527,10 @@ def build_case(
         exact = case.analytic.energy_kj_mol
         analytic = {
             "energy_kj_mol": exact,
-            "rtol": case.analytic.rtol,
+            # The tolerance that *applies to this backend*, which is the one a
+            # reader of the file needs; the case's shared value is in the
+            # manifest and is not what judged this answer.
+            "rtol": case.analytic.rtol_for(result.provenance.backend),
             "source": case.analytic.source,
             # Recorded so a summary diff shows convergence moving, not just the
             # energy: this is the number that says whether the solver is right,
@@ -1165,6 +1546,7 @@ def build_case(
         "family": family.value,
         "backend": result.provenance.backend,
         "analytic": analytic,
+        "analytic_field": _analytic_field_summary(case, result),
         "grid_spec": {
             "resolution": case.grid.resolution,
             "padding": case.grid.padding,
@@ -1175,6 +1557,47 @@ def build_case(
         "energy_kj_mol": result.energy_kj_mol,
     }
     return summary | _potential_summary(result.potential)
+
+
+def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] | None:
+    """The solver's potential against the closed form, where a case asks for it.
+
+    Returns None rather than an empty block when there is nothing to say: a
+    backend that produced no volumetric field has no field to be graded, which
+    is a fact about its family and not a failure. `SurfacePotential` is excluded
+    for the same reason — a boundary-element answer lives *on* the interface,
+    which is the one place this measurement is meaningless.
+    """
+    reference = case.analytic_field
+    if reference is None or not isinstance(result.potential, PotentialGrid):
+        return None
+
+    grid = result.potential
+    # The coarsest axis, so the samples clear the interface on every axis rather
+    # than on the average of them.
+    spacing = float(np.max(grid.spacing))
+    radii = reference.sample_radii(spacing)
+    centre = case.structure().center()
+    points = np.tile(centre, (len(radii), 1))
+    points[:, 0] = centre[0] + np.array(radii)
+
+    got = grid.value_at(points)
+    exact = np.array(reference.exact_at(radii))
+    errors = np.abs(got - exact) / np.abs(exact)
+    return {
+        "spacing_used_a": spacing,
+        "cells_out": list(reference.cells_out),
+        "radii_a": [float(r) for r in radii],
+        "exact_kT_e": [float(v) for v in exact],
+        "values_kT_e": [float(v) for v in got],
+        "relative_errors": [float(e) for e in errors],
+        "max_relative_error": float(np.max(errors)),
+        "rtol": reference.rtol_for(result.provenance.backend),
+        "source": (
+            f"Born potential: q={reference.charge_e:g}e outside a "
+            f"{reference.radius_a:g} A sphere, sampled at a + k*h"
+        ),
+    }
 
 
 def _potential_summary(potential: Potential | None) -> dict[str, Any]:
@@ -1343,6 +1766,7 @@ def verify_case(
 
     found.extend(_verify_surface(case, recorded, fresh, tolerances))
     found.extend(_verify_analytic(case, fresh))
+    found.extend(_verify_analytic_field(case, fresh))
     if "probes" in recorded and "probes" in fresh:
         found.extend(_verify_probes(case, recorded, fresh, tolerances))
     return found
@@ -1383,6 +1807,22 @@ def _verify_surface(
     return found
 
 
+def _accuracy_tier(backend: str) -> AccuracyTier:
+    """The tier of the backend that produced a summary, from its recorded identity.
+
+    Matched by prefix, because a summary carries `gb-obc2-1` where the registry
+    knows `gb`. An identity from no registered backend is treated as a reference
+    tier: refusing to grade something merely because it is unrecognised is the
+    wrong default for a check whose whole purpose is to catch a wrong answer.
+    """
+    from sashimi.backends import reports  # noqa: PLC0415 — import cost off the hot path
+
+    for report in reports():
+        if backend.startswith(report.name):
+            return AccuracyTier(report.accuracy_tier)
+    return AccuracyTier.REFERENCE
+
+
 def _verify_analytic(case: Case, fresh: dict[str, Any]) -> list[Discrepancy]:
     """Check the solver against the closed form, not against its own past.
 
@@ -1393,8 +1833,29 @@ def _verify_analytic(case: Case, fresh: dict[str, Any]) -> list[Discrepancy]:
     if case.analytic is None or fresh.get("analytic") is None:
         return []
 
+    # Recorded, deliberately not judged. The summary still carries the closed
+    # form and the deviation from it, so the number is visible and diffable;
+    # what is withheld is a verdict the physics cannot support.
+    if not case.analytic.gated:
+        return []
+
+    # Nor does a closed form judge an approximation. These tolerances are
+    # measured discretization error — how far a solver that *discretizes the
+    # equation* lands from exact — and `AccuracyTier.APPROXIMATE` names a
+    # backend that does not discretize it at all. Generalized Born is 14.6% from
+    # Born on a 1 A sphere and that is the method, not a defect; holding it to
+    # APBS's 4.1% would say the corpus had found a bug. It was only ever passing
+    # because the sharp-boundary tolerances used to be loose enough to swallow
+    # it. What grades the approximate tier is its recorded deviation from the
+    # reference tier, in `tests/test_corpus_gb.py`, and its reduction to the
+    # closed forms in `tests/test_gb_reference.py` — where that claim is exact
+    # rather than approximate.
+    if _accuracy_tier(fresh["backend"]) is AccuracyTier.APPROXIMATE:
+        return []
+
     error = fresh["analytic"]["relative_error"]
-    if error <= case.analytic.rtol:
+    tolerance = case.analytic.rtol_for(fresh["backend"])
+    if error <= tolerance:
         return []
     return [
         Discrepancy(
@@ -1402,8 +1863,42 @@ def _verify_analytic(case: Case, fresh: dict[str, Any]) -> list[Discrepancy]:
             "analytic.energy_kj_mol",
             case.analytic.energy_kj_mol,
             fresh["energy_kj_mol"],
-            f"{error:.3%} from the closed form, tolerance {case.analytic.rtol:.3%} "
-            f"({case.analytic.source})",
+            f"{error:.3%} from the closed form, tolerance {tolerance:.3%} ({case.analytic.source})",
+        )
+    ]
+
+
+def _verify_analytic_field(case: Case, fresh: dict[str, Any]) -> list[Discrepancy]:
+    """Check the solver's *potential* against the closed form.
+
+    The counterpart to `_verify_analytic`, and the axis the corpus was missing:
+    an energy is one integrated scalar, and a solver can integrate to the right
+    number while the field it hands a viewer is wrong where the viewer reads it.
+
+    The approximate tier is skipped for the same reason it is skipped there, and
+    a backend that returned no volumetric field simply has nothing recorded.
+    """
+    reference = case.analytic_field
+    if reference is None or fresh.get("analytic_field") is None:
+        return []
+    if _accuracy_tier(fresh["backend"]) is AccuracyTier.APPROXIMATE:
+        return []
+
+    field = fresh["analytic_field"]
+    error = field["max_relative_error"]
+    tolerance = reference.rtol_for(fresh["backend"])
+    if error <= tolerance:
+        return []
+    worst = int(np.argmax(field["relative_errors"]))
+    return [
+        Discrepancy(
+            case.name,
+            "analytic_field.max_relative_error",
+            tolerance,
+            error,
+            f"{error:.3%} from the closed-form potential at r = {field['radii_a'][worst]:.4g} A "
+            f"({reference.cells_out[worst]} cells beyond a {reference.radius_a:g} A boundary), "
+            f"tolerance {tolerance:.3%}",
         )
     ]
 

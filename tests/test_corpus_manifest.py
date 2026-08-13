@@ -19,6 +19,8 @@ import numpy as np
 import pytest
 
 import sashimi.corpus
+from sashimi.analytic import born_solvation_energy
+from sashimi.apbs.grid import size_grid
 from sashimi.corpus import (
     CORPUS_DIR,
     MANIFEST,
@@ -38,6 +40,7 @@ from sashimi.protocol import (
     SolveRequest,
     SolveResult,
     SolverFamily,
+    SurfaceModel,
 )
 
 
@@ -127,6 +130,29 @@ def test_a_lone_sphere_has_the_same_molecular_and_van_der_waals_boundary():
     assert molecular == van_der_waals
 
 
+def test_the_same_boundary_is_not_the_same_dielectric_map():
+    """And the exact agreement above is a coarse-grid coincidence.
+
+    The physics is identical — one sphere, one boundary, whatever the probe
+    does — so the *exact* answers agree and the test above is right about what
+    it claims. What the pair at 0.5 A cannot show is that APBS reaches that
+    boundary two different ways: `srad 1.4` with `srfm mol` against `srad 0`.
+    Refine to 0.25 A and the two part company, 0.621% from the closed form
+    against 0.787%, which is discretization rather than modelling.
+
+    Worth stating because the coarse pair reads as a guarantee and is not one:
+    a solver that assumed the two paths were interchangeable would pass at
+    0.5 A and be wrong everywhere it mattered.
+    """
+    molecular = recorded("born-ion-molecular-fine")
+    van_der_waals = recorded("born-ion-vdw-fine")
+
+    assert molecular["energy_kj_mol"] != van_der_waals["energy_kj_mol"]
+    assert molecular["analytic"]["relative_error"] < van_der_waals["analytic"]["relative_error"]
+    # Both still land near exact: this is a fine distinction, not a defect.
+    assert van_der_waals["analytic"]["relative_error"] < 0.01
+
+
 def test_the_surface_model_moves_the_answer():
     """Section 5's 25.7%: the largest modelling choice in the calculation.
 
@@ -196,6 +222,54 @@ def test_every_case_names_its_surface_model_rather_than_inheriting_one():
             inherited.append(name)
 
     assert inherited == [], f"cases inheriting the surface default: {inherited}"
+
+
+def test_both_closed_form_families_reach_a_boundary_every_backend_can_build():
+    """The gap that made M0 necessary, and the guard that would have shown it.
+
+    Fifteen of the eighteen closed-form cases sat on `smoothed-molecular` —
+    APBS's harmonic averaging, which nothing else implements — and **all four**
+    Kirkwood cases did. So the analytic sweep, the only part of the corpus that
+    can say *wrong* rather than *changed*, could grade exactly one backend, and
+    nothing in the suite said so: every case passed, every count looked healthy.
+    A clean-room solver's acceptance ladder was unreachable by construction.
+
+    Counting is not enough — a family entirely on one backend's private surface
+    is the failure — so this asks the question per family.
+    """
+    portable = {SurfaceModel.MOLECULAR, SurfaceModel.VAN_DER_WAALS}
+    by_family: dict[str, set[SurfaceModel]] = {}
+    for case in MANIFEST:
+        if case.analytic is None:
+            continue
+        family = case.analytic.source.split(":")[0]
+        by_family.setdefault(family, set()).add(case.solvent.surface_model)
+
+    assert set(by_family) == {"Born", "Kirkwood"}, f"unrecognised closed-form family: {by_family}"
+    for family, models in sorted(by_family.items()):
+        assert models & portable, (
+            f"{family} closed forms exist only on {sorted(m.value for m in models)}, "
+            "so no backend but APBS can be graded against them"
+        )
+
+
+def test_the_sharp_boundary_ladder_is_wide_enough_to_grade_a_solver_on():
+    """One case per family would satisfy the guard above and prove nothing.
+
+    A single agreeing number is a coincidence a wrong solver can produce; a
+    functional form that has to agree across radius, charge and dielectric is
+    not. This is the shape of that claim on the surfaces a new backend builds.
+    """
+    portable = {SurfaceModel.MOLECULAR, SurfaceModel.VAN_DER_WAALS}
+    sharp = [c for c in MANIFEST if c.analytic is not None and c.solvent.surface_model in portable]
+
+    born = [c for c in sharp if c.analytic is not None and c.analytic.source.startswith("Born")]
+    kirkwood = [c for c in sharp if c.analytic is not None and c.analytic.source.startswith("Kirk")]
+
+    assert len(born) >= 9, "the Born sweep needs its radius, charge and dielectric arms"
+    assert len(kirkwood) >= 3, "M2's ladder is three rungs"
+    # And a convergence pair, which is the only way to state "monotonic".
+    assert {c.grid.resolution for c in born} >= {0.5, 0.25}
 
 
 def test_every_recording_describes_the_case_it_answers():
@@ -374,6 +448,89 @@ def test_a_backend_that_is_wrong_from_the_first_build_is_caught():
     assert "from the closed form" in found[0].detail
 
 
+class RightEnergyWrongFieldSolver:
+    """Integrates to the right number and hands back a field that is not the answer.
+
+    The failure the corpus could not see before M0. Every analytic check was on
+    the energy, and the field was compared only against its own recording, so a
+    solver like this was indistinguishable from a correct one on its first
+    build — and the field is the half a viewer displays.
+    """
+
+    def solve(self, request: FiniteDifferenceRequest) -> SolveResult:
+        grid = size_grid(request.structure, request.grid)
+        shape = tuple(grid.dime)
+        spacing = np.array(grid.spacing, dtype=np.float64)
+        origin = np.array(grid.center, dtype=np.float64) - (np.array(shape) - 1) * spacing / 2.0
+        return SolveResult(
+            provenance=Provenance(backend="right-energy-wrong-field"),
+            # Exactly the Born closed form: the energy gate has nothing to say.
+            energy_kj_mol=born_solvation_energy(3.0, 1.0, 1.0, 78.54),
+            # A field that is merely plausible — right shape, right geometry,
+            # uniformly a fifth of the true potential.
+            potential=PotentialGrid(values=np.full(shape, 0.2), origin=origin, spacing=spacing),
+        )
+
+
+def test_a_solver_with_the_right_energy_and_the_wrong_field_is_caught():
+    """The axis M0 added, doing the one thing the energy axis cannot."""
+    case = next(c for c in MANIFEST if c.name == "born-ion-molecular")
+    solver = RightEnergyWrongFieldSolver()
+    self_consistent = build_case(solver, case)
+
+    found = verify_case(solver, case, self_consistent)
+
+    assert [d.field for d in found] == ["analytic_field.max_relative_error"]
+    assert "closed-form potential" in found[0].detail
+
+
+def test_no_field_sample_sits_in_a_cell_that_straddles_the_boundary():
+    """The rule that makes the measurement mean anything, checked from the files.
+
+    Interpolating across the dielectric interface is O(1) wrong — the potential
+    is continuous there and its normal derivative is not — so a sample has to
+    land in a cell that does not contain the boundary. The obvious rule, a fixed
+    fraction of the radius, does not guarantee that: at 1.05a with 0.25 A
+    spacing a 1 A sphere puts the sample *inside* the straddling cell and a 2 A
+    sphere puts a cell corner exactly on the boundary. This asserts the rule the
+    corpus actually used, from the recorded spacing rather than the requested
+    one, because the guardrail relaxes resolution and a sample placed with the
+    number that was asked for would drift into the interface unnoticed.
+    """
+    checked = 0
+    for case in MANIFEST:
+        if case.analytic_field is None:
+            continue
+        field = load_summary(case)["analytic_field"]
+        spacing = field["spacing_used_a"]
+        for radius, cells in zip(field["radii_a"], field["cells_out"], strict=True):
+            assert cells >= 2, f"{case.name}: {cells} cells is inside the stencil"
+            margin = radius - case.analytic_field.radius_a
+            assert margin >= 2 * spacing - 1e-9, (
+                f"{case.name}: sample at {radius:.4f} A is {margin:.4f} A beyond a "
+                f"{case.analytic_field.radius_a:g} A boundary, under "
+                f"{2 * spacing:.4f} A of clearance"
+            )
+            checked += 1
+    assert checked >= 12, "the sampling rule is asserted on too little to mean anything"
+
+
+def test_the_field_axis_reaches_more_than_one_radius_and_both_surfaces():
+    """A field check on one sphere would not have caught the sampling bug.
+
+    The rule fails at *small* radii, where the margin stops beating the spacing,
+    so a single 3 A case would have passed while the arm it belongs to was
+    broken. Both surfaces, because van der Waals is the one debye climbs first.
+    """
+    with_field = [c for c in MANIFEST if c.analytic_field is not None]
+
+    assert {c.analytic_field.radius_a for c in with_field if c.analytic_field} >= {1.0, 2.0, 3.0}
+    assert {c.solvent.surface_model for c in with_field} == {
+        SurfaceModel.MOLECULAR,
+        SurfaceModel.VAN_DER_WAALS,
+    }
+
+
 def test_a_case_without_a_closed_form_is_not_checked_against_one():
     case = next(c for c in MANIFEST if c.name == "born-ion-salt")
     solver = WrongSolver()
@@ -507,9 +664,40 @@ def test_no_recorded_delphi_answer_is_absurd():
     returned -865,205 kJ/mol for acetate against APBS's -196.90, and the
     identical value for acetic acid, which is a different molecule. Two numbers
     agreeing to six decimals for two different structures is the tell.
+
+    **Cases that physics requires to agree are grouped, not compared.** The
+    sharp-boundary ladder added three kinds of legitimate coincidence, and a
+    plain "all energies distinct" assertion called all of them bugs: solvation
+    goes as q^2 so -1e reproduces +1e exactly; a lone sphere has the same
+    molecular and van der Waals boundary; and DelPhi's corrected reaction field
+    on a sphere does not move with the grid, so a convergence pair agrees to the
+    last digit. The key below is what the energy is allowed to depend on —
+    geometry, |charge|, and the two dielectric-and-salt parameters — so those
+    four cases form one group and any *other* pair sharing an answer still
+    fails. Which is what the original bug was: two different molecules.
     """
     energies = {name: other["energy_kj_mol"] for name, _, other in cross_backend_cases("delphi")}
+    by_case = {c.name: c for c in MANIFEST}
 
-    assert len(set(energies.values())) == len(energies), "two structures, one answer"
+    def physics_key(name: str) -> tuple[Any, ...]:
+        case = by_case[name]
+        structure = case.structure()
+        return (
+            structure.coords.tobytes(),
+            np.abs(structure.charges).tobytes(),
+            structure.radii.tobytes(),
+            case.solvent.solute_dielectric,
+            case.solvent.ionic_strength,
+        )
+
+    seen: dict[float, str] = {}
+    for name, energy in energies.items():
+        clash = seen.get(energy)
+        if clash is not None:
+            assert physics_key(clash) == physics_key(name), (
+                f"{name} and {clash} are different structures with one answer: {energy}"
+            )
+        seen[energy] = name
+
     for name, energy in energies.items():
         assert -20_000 < energy < 0, f"{name}: {energy}"

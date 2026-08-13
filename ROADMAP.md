@@ -1536,7 +1536,43 @@ it costs four cases instead of nineteen files.
   critical path, so knowing that at the start is worth more than discovering it
   at M4.
 
-### Closing the closed-form gap, before M1
+### Closing the closed-form gap, before M1 ✅
+
+**Landed 2026-08-13.** The corpus is 79 cases, 37 of them answerable by a
+sharp-boundary solver (17 in the fast tier), with 31 closed forms and 8 field
+checks. Recordings: APBS 79, DelPhi C++ 35, GB 29, TABI-PB 6. What the work
+found that the plan did not anticipate:
+
+- **A closed form cannot judge an approximation, and it had been trying to.**
+  Tightening the sharp-boundary tolerances to their measured values turned the
+  GB tier red — correctly. `AccuracyTier.APPROXIMATE` names a backend that does
+  not discretize the equation, so measured discretization error is not a bar it
+  can be held to: GB is 14.6% from Born on a 1 A sphere and that is the method.
+  It had only been passing because the old tolerances were loose enough to
+  swallow it. `_verify_analytic` now skips the approximate tier and says why;
+  what grades GB is its recorded deviation from the reference tier.
+- **The "two structures, one answer" guard fired on legitimate physics.** The
+  sharp ladder introduced three coincidences it could not distinguish from the
+  fixed-column PQR bug it was written for: q² makes −1e and +1e identical, a
+  lone sphere has the same molecular and van der Waals boundary, and DelPhi's
+  corrected reaction field on a sphere does not move with the grid. It now
+  groups by what the energy is *allowed* to depend on — geometry, |charge|,
+  dielectric and salt — and still catches acetate carrying acetic acid's answer.
+- **GB's exclusion is by property and the obvious property was the wrong one.**
+  "GB substitutes radii" excludes every real protein, where substituting mbondi
+  radii is the method working. The rule that holds is *synthetic* geometry whose
+  radii GB would replace: the radii are the model there, and GB answers about a
+  different molecule.
+
+The field axis is 8 cases across radii 1–6 Å on both sharp surfaces, sampled at
+`a + k·h` with k ∈ {2, 4, 8}. Worst measured: APBS 0.83% and DelPhi 0.74% on the
+fine pair, rising to 4.7% on the coarse 2 Å sphere — the tolerances are twice
+the worst observed, per case, as the manifest's convention requires. A solver
+that integrates to the exact Born energy and hands back a uniformly wrong field
+is now caught, which is the failure nothing in the corpus could see before.
+
+*What the plan said, kept for the record:*
+
 
 **Measured 2026-08-13, and it is why this step exists.** Of the corpus's 18
 closed-form cases, **15 are on `smoothed-molecular`** — APBS's harmonic
@@ -1782,7 +1818,7 @@ deliberate.
 
 | | milestone | exit criterion |
 |---|---|---|
-| M0 | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
+| M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
 | M1 | LPBE on a Cartesian grid, vdW surface | Born ion within 1% at 0.25 Å, converging monotonically under refinement — as a *per-backend* tolerance, since the shared one is 5% |
 | M1b | **The field, not just the energy** | Born φ within 1% on the corpus's `a + k·h` samples. DelPhi C++ manages 0.75% on both surfaces, so the bar is achievable; APBS is 0.87% on `molecular` and **1.04% on `van-der-waals`**, so it sits above one reference solver on the surface M1 climbs — deliberately. Never sampled *on* the interface: that is ~100% wrong for every shipped solver and is not debye's to fix |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |

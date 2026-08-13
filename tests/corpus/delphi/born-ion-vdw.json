@@ -1,6 +1,6 @@
 {
-  "name": "born-ion-molecular",
-  "description": "The Born ion on the molecular surface, which DelPhi and TABI-PB can also solve. Rolling a probe over a lone sphere cannot carve a re-entrant surface, so the boundary is the sphere and Born still holds.",
+  "name": "born-ion-vdw",
+  "description": "The same ion with the probe collapsed. For one sphere this must return the molecular answer exactly \u2014 the two surfaces coincide, and no other case in the corpus can catch a probe applied where it should not be.",
   "source": "born-ion",
   "tier": "fast",
   "family": "finite-difference",
@@ -53,12 +53,12 @@
     "ionic_strength": 0.0,
     "ion_radius": 2.0,
     "temperature": 298.15,
-    "surface_model": "molecular",
+    "surface_model": "van-der-waals",
     "surface_radius": 1.4
   },
   "resolved_parameters": {
     "equation": "linear",
-    "surface_model": "molecular",
+    "surface_model": "van-der-waals",
     "solvent_dielectric": 78.54,
     "solute_dielectric": 1.0,
     "ionic_strength": 0.0,
@@ -67,7 +67,7 @@
     "surface_radius": 1.4,
     "delphi": {
       "flavour": "delphicpp",
-      "prbrad": 1.4,
+      "prbrad": 0.0,
       "gaussian": false,
       "surfmethod": null,
       "temper_written": 25.0,
