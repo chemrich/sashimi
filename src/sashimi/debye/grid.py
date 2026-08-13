@@ -18,6 +18,7 @@ they are is comparing discretizations.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -29,6 +30,7 @@ __all__ = [
     "LATTICE_STEP",
     "MIN_COARSE_POINTS",
     "DebyeGrid",
+    "axis_coordinates",
     "coarsen",
     "grid_hierarchy",
     "size_grid",
@@ -78,10 +80,6 @@ class DebyeGrid:
             levels += 1
         return levels
 
-    def node_coordinates(self, axis: int) -> FloatArray:
-        """The physical coordinates along one axis, (n,) in A."""
-        return self.origin[axis] + self.spacing[axis] * np.arange(self.shape[axis], dtype=float)
-
     def as_diagnostics(self) -> Diagnostics:
         return {
             "shape": list(self.shape),
@@ -117,17 +115,33 @@ def size_grid(pqr: PQRData, spec: GridSpec) -> DebyeGrid:
     needed = np.ceil(fglen / spec.resolution).astype(int) + 1
     shape = np.array([_lattice_ceil(int(v)) for v in needed])
 
+    # Clamp before stepping, for two separate reasons that both bite only at
+    # absurd resolutions. An axis longer than this cannot survive the loop below
+    # even with the other two at the floor, so clamping removes no legal grid;
+    # without it, a request at 1e-6 A starts from 26,000,001 nodes per axis and
+    # the loop takes millions of iterations to walk back down.
+    ceiling = _lattice_ceil(max(spec.max_points // MIN_POINTS_PER_AXIS**2, MIN_POINTS_PER_AXIS))
+    shape = np.minimum(shape, ceiling)
+
     # Step the largest axis down until the budget is met, which keeps the grid
     # as isotropic as the budget allows — the same rule `apbs.grid` follows, for
     # the same reason: an anisotropic grid is worse at the axis it starved.
-    while int(np.prod(shape)) > spec.max_points:
+    #
+    # `math.prod` over Python ints rather than `np.prod`, which returns int64
+    # and *wraps silently*: `apbs.grid` is safe from this only because
+    # `LEGAL_DIME` stops at 1281, and this lattice has no such ceiling. At
+    # 1e-6 A the true product is 1.8e22, the int64 product is negative, the
+    # comparison is false, and `max_points` — a documented guardrail with its
+    # own error in the taxonomy — silently stops guarding.
+    while math.prod(int(v) for v in shape) > spec.max_points:
         axis = int(np.argmax(shape))
         if shape[axis] - LATTICE_STEP < MIN_POINTS_PER_AXIS:
             raise GridTooLarge(
                 f"cannot satisfy max_points={spec.max_points:,} for a molecule of extent "
                 f"{np.round(extent, 1).tolist()} A with padding={spec.padding} A; "
                 f"the smallest grid debye will solve on is "
-                f"{'x'.join(str(int(v)) for v in shape)} = {int(np.prod(shape)):,} points. "
+                f"{'x'.join(str(int(v)) for v in shape)} = "
+                f"{math.prod(int(v) for v in shape):,} points. "
                 "Raise max_points or reduce padding."
             )
         shape[axis] -= LATTICE_STEP

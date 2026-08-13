@@ -28,6 +28,7 @@ import numpy as np
 from sashimi.analytic import debye_length_a
 from sashimi.debye.dielectric import bjerrum_length_a
 from sashimi.debye.grid import DebyeGrid
+from sashimi.errors import InputError
 from sashimi.protocol import FloatArray, PQRData, SolventModel
 
 __all__ = [
@@ -158,17 +159,32 @@ def debye_huckel_boundary(
     exclusion = structure.radii + solvent.ion_radius
     screening = structure.charges / (1.0 + kappa * exclusion) if kappa else structure.charges
 
+    # The Debye-Huckel tail is a point-charge expression, so it is meaningful
+    # only where the box face is clear of the charges — which is what `padding`
+    # is for. Refusing is not defensive coding here: this replaced a
+    # `np.maximum(distances, 1e-6)` clip whose comment claimed the case could
+    # not arise and that something downstream would describe it. Both were
+    # wrong. A zero-radius atom at the low corner of its own bounding box with
+    # `padding=0` sits exactly *on* a boundary node, is legally inside the grid
+    # so `trilinear_weights` does not object, and the clip turned the
+    # singularity into 7.1e6 kT/e on that node and solved on. A confident wrong
+    # number, from a guard that was documented as unreachable.
+    closest = float("inf")
     values = np.zeros(len(points), dtype=np.float64)
     chunk = max(1, _PAIR_CHUNK // max(1, structure.n_atoms))
     for start in range(0, len(points), chunk):
         block = points[start : start + chunk]
         distances = np.linalg.norm(block[:, None, :] - structure.coords[None, :, :], axis=2)
-        # A boundary node inside an atom would divide by nothing meaningful.
-        # The box is the molecule plus `padding` on every side, so this cannot
-        # happen for a structure that fits its own grid; clipping rather than
-        # asserting keeps a pathological input from raising here instead of
-        # where it can be described.
-        np.maximum(distances, 1e-6, out=distances)
+        closest = min(closest, float(distances.min()))
+        if closest < min(grid.spacing):
+            raise InputError(
+                f"an atom lies {closest:.4g} A from the edge of the box, closer than the "
+                f"grid spacing {min(grid.spacing):.4g} A. The boundary values are a "
+                "Debye-Huckel tail summed over the atoms, which is only meaningful where "
+                "the box face is clear of them; at this distance it is the expression's "
+                "own singularity, not a potential. Increase GridSpec.padding — it is the "
+                "whole boundary condition for this solver."
+            )
         contribution = screening[None, :] / distances
         if kappa:
             contribution *= np.exp(-kappa * (distances - exclusion[None, :]))

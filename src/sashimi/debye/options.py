@@ -54,11 +54,20 @@ class DebyeOptions:
 
     tolerance: float = 1e-8
     max_cycles: int = 200
-    # Smoothing sweeps per multigrid level, down and up. Two of each is the
-    # textbook V(2,2) and is what the convergence numbers in the module
-    # docstring of `linear.py` were measured with.
-    pre_smooth: int = 2
-    post_smooth: int = 2
+
+    # Smoothing sweeps per multigrid level, applied on the way down *and* on the
+    # way up. **One count, not two, and that is a correctness constraint rather
+    # than a simplification.** The V-cycle is a legal CG preconditioner only if
+    # it is symmetric, which needs the post-smoother to be the adjoint of the
+    # pre-smoother: red-black Gauss-Seidel run forward has the reverse colour
+    # order as its adjoint, and the counts have to match. Separate `pre_smooth`
+    # and `post_smooth` knobs — which this carried until a review asked what
+    # stopped them differing — let a caller tuning for speed silently make the
+    # preconditioner nonsymmetric, and the symptom would be a stall reported as
+    # a `ConvergenceFailure` advising a bigger `max_cycles`, which is not the
+    # cause. Two of each is the textbook V(2,2) and is what `linear.py`'s
+    # measured convergence rate was taken with.
+    smoothing_sweeps: int = 2
 
     # There is deliberately no `relaxation` here. A damping factor is the
     # obvious next knob and the first draft carried one — unread by the
@@ -72,8 +81,12 @@ class DebyeOptions:
             raise ValueError(f"tolerance must be positive, got {self.tolerance}")
         if self.max_cycles < 1:
             raise ValueError(f"max_cycles must be at least 1, got {self.max_cycles}")
-        if self.pre_smooth < 0 or self.post_smooth < 0:
-            raise ValueError("smoothing sweep counts must be non-negative")
+        if self.smoothing_sweeps < 1:
+            raise ValueError(
+                f"smoothing_sweeps must be at least 1, got {self.smoothing_sweeps}; "
+                "a V-cycle with no smoothing transfers error between grids without "
+                "removing any"
+            )
 
 
 def check_surface(model: SurfaceModel) -> None:

@@ -88,8 +88,7 @@ def _solve_state(
         rhs,
         tolerance=options.tolerance,
         max_cycles=options.max_cycles,
-        pre_smooth=options.pre_smooth,
-        post_smooth=options.post_smooth,
+        smoothing_sweeps=options.smoothing_sweeps,
     )
     return interior + boundary, report
 
@@ -196,8 +195,13 @@ def _resolved(grid: DebyeGrid, solvent: SolventModel, options: DebyeOptions) -> 
         "grid": grid.as_diagnostics(),
         "debye": {
             "tolerance": options.tolerance,
-            "pre_smooth": options.pre_smooth,
-            "post_smooth": options.post_smooth,
+            # `max_cycles` is here because it decides whether the answer exists
+            # at all: a case that only converges at a raised budget and one that
+            # converges at the default produced byte-identical provenance until
+            # a review asked. ROADMAP.md section 4 wants provenance to be enough
+            # to reproduce the number.
+            "max_cycles": options.max_cycles,
+            "smoothing_sweeps": options.smoothing_sweeps,
             "boundary_condition": "multiple Debye-Huckel on the box face",
             "bjerrum_length_vacuum_a": round(bjerrum_length_a(solvent.temperature), 4),
         },

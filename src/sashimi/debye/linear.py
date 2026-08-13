@@ -239,20 +239,20 @@ def build_levels(grid: DebyeGrid, structure: PQRData, solvent: SolventModel) -> 
     return levels
 
 
-def _v_cycle(
-    levels: list[Level], index: int, x: FloatArray, b: FloatArray, *, pre: int, post: int
-) -> None:
+def _v_cycle(levels: list[Level], index: int, x: FloatArray, b: FloatArray, *, sweeps: int) -> None:
     level = levels[index]
     if index == len(levels) - 1:
         _coarse_solve(level, x, b)
         return
 
-    level.smooth(x, b, pre)
+    level.smooth(x, b, sweeps)
     coarse_b = _restrict(level.residual(x, b))
     coarse_x = np.zeros_like(coarse_b)
-    _v_cycle(levels, index + 1, coarse_x, coarse_b, pre=pre, post=post)
+    _v_cycle(levels, index + 1, coarse_x, coarse_b, sweeps=sweeps)
     x += _prolong(coarse_x)
-    level.smooth(x, b, post, reverse=True)
+    # Same count, reverse colour order: that is what makes the cycle its own
+    # adjoint, and so a legal CG preconditioner. See `DebyeOptions`.
+    level.smooth(x, b, sweeps, reverse=True)
 
 
 def _coarse_solve(level: Level, x: FloatArray, b: FloatArray, *, iterations: int = 400) -> None:
@@ -309,8 +309,7 @@ def solve_system(
     *,
     tolerance: float,
     max_cycles: int,
-    pre_smooth: int,
-    post_smooth: int,
+    smoothing_sweeps: int,
 ) -> tuple[FloatArray, SolveReport]:
     """Solve A x = b with multigrid-preconditioned CG. Homogeneous Dirichlet.
 
@@ -328,7 +327,7 @@ def solve_system(
 
     def precondition(rhs: FloatArray) -> FloatArray:
         z = np.zeros_like(rhs)
-        _v_cycle(levels, 0, z, rhs, pre=pre_smooth, post=post_smooth)
+        _v_cycle(levels, 0, z, rhs, sweeps=smoothing_sweeps)
         return z
 
     z = precondition(r)

@@ -20,6 +20,8 @@ answers to closed forms does.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -37,6 +39,7 @@ from sashimi.debye.sources import (
     debye_huckel_boundary,
     interpolate_at_atoms,
 )
+from sashimi.errors import GridTooLarge, InputError
 from sashimi.protocol import GridSpec, PQRData, SolventModel, SurfaceModel
 
 VDW = SolventModel(
@@ -304,3 +307,56 @@ def test_coarsening_preserves_the_box():
 def test_the_bjerrum_length_is_the_familiar_one():
     """7.14 A in water at 298.15 K, which is this divided by the dielectric."""
     assert bjerrum_length_a(298.15) / 78.54 == pytest.approx(7.14, abs=0.01)
+
+
+def test_the_point_budget_survives_a_grid_too_large_to_count():
+    """`max_points` is a documented guardrail, and it silently stopped guarding.
+
+    `int(np.prod(shape))` returns int64 and wraps. `apbs.grid` is safe from this
+    only because `LEGAL_DIME` stops at 1281; debye's lattice has no ceiling, so
+    a request at 1e-6 A produced 26,000,001 nodes per axis, a *negative* product,
+    a comparison that was false, and a 1.8e22-point grid returned in 3 ms — to
+    die later in a numpy allocation rather than with the error the taxonomy has
+    for exactly this. Found by review, not by the suite.
+    """
+    structure = PQRData(coords=np.zeros((1, 3)), charges=np.array([1.0]), radii=np.array([3.0]))
+
+    # The contract is to *relax* the resolution until the budget is met — the
+    # same rule `apbs.grid` follows — and to raise only when even the smallest
+    # grid will not fit. The overflow broke the first half, not the second: the
+    # comparison was false, so nothing relaxed and a 1.8e22-point grid came back.
+    for resolution in (1e-6, 0.01, 0.25):
+        grid = size_grid(structure, GridSpec(resolution=resolution, padding=10.0))
+        assert math.prod(grid.shape) <= GridSpec().max_points
+
+    grid = size_grid(structure, GridSpec(resolution=0.25, padding=10.0, max_points=60**3))
+    assert math.prod(grid.shape) <= 60**3
+
+    with pytest.raises(GridTooLarge, match="max_points"):
+        size_grid(structure, GridSpec(resolution=0.25, padding=10.0, max_points=1000))
+
+
+def test_a_charge_on_the_box_face_is_refused_rather_than_clipped():
+    """The boundary condition's own singularity, which used to be clipped and solved on.
+
+    A zero-radius atom at the low corner of its bounding box with `padding=0`
+    lands exactly on a boundary node. It is legally inside the grid, so
+    `trilinear_weights` raises nothing; before this, a `np.maximum(d, 1e-6)`
+    clip turned the singularity into 7.1e6 kT/e and the solver carried on to a
+    confident wrong energy. The clip's own comment said the case could not
+    arise.
+    """
+    structure = PQRData(
+        coords=np.array([[0.0, 0.0, 0.0], [6.0, 6.0, 6.0]]),
+        charges=np.array([1.0, 0.0]),
+        radii=np.array([0.0, 3.0]),
+    )
+    grid = size_grid(structure, GridSpec(resolution=1.0, padding=0.0))
+    assert np.allclose(grid.origin, structure.coords[0]), "the atom should sit on the corner"
+
+    with pytest.raises(InputError, match="padding"):
+        debye_huckel_boundary(grid, structure, VDW)
+
+    # The same structure with room around it is ordinary, and still solvable.
+    padded = size_grid(structure, GridSpec(resolution=1.0, padding=5.0))
+    assert np.isfinite(debye_huckel_boundary(padded, structure, VDW)).all()

@@ -372,3 +372,44 @@ def test_it_agrees_with_apbs_on_a_real_structure():
     deviation = abs(debye.energy_kj_mol - apbs.energy_kj_mol) / abs(apbs.energy_kj_mol)
     assert deviation < 0.02, f"debye and APBS are {deviation:.3%} apart on {case.name}"
     assert debye.provenance.energy_term is apbs.provenance.energy_term
+
+
+def test_the_smoother_cannot_be_made_asymmetric_by_a_caller():
+    """One sweep count, because two would let a caller break CG's precondition.
+
+    The V-cycle is a legal preconditioner only if it is its own adjoint, which
+    needs the post-smoothing sweeps to match the pre-smoothing ones. This
+    carried separate `pre_smooth` and `post_smooth` fields until a review asked
+    what stopped them differing — nothing did, and an unequal pair makes the
+    preconditioner nonsymmetric with no error: measured on the Born ion at
+    0.5 A, (2,2) converged in 8 cycles where (2,1) took 13 and (0,2) took 14.
+    The failure would have surfaced as a `ConvergenceFailure` advising a larger
+    `max_cycles`, which would not have been the cause.
+
+    Made unrepresentable rather than validated, which ROADMAP.md section 7 ranks
+    as the deeper fix: there is one field, so there is no unequal pair to reject.
+    """
+    assert not hasattr(DebyeOptions(), "pre_smooth")
+    assert not hasattr(DebyeOptions(), "post_smooth")
+    assert DebyeOptions().smoothing_sweeps == 2
+
+    with pytest.raises(ValueError, match="smoothing_sweeps"):
+        DebyeOptions(smoothing_sweeps=0)
+
+
+def test_provenance_carries_every_knob_that_decides_the_answer():
+    """`max_cycles` decides whether the answer exists at all, so it travels.
+
+    Two solves of the same case — one at the default budget, one at a raised
+    one — produced byte-identical `resolved_parameters` until a review asked.
+    ROADMAP.md section 4 wants provenance to be enough to reproduce a number.
+    """
+    default = DebyeSolver().solve(born_request(1.0, want_potential=False))
+    raised = DebyeSolver(options=DebyeOptions(max_cycles=500)).solve(
+        born_request(1.0, want_potential=False)
+    )
+
+    assert default.provenance.resolved_parameters != raised.provenance.resolved_parameters
+    knobs = default.provenance.resolved_parameters["debye"]
+    assert {"tolerance", "max_cycles", "smoothing_sweeps"} <= set(knobs)
+    assert knobs["max_cycles"] == DebyeOptions().max_cycles
