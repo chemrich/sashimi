@@ -1463,10 +1463,19 @@ Two guards came with it, both checked against the configuration where they
 should fire. `test_every_case_names_its_surface_model_rather_than_inheriting_one`
 reads `corpus.py`'s AST, because at runtime an inherited value and a stated one
 are the same value — the drift it catches is invisible from the objects.
-`test_every_backend_can_answer_the_default_surface_model` reads *declared*
-support rather than availability, so it runs on a bare machine and cannot skip;
-reverting the default makes it name `['delphi', 'tabipb', 'gb']`, which is the
-measurement of the problem the flip fixes. *Exit criterion, met:*
+`test_every_backend_can_answer_the_default_surface_model` reads the surface sets
+from the modules that own them — both DelPhi flavours included — so it runs on a
+bare machine and cannot skip; reverting the default makes it name
+`['delphi/delphicpp', 'delphi/pydelphi', 'gb', 'tabipb']`, which is the
+measurement of the problem the flip fixes.
+
+That second guard was wrong once first, in this project's usual shape. It read
+`backends.reports()`, whose `surface_models` is empty for an *undiscoverable*
+DelPhi — the flavour decides the set, so an absent binary means an unknown one —
+and the docstring claimed it therefore ran anywhere. It passed locally, where
+all four backends are installed, and failed CI's `none` and `apbs-only` legs.
+The claim "this needs no binary" was itself untested; the three-profile matrix
+is what caught it, one push after being built. *Exit criterion, met:*
 `SolventModel()` is molecular, the corpus is bit-identical across the change,
 and a defaulted `sashimi_solve` reaches every backend rather than one.
 
