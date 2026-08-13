@@ -1430,6 +1430,74 @@ claim against APBS is the first decision in the project that depends on a timing
 number, and CI cannot supply one — its runners are shared and noisy at every
 architecture. The Proxmox VM and Tailscale (§11) belong here, not in phase 5.
 
+### The run-up to debye, and debye itself
+
+Planned 2026-08-13, in this order. The two items before debye are small and both
+remove something that would otherwise have to be worked around inside it.
+
+**1. The `molecular` default.** §14 resolved it; this lands it. **42 of 64
+corpus cases inherit `smoothed-molecular` from `SolventModel`'s dataclass
+default and 22 name a model explicitly**, so flipping the default silently
+rewrites what those 42 are asking. The order is therefore not optional: make all
+42 name `SMOOTHED_MOLECULAR` explicitly, **verify all 64 reproduce
+bit-identically**, and only then flip the default and update the MCP tool,
+README and capabilities text. Watch `cli._pick_surface_model` and the
+`comparable_surface_models` path. *Exit criterion:* `SolventModel()` is
+molecular, the corpus is bit-identical across the change, and a defaulted
+`sashimi_solve` succeeds on all four backends rather than one.
+
+**2. Cross-flavour agreement, instead of pyDelPhi recordings.** A `delphi`-marked
+test solving three or four cheap shared cases through both flavours and
+asserting agreement within **0.5%** — the measured band is 0.047–0.426%. Gated
+on both being discoverable, so it runs on CI's Linux leg and skips elsewhere.
+
+*This reverses an earlier recommendation, and the reasoning matters more than the
+conclusion.* A `tests/corpus/pydelphi/` was the obvious move: the pyDelPhi path
+is genuinely distinct code we own — its own parameter file, kelvin instead of
+Celsius, its own surface mapping and CSV parsing — covered today only by
+behavioural bands that catch a factor of two and miss five percent. But a
+recorded exact number from a third-party program **cannot distinguish a fix from
+a regression**: when upstream legitimately improves, the corpus goes red and
+nothing in it can judge the change. The corpus escapes that for APBS by carrying
+closed forms and cross-backend agreement, which is exactly what pyDelPhi
+recordings would lack. The relationship *between the flavours* is the invariant
+worth holding, it catches any drift in our input generation more directly, and
+it costs four cases instead of nineteen files.
+
+**3. debye.** Two decisions to take before any code, both of which contradict or
+sharpen what this document already says:
+
+- **In-repo `sashimi.debye`, or the separate repo §10 specifies?** §10 chose
+  separate, extracting `pb-protocol` at that moment (§14 Q5), on the argument
+  that otherwise debye depends on sashimi while `sashimi[debye]` depends on
+  debye. That cycle only bites at *packaging* time, and there are no external
+  consumers yet — while the corpus, the registry and the protocol all live here,
+  so every day in-repo is a day of faster iteration. Recommendation: start
+  in-repo, extract when something other than sashimi wants it. **Contradicts a
+  recorded decision, so it needs an explicit call rather than drift.**
+- **Which surface first.** The corpus's shared cases are `molecular`, but the
+  analytic rungs — Born, Kirkwood — need only a union of spheres, which is
+  trivial to build. So climb the ladder on van der Waals and build the
+  solvent-excluded surface before the corpus gate. That construction is the
+  hardest single piece and sits on the critical path; knowing so at the start is
+  worth more than discovering it at M4.
+
+| | milestone | exit criterion |
+|---|---|---|
+| M1 | LPBE on a Cartesian grid, vdW surface | Born ion within 1% at 0.25 Å, converging monotonically under refinement |
+| M2 | Off-centre charge | the Kirkwood cases within their measured per-case tolerances |
+| M3 | Salt screening | energies move with ionic strength the way the corpus records |
+| M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
+| M5 | Registry integration | `sashimi corpus verify --backend debye --tier fast` passes |
+| M6 | **Potential field out** | a DX map protean's viewer loads — **the protean-replacement milestone** |
+| M7 | Performance claim | the §11 benchmark-VM question, revisited only here |
+
+**What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
+18 of them with closed forms; three independent reference backends to be graded
+against rather than one; an approximate tier whose deviation is documented per
+case; and a suite that passes on a machine with no binaries at all — which is
+the only environment in which debye's central claim can even be stated.
+
 **Phase 9 — Integration, ongoing.** mcpymol grows a convenience chaining
 `sashimi_solve` → load DX → surface coloring; protean consumes `SolveResult`.
 Sashimi itself should go quiet after this — a wrapper that needs constant
