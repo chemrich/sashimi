@@ -1921,12 +1921,76 @@ of debye's screening against that closed form would share a definition and be
 partly circular. Cross-backend agreement with APBS, whose κ is computed inside
 its own C, is the check that is not.
 
+### M1a — the field check sees more than one ray ✅
+
+**Landed 2026-08-14.** `_analytic_field_summary` sampled `centre + r·x̂` and
+nothing else. For a spherically symmetric problem that reads as an
+arbitrary-but-harmless choice, and it is not: **the solution is spherically
+symmetric and the error is not.** A sphere on a Cartesian grid is a staircase,
+and a staircase has the grid's cubic symmetry, so the discretization error
+varies over the three direction classes — ⟨100⟩, ⟨110⟩, ⟨111⟩.
+
+The check now samples eight directions covering all three classes, two of them
+sign-flipped. Every field recording was re-measured for both reference
+backends. Worst relative error, +x alone against all eight:
+
+| case | APBS +x | APBS all | worst dir | DelPhi +x | DelPhi all | worst dir |
+|---|---|---|---|---|---|---|
+| `born-ion-molecular` | 3.186% | 3.186% | −x | 0.150% | **0.789%** | ⟨011⟩ |
+| `born-ion-vdw` | 3.186% | 3.186% | −x | 0.150% | **0.789%** | ⟨011⟩ |
+| `born-ion-molecular-r1` | 1.165% | 1.165% | +y | 1.727% | 1.727% | −x |
+| `born-ion-molecular-r2` | 4.744% | 4.744% | −x | 1.556% | **2.521%** | ⟨111⟩ |
+| `born-ion-molecular-r4` | 1.412% | 1.412% | −x | 1.126% | 1.239% | ⟨111⟩ |
+| `born-ion-molecular-r6` | 0.899% | **1.531%** | ⟨111⟩ | 0.722% | **1.902%** | ⟨111⟩ |
+| `born-ion-molecular-fine` | 0.827% | **1.107%** | ⟨111⟩ | 0.736% | **1.891%** | ⟨111⟩ |
+| `born-ion-vdw-fine` | 1.019% | 1.050% | ⟨011⟩ | 0.736% | **1.891%** | ⟨111⟩ |
+
+**Which ray is worst depends on the backend, which is why one ray could not be
+right for both.** APBS is worst along the axes on every coarse case; DelPhi C++
+is worst along the body diagonal on five of eight. So +x recorded APBS's true
+worst case and understated DelPhi's by up to 5.3× — `born-ion-molecular`, where
+DelPhi's recorded field error was 0.150% and is 0.789%.
+
+Three tolerances rose because of it: `born-ion-molecular-r6` from 0.020 to
+0.038, and both fine cases from 0.017/0.021 to 0.038. **The old 0.020 on `r6`
+would now fail**, which is the honest form of this change — it was passing
+because the check was not looking where the error was. Four tolerances tightened
+slightly, since 2× a measurement that did not move is a marginally smaller
+number than the one recorded before. `born-ion-molecular`, `born-ion-vdw` and
+`born-ion-molecular-r2` gained or kept a `delphicpp` entry, now at the values
+the diagonals actually show.
+
+**Only the `analytic_field` block moved.** Sixteen recordings changed, and a
+key-by-key diff against `HEAD` confirms `energy_kj_mol`, `geometry`, `probes`
+and `resolved_parameters` are byte-identical in all sixteen — this is a change
+to what the corpus *looks at*, not to what any solver computes. All 79 cases
+still reproduce against APBS, all 35 against DelPhi C++, all 29 against GB and
+all 6 against TABI-PB.
+
+**The grid-centring invariant fell out of it and is now asserted.** For a lone
+sphere the atom sits at the centre of its own bounding box and every backend
+builds an odd-sized grid, so the atom lands exactly on a node and the four
+⟨100⟩ samples must agree. They do, to under 0.001 percentage points. A grid
+centred half a cell off would break that while leaving the *worst* error — and
+so every tolerance — untouched, so nothing else here would have seen it. The
+test solves with debye rather than reading a file, which means it runs on the
+bare CI leg where the recordings' own backends do not exist.
+
+*Two notes for whoever reads this next.* The one-ray rule is the **second**
+parameter this sampling rule turned out to be silently conditioned on: M0 caught
+it on *radius* — `1.05a` was verified at a = 3 Å and fails at 1 and 2 Å — and
+fixing that instance felt like closing the class, so nobody asked what else the
+rule assumed. And `sashimi corpus build --backend delphi` does **not** imply
+`tests/corpus/delphi/`; without `--directory` it overwrites the APBS recordings
+with DelPhi's numbers, which is what happened here and was caught only because
+the recordings were diffed key-by-key before being trusted.
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
 | M1 ✅ | LPBE on a Cartesian grid, vdW surface | **met**: 0.853% at 0.25 Å against a 1% per-backend tolerance, falling monotonically 3.836 → 1.576 → 0.853 → 0.479% under refinement |
-| M1a | **The field check has to see more than one ray** | before M1b can mean anything: `_analytic_field_summary` samples +x only, and ⟨111⟩ is 2.6× worse for DelPhi and debye while +x is the worst ray for APBS. Sample the diagonals, re-measure all eight field tolerances for APBS and DelPhi C++, and record it as the result change it is |
-| M1b | **The field, not just the energy** | Born φ within 1% on the corpus's `a + k·h` samples, **in every sampled direction**. The old justification — "DelPhi manages 0.75%, so 1% is achievable" — was an axis-only measurement; DelPhi's worst is 1.890% and APBS's 1.049%, so **no shipped solver clears 1% at k = 2** and the bar has to be re-argued against M1a's numbers rather than quietly widened. Never sampled *on* the interface: that is ~100% wrong for every shipped solver and is not debye's to fix |
+| M1a ✅ | **The field check has to see more than one ray** | done — the section below: eight directions across the three cubic symmetry classes, all sixteen field recordings re-measured, and the tolerances that moved moved because the diagonal is worse than the axis |
+| M1b | **The field, not just the energy** | Born φ within **1% at k ≥ 4**, in every sampled direction, with **k = 2 recorded and not gated**. Restated from "1% everywhere" on M1a's measurements: at k = 2 no solver clears 1% — APBS 1.050%, DelPhi C++ 1.891% — so gating there gates the grid rather than debye, and the old justification for 1% was an axis-only reading of DelPhi's 0.736%. At k ≥ 4 all three clear it: APBS 0.987%, DelPhi 0.803%, debye 0.800%. **Needs Charlie's call**, and note it makes M1b a bar debye already meets rather than work outstanding — M5 is what records it |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
