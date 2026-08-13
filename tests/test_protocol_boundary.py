@@ -54,6 +54,13 @@ APBS_VOCABULARY = (
 VOCABULARY_MODULES = PROTOCOL_MODULES
 
 
+# The backends debye must not reach into. ROADMAP.md sections 10 and 12 both
+# say this file is what holds that line — it did not, until debye existed to be
+# held: every test above is parametrized over the four protocol modules alone,
+# so the claim was about a module nothing checked.
+SOLVER_PACKAGES = ("apbs", "delphi", "tabipb", "gb")
+
+
 def imports_of(path: Path) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text())):
@@ -104,4 +111,37 @@ def test_no_apbs_vocabulary_above_the_backend(module):
     assert not leaked, (
         f"{module} uses APBS vocabulary {leaked} as literal values. Everything above "
         "sashimi.apbs speaks physics, not APBS input keywords."
+    )
+
+
+@pytest.mark.parametrize("module", sorted(p.name for p in (SRC / "debye").glob("*.py")))
+def test_debye_does_not_reach_into_another_backend(module):
+    """The clean-room claim, enforced where it is cheapest to keep.
+
+    debye is in-repo (ROADMAP.md section 12), so `from sashimi.apbs.grid import
+    size_grid` would work, would look like reuse, and would quietly make the
+    reference solver a dependency of the solver being validated against it.
+    What debye may share is physics — `sashimi.analytic`, `sashimi.constants`,
+    the protocol set — and not another solver's arithmetic.
+    """
+    internal = {i for i in imports_of(SRC / "debye" / module) if i.startswith("sashimi")}
+    reached = {i for i in internal if i.split(".")[1] in SOLVER_PACKAGES}
+    assert not reached, (
+        f"debye/{module} imports {sorted(reached)}. debye is a clean-room solver: it may "
+        "share the protocol and the physics, never another backend's implementation."
+    )
+
+
+@pytest.mark.parametrize("module", sorted(p.name for p in (SRC / "debye").glob("*.py")))
+def test_debye_carries_no_apbs_vocabulary(module):
+    """Same rule as the protocol set, for the same reason, one layer down."""
+    text = (SRC / "debye" / module).read_text().lower()
+    code = "\n".join(
+        line.split("#")[0] for line in text.splitlines() if not line.strip().startswith("#")
+    )
+    leaked = [term for term in APBS_VOCABULARY if f'"{term}"' in code or f"'{term}'" in code]
+    assert not leaked, (
+        f"debye/{module} uses APBS vocabulary {leaked} as literal values. debye has its "
+        "own lattice and its own boundary condition; naming them after APBS's keywords "
+        "is how two solvers come to be assumed identical."
     )

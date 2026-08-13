@@ -1816,11 +1816,117 @@ closed form and the deviation while `verify_case` declines to judge it, and the
 reason travels with the case rather than living in a tolerance nobody can read as
 deliberate.
 
+### M1 — the solver exists ✅
+
+**Landed 2026-08-13.** `sashimi.debye` is ~900 lines of numpy across seven
+modules, no binary, no compiled extension, nothing to install. **The Born ion is
+0.853% from the closed form at 0.25 Å** against M1's 1% bar, and the error falls
+at every refinement: **3.836% / 1.576% / 0.853% / 0.479%** at 1.0 / 0.5 / 0.25 /
+0.125 Å. Both gate cases carry a `debye` entry in `per_backend_rtol` —
+`born-ion-vdw` at 0.032, twice its measurement, and `born-ion-vdw-fine` at
+**0.01, which is the milestone's number and not twice anything**, because a
+milestone tolerance derived from what the solver already does is a milestone that
+cannot be failed.
+
+What it discretizes: a finite-volume flux balance with the dielectric on the
+faces between nodes, cloud-in-cell charge assignment, multiple Debye-Hückel on
+the box face, and the Boltzmann term as a diagonal — written and tested at M1
+though every case that grades it is at zero salt, because a solver that only
+works without salt is not a Poisson-Boltzmann solver and would not say so.
+The energy is two solves differenced, solvated minus uniform-dielectric, which
+is APBS's construction and is why the reported term is `POLAR_SOLVATION`. The
+linear system is multigrid-preconditioned CG: V(2,2), red-black Gauss-Seidel,
+and each level's coefficients **re-discretized from the geometry** rather than
+coarsened algebraically, which `coarsen` licenses by preserving the box exactly.
+
+**debye and DelPhi C++ produce the same field, and that is the strongest result
+here.** Same Born case, same 105³ grid, sampled along four directions at three
+radii — every pair agrees to within 0.002 percentage points (+0.738% against
++0.736% on axis, −1.889% against −1.890% on the body diagonal). Two
+implementations sharing no code, one of them a C++ program from Clemson, landing
+on the same numbers is a much stronger statement than either being within 1% of
+a closed form. Note what it is *not*: on the **energy** DelPhi is 0.0006% where
+debye is 0.853%, because DelPhi reports a corrected reaction field rather than a
+grid self-energy difference. debye matches DelPhi's discretization and APBS's
+energy construction, and the two facts are independent.
+
+**Three findings, in descending order of how much they change the plan.**
+
+**1. The corpus's field check samples +x only, and which direction is worst
+depends on the backend.** Measured on `born-ion-vdw-fine` at k = 2:
+
+| direction | APBS (h=0.203) | DelPhi C++ (h=0.25) | debye (h=0.25) |
+|---|---|---|---|
+| +x, +y, +z | **+1.019%** | +0.736% | +0.738% |
+| ⟨110⟩ | −1.049% | −0.936% | −0.935% |
+| ⟨111⟩ | −0.674% | **−1.890%** | **−1.889%** |
+| worst | 1.049% | 1.890% | 1.889% |
+
+`_analytic_field_summary` builds its sample points as `centre + r·x̂`. For APBS
+that happens to be the worst direction and the recorded 1.019% is honest. For
+DelPhi it is the *best* one, and the recorded 0.736% understates its true worst
+by a factor of 2.6. This matters beyond bookkeeping: **M1b's 1% bar is justified
+in this document by "DelPhi C++ manages 0.75%, so the bar is achievable", and
+that 0.75% is an axis-only number.** No shipped solver clears 1% at k = 2 in the
+worst direction. The staircase error of a sphere on a Cartesian grid is not
+spherically symmetric, and a single ray cannot see that. The fix belongs to the
+corpus rather than to debye — sample the ⟨111⟩ and ⟨110⟩ directions too and
+re-measure all eight field tolerances for APBS and DelPhi — and it has to land
+**before M1b**, because grading a new solver on the most favourable ray is the
+shape §7 keeps finding. It is a corpus result change, so it gets its own step.
+
+**2. A restriction operator off by a constant still restricts, and every energy
+was right while it did.** debye's first working version had the textbook
+full-weighting stencil, which carries a half per axis because the textbook
+operator is a differenced Laplacian whose residual is pointwise. A finite-volume
+residual is an integral over a control volume and eight fine cells make one
+coarse cell, so the restriction must be exactly the transpose of prolongation.
+With the extra 1/8 every V-cycle applied an eighth of the coarse correction it
+should. **CG on top still converged, to energies identical in all four recorded
+decimals**; the only symptom was the cycle count climbing with the grid — 20, 33,
+55 against 8, 8, 9 — and a solve 6.8× slower. It was found by noticing that the
+*uniform-dielectric* solve, a plain Poisson problem, was taking 53 cycles. Two
+guards now hold it, and reinstating the bug reddens exactly those two while all
+thirty answer-comparison tests stay green: an exact-transpose identity, and an
+assertion that the iteration count does not grow with refinement. **The general
+form is worth carrying: when a defect is invisible in the answer, the assertion
+has to be on the mechanism, and "it converged to the right number" is not one.**
+
+**3. `test_protocol_boundary.py` did not hold the line §10 and §12 say it holds.**
+Both sections state it is what stops debye reaching into `sashimi.apbs` for a
+shortcut. Every test in it was parametrized over the four protocol modules, so
+the claim was about a module nothing checked — true the moment debye existed,
+and false until then in a way no run could reveal. It now covers every
+`sashimi/debye/*.py` for both rules, imports and APBS vocabulary.
+
+**Measured on real structures, because spheres are not where the bugs are.**
+ALA-GLY on `peptide-vdw` (20 atoms, 0.15 M salt, ε_p = 2, a non-cubic grid, and
+two atoms of radius 0.6 Å) is **0.409% from APBS**; barnase (1,730 atoms) is
+**1.10% from APBS** in 8.7 s. Both inside the 1.0–1.6% the reference families
+differ by. Speed at the gate case is **1.8 s against APBS's 3.5 s** on a 105³
+grid, which is not a performance claim — that is M7 — but does say the pure-Python
+solver is not in a different class.
+
+**Not registered in `sashimi.backends`, deliberately.** Registry integration is
+M5, and `test_every_backend_can_answer_the_default_surface_model` is what enforces
+the wait: every registered backend must answer `molecular`, which debye cannot
+until M4. Registering it earlier would make a defaulted `sashimi_solve` fail on
+an unremarkable request, and narrowing the default to accommodate a half-built
+backend is exactly the argument that guard exists to force.
+
+**One caveat to carry into M3.** debye takes κ from `sashimi.analytic`'s
+`debye_length_a`, which is also what the screened Born closed form uses. That is
+the right kind of reuse — one place for the physics — but it means a corpus check
+of debye's screening against that closed form would share a definition and be
+partly circular. Cross-backend agreement with APBS, whose κ is computed inside
+its own C, is the check that is not.
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
-| M1 | LPBE on a Cartesian grid, vdW surface | Born ion within 1% at 0.25 Å, converging monotonically under refinement — as a *per-backend* tolerance, since the shared one is 5% |
-| M1b | **The field, not just the energy** | Born φ within 1% on the corpus's `a + k·h` samples. DelPhi C++ manages 0.75% on both surfaces, so the bar is achievable; APBS is 0.87% on `molecular` and **1.04% on `van-der-waals`**, so it sits above one reference solver on the surface M1 climbs — deliberately. Never sampled *on* the interface: that is ~100% wrong for every shipped solver and is not debye's to fix |
+| M1 ✅ | LPBE on a Cartesian grid, vdW surface | **met**: 0.853% at 0.25 Å against a 1% per-backend tolerance, falling monotonically 3.836 → 1.576 → 0.853 → 0.479% under refinement |
+| M1a | **The field check has to see more than one ray** | before M1b can mean anything: `_analytic_field_summary` samples +x only, and ⟨111⟩ is 2.6× worse for DelPhi and debye while +x is the worst ray for APBS. Sample the diagonals, re-measure all eight field tolerances for APBS and DelPhi C++, and record it as the result change it is |
+| M1b | **The field, not just the energy** | Born φ within 1% on the corpus's `a + k·h` samples, **in every sampled direction**. The old justification — "DelPhi manages 0.75%, so 1% is achievable" — was an axis-only measurement; DelPhi's worst is 1.890% and APBS's 1.049%, so **no shipped solver clears 1% at k = 2** and the bar has to be re-argued against M1a's numbers rather than quietly widened. Never sampled *on* the interface: that is ~100% wrong for every shipped solver and is not debye's to fix |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
