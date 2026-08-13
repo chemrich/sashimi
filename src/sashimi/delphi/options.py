@@ -27,10 +27,12 @@ surface behaving correctly, not evidence that it is something else.
 
 Two consequences:
 
-- `SMOOTHED_MOLECULAR` — harmonic dielectric averaging, and sashimi's *default*
-  — is APBS-only. A DelPhi solve at defaults therefore raises
-  `UnsupportedRequest` rather than quietly substituting `MOLECULAR`, which
-  would move a dipeptide's energy by more than 2,000x the corpus tolerance.
+- `SMOOTHED_MOLECULAR` — harmonic dielectric averaging — is APBS-only, so a
+  DelPhi solve that asks for it raises `UnsupportedRequest` rather than quietly
+  substituting `MOLECULAR`, which would move a dipeptide's energy by more than
+  2,000x the corpus tolerance. It was sashimi's default until 2026-08-13, which
+  made *every* defaulted DelPhi solve refuse; the default is now `MOLECULAR`,
+  the one model on this table that every backend can answer.
 - `VAN_DER_WAALS` is the probe-free union of atomic spheres, which pyDelPhi
   cannot currently deliver: `prbrad=0` is the natural limit of its own `vdw`
   method and aborts it with a numba `TypingError`, in 0.2.0 and 0.3.0 alike.

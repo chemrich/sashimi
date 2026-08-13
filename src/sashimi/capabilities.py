@@ -154,9 +154,10 @@ def validate_request(
 
     `backend` is checked for two things a caller can only otherwise discover by
     running it: whether it is installed, and whether it supports the surface
-    model asked for. That second one is the common failure now that a backend
-    can be chosen — three of the four refuse `smoothed-molecular`, and the
-    refusal arrives after the structure has been prepared.
+    model asked for. That second one is where a chosen backend refuses — three
+    of the four decline `smoothed-molecular`, and the refusal arrives after the
+    structure has been prepared. The default no longer walks into it: it is
+    `molecular`, which every backend supports.
 
     The cost estimate is the **chosen backend's own arithmetic**, not a
     finite-difference estimate applied to everyone. Two FD backends do not agree

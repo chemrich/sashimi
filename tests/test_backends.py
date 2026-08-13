@@ -17,7 +17,7 @@ import pytest
 from sashimi import backends
 from sashimi.cli import BACKEND_NAMES
 from sashimi.errors import InputError
-from sashimi.protocol import AccuracyTier, SolverFamily
+from sashimi.protocol import AccuracyTier, SolventModel, SolverFamily
 
 EXPECTED = ("apbs", "delphi", "tabipb", "gb")
 
@@ -70,6 +70,25 @@ def test_the_in_process_backend_is_always_available():
     reason `available_names()` is never empty, however bare the machine.
     """
     assert "gb" in backends.available_names()
+
+
+def test_every_backend_can_answer_the_default_surface_model():
+    """What the default is *for*, and the property it was chosen to have.
+
+    `smoothed-molecular` was the default until 2026-08-13 and is APBS's harmonic
+    averaging alone, so a request that named no surface refused on three
+    backends out of four — including `gb`, the tier that needs no binary and is
+    the only one guaranteed to be there. `molecular` is the one boundary every
+    shipped backend defines, and this is where a fifth backend that cannot
+    answer on it has to argue the case rather than quietly narrow the default.
+
+    Declared support, not availability: `surface_models` is reported whether or
+    not the binary is installed, so this runs on a bare machine and cannot skip.
+    """
+    default = SolventModel().surface_model.value
+
+    unsupported = [r.name for r in backends.reports() if default not in r.surface_models]
+    assert unsupported == [], f"{unsupported} cannot answer the default {default!r}"
 
 
 def test_only_the_approximate_tier_says_it_approximates():

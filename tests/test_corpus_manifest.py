@@ -8,6 +8,7 @@ rather than merely obeying themselves.
 
 from __future__ import annotations
 
+import ast
 import itertools
 from pathlib import Path
 from typing import Any
@@ -149,6 +150,36 @@ def test_no_two_cases_ask_the_same_question():
         key = (case.source, case.solvent, case.grid, case.compute_energy)
         assert key not in seen, f"{case.name} is identical to {seen.get(key)}"
         seen[key] = case.name
+
+
+def test_every_case_names_its_surface_model_rather_than_inheriting_one():
+    """The default is sashimi's to change; what a case asks is not.
+
+    Forty-two cases took `smoothed-molecular` from `SolventModel`'s dataclass
+    default, so moving that default to `molecular` would have silently rewritten
+    the question each one asks — and the recordings would have gone red with
+    nothing to say which side was wrong. Reading the source is the only way to
+    see this: at runtime an inherited value and a stated one are the same value.
+    """
+    source = Path("src/sashimi/corpus.py")
+    manifest = next(
+        node.value
+        for node in ast.walk(ast.parse(source.read_text()))
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "MANIFEST"
+    )
+    assert isinstance(manifest, ast.Tuple)
+    assert len(manifest.elts) == len(MANIFEST)
+
+    inherited = []
+    for element in manifest.elts:
+        assert isinstance(element, ast.Call)
+        name = next(k.value.value for k in element.keywords if k.arg == "name")  # type: ignore[attr-defined]
+        solvent = next(k.value for k in element.keywords if k.arg == "solvent")
+        assert isinstance(solvent, ast.Call), f"{name} builds its solvent indirectly"
+        if not any(k.arg == "surface_model" for k in solvent.keywords):
+            inherited.append(name)
+
+    assert inherited == [], f"cases inheriting the surface default: {inherited}"
 
 
 def test_salt_makes_a_real_solute_more_favourably_solvated():

@@ -137,7 +137,7 @@ def test_energy_only_request_skips_the_map(binary, ion):
 
 
 def test_unsupported_surface_is_refused_before_running(binary, ion):
-    """The default surface model is APBS-only, and no flavour may fake it."""
+    """`smoothed-molecular` is APBS-only, and no flavour may fake it."""
     request = FiniteDifferenceRequest(
         structure=ion,
         solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),

@@ -227,7 +227,7 @@ def test_impossible_point_budget_raises(peptide):
 
 
 def test_smoothed_molecular_is_refused_by_both_flavours():
-    """sashimi's default surface is APBS-only; substituting would be a 25% error."""
+    """`smoothed-molecular` is APBS-only; substituting would be a 25% error."""
     for flavour in FLAVOURS:
         with pytest.raises(UnsupportedRequest, match="smoothed-molecular"):
             resolve_surface(SurfaceModel.SMOOTHED_MOLECULAR, 1.4, flavour)

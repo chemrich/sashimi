@@ -485,6 +485,31 @@ class TestBackendSelection:
         assert "grid" not in result
         assert "no field" in result["summary"]
 
+    async def test_a_defaulted_solve_reaches_the_backend_that_needs_no_binary(
+        self, client, tmp_path
+    ):
+        """The exit criterion for moving the default to `molecular`.
+
+        Naming no surface used to mean `smoothed-molecular`, which `gb` does not
+        have — so the simplest request an agent can make refused on the one
+        backend guaranteed to be installed. Nothing here names a surface, which
+        is the entire point of the test; it asserts what the solve resolved to
+        rather than trusting that it ran.
+        """
+        result = payload(
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "compute_energy": True,
+                },
+            )
+        )
+
+        assert result["energy_kj_mol"] < 0
+        assert result["resolved_parameters"]["surface_model"] == "molecular"
+
     async def test_asking_the_energy_only_backend_for_no_energy_is_refused(self, client, tmp_path):
         """It computes one number. Not wanting it is a request for nothing."""
         with pytest.raises(ToolError, match="asks it for nothing"):
@@ -510,14 +535,21 @@ class TestBackendSelection:
     ):
         """The pre-flight an agent needs now that it has a choice to get wrong.
 
-        `smoothed-molecular` is the default and three of the four backends
-        refuse it, so this is the common failure — and free to discover here
-        rather than after a structure has been prepared and a solve started.
+        `smoothed-molecular` has to be *asked for* to reach this: it was the
+        default until 2026-08-13, which made the refusal arrive unbidden on
+        three backends out of four. The model is named here rather than
+        inherited, so this keeps testing the pre-flight instead of the default —
+        it is free to discover here and expensive after a structure has been
+        prepared and a solve started.
         """
         report = payload(
             await client.call_tool(
                 "sashimi_validate_inputs",
-                {"pqr_path": str(self.peptide(tmp_path)), "backend": "gb"},
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "surface_model": "smoothed-molecular",
+                },
             )
         )
 

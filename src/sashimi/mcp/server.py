@@ -178,10 +178,12 @@ def sashimi_solve(
                 "Dielectric boundary definition. This is the single largest modelling "
                 "choice in the calculation \u2014 it moves solvation energies by tens of "
                 "percent \u2014 so it is recorded with every result. One of: "
-                "molecular, smoothed-molecular, van-der-waals."
+                "molecular, smoothed-molecular, van-der-waals. The default, "
+                "molecular, is the only one every backend can answer on; "
+                "smoothed-molecular is APBS's alone."
             )
         ),
-    ] = "smoothed-molecular",
+    ] = "molecular",
     backend: Annotated[
         str,
         Field(
@@ -625,7 +627,7 @@ def sashimi_validate_inputs(
     ] = 10.0,
     surface_model: Annotated[
         str, Field(description="Dielectric boundary definition, as for sashimi_solve.")
-    ] = "smoothed-molecular",
+    ] = "molecular",
     max_points: Annotated[
         int | None,
         Field(description="Grid point budget. Omit for the default guardrail.", gt=0),
@@ -645,10 +647,11 @@ def sashimi_validate_inputs(
     knowable in milliseconds — worth asking first when a solve can take a minute
     and write tens of megabytes.
 
-    Check the `backend` you actually intend to run. The common failure now that
-    one can be chosen is a surface model it does not support — three of the four
-    refuse `smoothed-molecular` — and that refusal is free here and expensive
-    after a structure has been prepared. The cost estimate is a grid one, so for
+    Check the `backend` you actually intend to run. The likeliest refusal is a
+    surface model it does not support: the default `molecular` is the one every
+    backend answers on, but three of the four refuse an explicit
+    `smoothed-molecular`, and that refusal is free here and expensive after a
+    structure has been prepared. The cost estimate is a grid one, so for
     a boundary-element or analytic backend it is omitted rather than invented,
     and the report says what governs cost instead.
 

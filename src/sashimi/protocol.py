@@ -203,12 +203,23 @@ class GridSpec:
 
 @dataclass(frozen=True)
 class SolventModel:
+    """The physics a solve is asked for, in terms no backend owns.
+
+    `surface_model` defaults to `MOLECULAR` because it is the only boundary
+    every shipped backend can answer on: `SMOOTHED_MOLECULAR` is APBS's
+    harmonic averaging alone, so while it was the default a defaulted request
+    refused on three backends out of four — and the one that needs no binary,
+    the only tier guaranteed to be present, was among them. The switch is not
+    free and the corpus measures what it costs: 0.80% on ALA-GLY and 2.35% on
+    hen lysozyme, against the 25.7% a surface model is worth (ROADMAP.md §5).
+    """
+
     solvent_dielectric: float = 78.54
     solute_dielectric: float = 2.0
     ionic_strength: float = 0.150  # M, 1:1 salt
     ion_radius: float = 2.0  # A
     temperature: float = 298.15  # K
-    surface_model: SurfaceModel = SurfaceModel.SMOOTHED_MOLECULAR
+    surface_model: SurfaceModel = SurfaceModel.MOLECULAR
     surface_radius: float = 1.4  # solvent probe, A
 
     def __post_init__(self) -> None:

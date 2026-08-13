@@ -196,10 +196,10 @@ that is the most useful thing a second backend does. `sashimi_capabilities`
 reports which models the installed backends actually share, because a spread
 computed across mismatched surface definitions is a modelling difference
 misreported as a solver disagreement. All four shipped backends share
-`molecular`; `smoothed-molecular` — sashimi's default — is APBS-only, so a
-DelPhi solve at defaults refuses rather than silently substituting, and
-`van-der-waals` is APBS and DelPhi only. On the models they share, APBS and
-DelPhi agree to 2.4% on hen lysozyme.
+`molecular`, which is why it is the default; `smoothed-molecular` is APBS-only,
+so a solve that asks for it refuses on the other three rather than silently
+substituting, and `van-der-waals` is APBS and DelPhi only. On the models they
+share, APBS and DelPhi agree to 2.4% on hen lysozyme.
 
 See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
