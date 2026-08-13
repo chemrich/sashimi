@@ -865,7 +865,17 @@ the packaging problems sashimi routes around.
 4. **Portability as a test**: full suite passes natively on osx-arm64,
    linux-aarch64 and linux-64 — the thing no incumbent can do.
 
-**Handoff.** debye ships as a separate repo implementing `sashimi.protocol`'s
+**Handoff. Superseded 2026-08-13: debye starts in-repo as `sashimi.debye`**, at
+Charlie's direction, and the extraction below happens when something other than
+sashimi wants the types. The cycle argument two paragraphs down is still correct
+and is simply not yet load-bearing — it bites at packaging time, and there are no
+external consumers. Everything else here stands, including the ladder above and
+the boundary test, which matters *more* under this decision: debye is the first
+module that would want to reach into `sashimi.apbs` for a shortcut. §12's "run-up
+to debye" carries the current plan; what follows is the original, kept because
+the extraction is deferred rather than cancelled.
+
+debye was to ship as a separate repo implementing `sashimi.protocol`'s
 solver interface. Per §14 the types **graduate to a shared `pb-protocol`
 package when debye starts**, not before: `{protocol, dx, pqr, errors}` is
 already a closed set depending only on numpy, and `tests/test_protocol_boundary.py`
@@ -1479,10 +1489,21 @@ is what caught it, one push after being built. *Exit criterion, met:*
 `SolventModel()` is molecular, the corpus is bit-identical across the change,
 and a defaulted `sashimi_solve` reaches every backend rather than one.
 
-**2. Cross-flavour agreement, instead of pyDelPhi recordings.** A `delphi`-marked
-test solving three or four cheap shared cases through both flavours and
-asserting agreement within **0.5%** — the measured band is 0.047–0.426%. Gated
-on both being discoverable, so it runs on CI's Linux leg and skips elsewhere.
+**2. Cross-flavour agreement — deferred 2026-08-13, at Charlie's direction.**
+**The C++ flavour is the touchstone until further notice**, and pyDelPhi is not
+on the path to debye. Nothing below depends on it, and the reasoning that
+produced it is kept because it will be right again when the flavour comes back:
+a `delphi`-marked test solving three or four cheap shared cases through both
+flavours and asserting agreement within **0.5%** — the measured band is
+0.047–0.426% — gated on both being discoverable, so it runs on CI's Linux leg
+and skips elsewhere.
+
+Two practical consequences of naming C++ the touchstone. It is the flavour with
+`VAN_DER_WAALS` (`prbrad 0`), which is the surface debye climbs first, so the
+one backend that can grade M1 at all is the one now designated. And it is the
+sharper of the two against the closed forms by a wide margin — see the table
+below — so "graded against DelPhi C++" is a stronger statement than "graded
+against a second opinion".
 
 *This reverses an earlier recommendation, and the reasoning matters more than the
 conclusion.* A `tests/corpus/pydelphi/` was the obvious move: the pyDelPhi path
@@ -1497,28 +1518,151 @@ recordings would lack. The relationship *between the flavours* is the invariant
 worth holding, it catches any drift in our input generation more directly, and
 it costs four cases instead of nineteen files.
 
-**3. debye.** Two decisions to take before any code, both of which contradict or
-sharpen what this document already says:
+**3. debye.** Both decisions are now taken.
 
-- **In-repo `sashimi.debye`, or the separate repo §10 specifies?** §10 chose
-  separate, extracting `pb-protocol` at that moment (§14 Q5), on the argument
-  that otherwise debye depends on sashimi while `sashimi[debye]` depends on
-  debye. That cycle only bites at *packaging* time, and there are no external
-  consumers yet — while the corpus, the registry and the protocol all live here,
-  so every day in-repo is a day of faster iteration. Recommendation: start
-  in-repo, extract when something other than sashimi wants it. **Contradicts a
-  recorded decision, so it needs an explicit call rather than drift.**
-- **Which surface first.** The corpus's shared cases are `molecular`, but the
-  analytic rungs — Born, Kirkwood — need only a union of spheres, which is
-  trivial to build. So climb the ladder on van der Waals and build the
-  solvent-excluded surface before the corpus gate. That construction is the
-  hardest single piece and sits on the critical path; knowing so at the start is
-  worth more than discovering it at M4.
+- **In-repo `sashimi.debye`. Decided 2026-08-13 by Charlie, overriding §10 and
+  §14 Q5**, which chose a separate repo with `pb-protocol` extracted at that
+  moment. The cycle they were avoiding — debye depends on sashimi while
+  `sashimi[debye]` depends on debye — only bites at *packaging* time, and there
+  are no external consumers yet, while the corpus, the registry and the protocol
+  all live here. Extract when something other than sashimi wants it.
+  `tests/test_protocol_boundary.py` is what keeps that extraction mechanical, and
+  it becomes more load-bearing under this decision rather than less: debye is the
+  first module that would *want* to reach into `sashimi.apbs` for a shortcut, and
+  the layering test is the thing that says no.
+- **Climb the ladder on van der Waals**, and build the solvent-excluded surface
+  before the corpus gate. The analytic rungs — Born, Kirkwood — need only a union
+  of spheres; the SES construction is the hardest single piece and sits on the
+  critical path, so knowing that at the start is worth more than discovering it
+  at M4.
+
+### Closing the closed-form gap, before M1
+
+**Measured 2026-08-13, and it is why this step exists.** Of the corpus's 18
+closed-form cases, **15 are on `smoothed-molecular`** — APBS's harmonic
+averaging, which debye has no reason to implement and which sashimi has just
+moved its default away from. Only `born-ion-molecular`, `born-ion-molecular-eps2`
+and `born-ion-vdw` sit on a boundary debye builds early, and **all four Kirkwood
+cases are `smoothed-molecular`**, so M2 as written cannot be met by a solver that
+does not implement APBS's smoothing. Cases a sharp-boundary solver could verify
+against today: **fast 8 of 25, standard 13 of 49, full 22 of 64.**
+
+The closed form itself is surface-independent for a sphere — the boundary is the
+same sphere either way — so the physics transfers. What does not transfer is the
+per-case `rtol`, every one of which was measured against APBS at `smol`.
+
+**What the sharp boundary actually costs, measured.** Born ion, *q* = +1e,
+*a* = 3 Å, ε_p = 1, exact −228.6108 kJ/mol; padding 10 Å; achieved spacing in
+parentheses, because the `max_points` guardrail relaxes a 0.125 Å request to
+0.1625 Å and a convergence pair built from *requested* spacing would be measuring
+nothing:
+
+| requested | APBS `molecular` | APBS `van-der-waals` | DelPhi C++ |
+|---|---|---|---|
+| 0.5 Å (0.406) | 2.3572% | 2.3572% | 0.0006% |
+| 0.25 Å (0.203) | 0.6212% | 0.7866% | 0.0006% |
+| 0.125 Å (0.163, capped) | 0.3606% | 0.4802% | 0.0006% |
+| 0.125 Å (0.116, cap raised) | 0.3020% | — | — |
+
+Two things fall out of that table, and both change the plan.
+
+**APBS on a sharp boundary is roughly four times worse than on `smol`** — 2.36%
+against 0.62% for the same ion at the same nominal spacing — because `smol`'s
+harmonic averaging *is* APBS's discretization-error reduction. DelPhi C++ is
+0.0006% and does not move with the grid, which is the corrected reaction field
+being a different quantity from a grid self-energy rather than a better one.
+Confirmed against its resolved parameters: `gsize` 53 → 105 → 159 and `scale`
+2.0 → 4.0 → 6.08, so the resolution is genuinely reaching it and the answer
+genuinely does not depend on it.
+
+**One `rtol` per case is shared by every backend that runs it**, and
+`_verify_analytic` applies it without asking which backend produced the answer.
+So the tolerance is set by the *worst* backend on that case: `born-ion-molecular`
+carries `rtol=0.05` because APBS needs it, which means **a debye that is 4% wrong
+would pass a milestone whose stated criterion is 1%.** That is a check that
+cannot fail, in the exact sense §7 keeps finding. Two fixes, and this plan takes
+both:
+
+- Put the gate cases at **0.25 Å**, where APBS is 0.62–0.90% rather than
+  2.4–4.8%, so the shared tolerance can be tight enough to mean something.
+- Give `AnalyticReference` an optional **per-backend tolerance**, so the corpus
+  tolerance stays "does any backend disagree with physics grossly" while debye is
+  held to the number its milestone names. Additive to a frozen dataclass, and
+  recorded in the summary next to `rtol` so a reader sees which one applied.
+
+**Kirkwood, measured on the sharp boundary.** *a* = 3 Å, ε_p = 1:
+
+| case | exact | APBS 0.5 / 0.25 / 0.125 | DelPhi 0.5 / 0.25 / 0.125 |
+|---|---|---|---|
+| d/a = 0.5 | −304.2867 | 4.73% / 0.90% / 0.84% | 0.15% / 0.21% / 0.14% |
+| d/a = 0.9 | −1193.9551 | 6.40% / 9.85% / 9.05% | 26.67% / 4.29% / 7.50% |
+
+**d/a = 0.9 is not a usable gate and must not become one.** Both codes get
+*worse* under refinement, non-monotonically, and disagree with each other by up
+to 22 points — the charge sits 0.3 Å inside the boundary and the near-interface
+self-energy is what the grid cannot resolve. It is worth *recording*, in the way
+`born-ion-r1-coarse` records 5.1% and says so; it is not worth gating a new
+solver on a number no existing solver reproduces. M2's rungs are d/a ∈
+{0.3, 0.5, 0.7}.
+
+**Which backends can record these at all.** TABI-PB **cannot**: NanoShaper needs
+at least four atoms and the sphere geometries are one and two. GB can run the
+Born cases (3.09% from exact, inside its documented approximate band) and **must
+never record the Kirkwood ones** — it returns −873.54 against −304.29, **187%
+out**, because Kirkwood's charge-bearing atom has *zero radius* and anything that
+divides by radius is undefined there. That is the third appearance of "pdb2pqr's
+radii are not GB radii", and the corpus should encode the exclusion rather than
+rediscover it.
+
+**The cases to add**, all on sharp boundaries, all named explicitly per the
+manifest rule:
+
+| arm | cases | why |
+|---|---|---|
+| Born radius | *a* ∈ {1, 2, 4, 6} on `molecular` | the functional form has to agree, not one point |
+| Born charge | −1e, +2e on `molecular` | q² scaling, and the sign path |
+| Born dielectric | ε_p = 4 on `molecular` (ε_p = 2 exists) | the 1/ε_p − 1/ε_s arm |
+| Born convergence | `molecular` and `van-der-waals` at 0.25 Å | M1's *monotonic* claim needs a pair per surface |
+| Kirkwood | d/a ∈ {0.3, 0.5, 0.7} on `molecular` at 0.25 Å | M2's rungs |
+| Kirkwood, recorded not gated | d/a = 0.9 on `molecular` | documents where it gives up |
+| Kirkwood probe check | d/a = 0.5 on `van-der-waals` | the off-centre analogue of the lone-sphere pair |
+| Salt | *I* ∈ {0.15, 0.5} on `molecular` | M3, and no closed form, for the reason `born-ion-salt` states |
+
+Roughly 15 cases. Cost, from the pilot: a sphere is ~0.4 s of APBS at 0.5 Å and
+~3.5 s at 0.25 Å, plus ~0.3 s of DelPhi, so the addition is **~45 s of APBS and
+~5 s of DelPhi** — assigned to tiers from measured cost, as §7 requires, with the
+0.5 Å cases landing in `fast` and the 0.25 Å ones in `standard`.
+
+**One existing test has to be revisited, and it is a genuine finding rather than
+a chore.** `test_a_lone_sphere_has_the_same_molecular_and_van_der_waals_boundary`
+asserts `born-ion-molecular` and `born-ion-vdw` agree *exactly*, on the sound
+argument that a probe cannot carve a re-entrant surface out of one sphere. That
+is true of the physics and true of the recordings at 0.5 Å — and **false at
+0.25 Å**, where APBS gives 0.6212% and 0.7866% for the same boundary, because
+`srad 0` and `srad 1.4` build different dielectric maps before they describe the
+same surface. The exact-equality assertion is a coarse-grid coincidence. It
+should keep its exact form at 0.5 Å and gain a fine pair that states the
+numerical truth instead of extending the coincidence.
+
+**The guard this step owes.** The gap was invisible because nothing asserted the
+closed-form set spans more than one surface model — 15 of 18 on a single
+APBS-only boundary passed every check the corpus has. A test that the Born *and*
+Kirkwood families are each represented on a boundary every backend can build is
+what would have caught it, and it is what stops the next widening drifting back.
+
+*Exit criterion:* the Born and Kirkwood families each have closed-form cases on
+`molecular` and `van-der-waals` with per-case tolerances measured on this
+hardware; APBS and DelPhi C++ have recorded every one; GB has recorded the Born
+cases and is documented as excluded from Kirkwood; `AnalyticReference` can hold a
+per-backend tolerance and does for the M1/M2 gate cases; and the number of cases
+a sharp-boundary solver can be verified against goes from 22 of 64 to ~37 of ~79,
+with the fast tier from 8 to ~14.
 
 | | milestone | exit criterion |
 |---|---|---|
-| M1 | LPBE on a Cartesian grid, vdW surface | Born ion within 1% at 0.25 Å, converging monotonically under refinement |
-| M2 | Off-centre charge | the Kirkwood cases within their measured per-case tolerances |
+| M0 | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against |
+| M1 | LPBE on a Cartesian grid, vdW surface | Born ion within 1% at 0.25 Å, converging monotonically under refinement — as a *per-backend* tolerance, since the shared one is 5% |
+| M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
 | M5 | Registry integration | `sashimi corpus verify --backend debye --tier fast` passes |
@@ -1638,7 +1782,7 @@ summarised here.
 | 2 | Normalize or expose surface definition? | **Curated solver-neutral enum**, native values behind per-backend options, resolved values in provenance, and `validate` refuses to compare across mismatched surface models |
 | 3 | Volumetric payloads over MCP? | **Never inline.** Content-addressed paths now with a cleanup contract; MCP Resources when a non-local transport exists; derived queries pulled forward to phase 5 |
 | 4 | Does `validate` belong in core? | **Core, unified with the corpus** — one engine, two reference kinds. Backends as optional extras |
-| 5 | Does the protocol graduate to `pb-protocol`? | **At debye, not before.** The seam is a closed set today and is guarded by a test so extraction stays mechanical |
+| 5 | Does the protocol graduate to `pb-protocol`? | ~~At debye, not before.~~ **Superseded 2026-08-13: debye starts in-repo as `sashimi.debye`**, so extraction waits for a consumer other than sashimi. The seam is still a closed set guarded by a test, which is what keeps the deferral cheap — see §10 and §12 |
 
 ### Still open
 
