@@ -569,6 +569,44 @@ as well, and `acetate-molecular` at eight atoms does not finish inside its own
 recording nothing, and the way to widen it was more molecular-surface cases
 rather than more machinery — which is what the next section did.
 
+### What the flavours agree to, and what a recording can hold
+
+Building `tests/corpus/delphi/` from the C++ build raised a question the
+project could not answer by inspection: a recording is only useful if CI can
+verify it, and CI verifies on whichever DelPhi its runner has. Two unknowns,
+both measured on 2026-08-12 by having the Linux leg — which carries both
+flavours since macOS came off the per-push path — check the same nineteen
+recordings.
+
+**A C++ recording is portable across architectures.** All 19 cases recorded on
+osx-arm64 reproduce against a linux-64 build of the same Clemson tarball, at
+full corpus tolerance: 1e-4 on energies, 1e-3 on potential statistics, and all
+fifty interpolated probes per case. That is a stronger statement than the "to
+the last printed digit" this document previously rested on, and it is direct
+evidence for §10's fourth validation rung — portability as a test — and for the
+standing claim that a build from that tarball is a reproducible artifact rather
+than a local accident.
+
+**pyDelPhi cannot verify them**, failing 15 of 19: energies 0.047% to 0.426%
+out, the Born ion's potential minimum 2.5%, grid origins differing in their last
+digits. That is not a wrong answer — 0.4% is far tighter than the 2.3% between
+DelPhi and APBS, and it is the ordinary distance between two implementations of
+one iterative method. It is 4,000× the tolerance a *recording* is held to, which
+is a different question from whether a backend is correct.
+
+So the corpus holds one C++ recording set, the re-solve test gates on the
+flavour exactly as the charge-echo guard does, and pyDelPhi keeps the
+behavioural tier it already had. The alternative — a per-backend tolerance loose
+enough to admit both — would have to be near 0.5%, fifty times the corpus's, and
+wide enough to hide the regressions the corpus exists to catch. The flavours
+remain interchangeable as *backends*; they are not interchangeable as *sources
+of a recorded number*.
+
+Split by measured cost like every other tier here: 11 cases per push (7.2 s),
+8 protein-scale on demand (83 s). DelPhi's cost is its cubic grid, which follows
+the bounding box rather than the solute — `fas2-molecular` is 906 atoms and
+takes 11.5 s where `lysozyme-molecular` is 1,960 and takes 5.8 s.
+
 ### Widening the shared set
 
 Fourteen molecular-surface cases, no new machinery and no new structures: each
@@ -581,6 +619,7 @@ the charge at protein scale.
 | tier | cases | before | after |
 |---|---|---|---|
 | Reference, finite difference (APBS) | 64 | 50 | 64 |
+| Reference, finite difference (DelPhi, C++) | 19 | 0 | 19 |
 | Reference, boundary element (TABI-PB) | 6 | 1 | 6 |
 | Approximate, analytic (Generalized Born) | 19 | 5 | 19 |
 
@@ -633,6 +672,41 @@ other way on AMBER-like input, where `AS_GIVEN` reaches 55% and can return a
 *positive* solvation energy. Neither setting is universally right; mbondi is
 right for what `sashimi_prepare_structure` produces, which is why it stays the
 default. Six corpus cases could not have shown this and twenty-four did.
+
+### The PQR a fixed-column reader sees
+
+Recording the DelPhi tier found a defect in `sashimi.pqr.format_pqr` that had
+been shipping since phase 4, in the module set §10 calls the most stable thing
+in the project.
+
+It wrote **minimum-width** fields, so a four-character residue name — `TARG` in
+the APBS example set, `MEOH` in another — pushed every field after it one column
+right. sashimi's own reader splits on whitespace and APBS's is lenient, so both
+round-tripped it perfectly. **DelPhi reads fixed columns.** It parsed acetate as
+two charged atoms carrying +80.84 e where the file says seven and -1, and
+returned **-865,205 kJ/mol against APBS's -196.90** — and the *identical* value
+for acetic acid, which is a different molecule. Two structures, one answer, to
+six decimals.
+
+Invisible for a year because DelPhi had only ever been run on the Born ion and
+ALA-GLY: residues `ION`, `ALA`, `GLY`, all three characters. Three of the
+nineteen shared corpus cases were affected the moment the tier was recorded.
+
+Two fixes, and the second matters more:
+
+- The fields are exact widths now, truncating names rather than overflowing.
+  Names that fit render byte-identically, which is why all 64 recorded APBS
+  cases reproduce unchanged.
+- **The backend checks DelPhi's own echo of what it read** — net charge and
+  charged-atom count — against the structure, and refuses rather than solving.
+  DelPhi printed a warning the whole time and nothing read it. This is the
+  structural-output verification §13 already applies to APBS, which likewise
+  exits 0 on failure.
+
+The lesson worth keeping: every test of the writer round-tripped it through a
+reader that splits on whitespace, so none of them could see a column. Round
+-tripping was necessary and never sufficient, and the only thing that found this
+was handing the file to a stricter consumer.
 
 **Test partitioning by architecture.** Protocol-layer tests are pure Python and
 run natively everywhere. Subprocess integration tests are gated behind
@@ -1011,7 +1085,8 @@ rather than an error, and none was reachable from the APBS side:
   contribution by construction. The gap is definitional, not numerical, and
   diagnostics name the term. *This bullet first claimed three definitions rather
   than two, on a measurement comparing pyDelPhi's Gaussian path against the C++
-  build's molecular one; on the same surface model the flavours agree exactly.*
+  build's molecular one; on the same surface model the flavours agree to within
+  0.4%, which at printed precision looked exact.*
 
 **The surface-model mapping table** (§14's last open design question) is
 resolved:
@@ -1027,8 +1102,11 @@ The pyDelPhi row cost a wrong answer before it was right, and the mistake is
 worth recording. `surfmethod=vdw` was read as naming the *surface*; it names the
 **construction** — roll a probe over van der Waals spheres, the algorithm its
 `vdwms` module is named for. With a probe it is the molecular surface, and it
-reproduces the C++ build's `molecular` result exactly: −84.33 kT on ALA-GLY and
-−92.22 kT on the Born ion, identical on matched grids. Its probe-dependence
+reproduces the C++ build's `molecular` result: −84.33 kT on ALA-GLY and
+−92.22 kT on the Born ion, identical on matched grids **to the two decimals
+DelPhi prints**, which is as far as that comparison could see. Recording the
+corpus measured it properly and it is not exact — see "What the flavours agree
+to" below. Its probe-dependence
 (−84.33 at 1.4 Å against −86.88 at 0.5 Å), first read as proof it was *not* the
 molecular surface, is that surface behaving correctly.
 

@@ -71,11 +71,24 @@ def read_pqr(path: str | os.PathLike[str]) -> PQRData:
 
 
 def format_pqr(pqr: PQRData) -> str:
-    """Render a PQR APBS accepts.
+    """Render a PQR in **fixed columns**, which is not the same as readable.
 
     Atom and residue names come from `labels` when present; the fallback names
     are inert placeholders, since nothing downstream of the solver reads them —
     only coordinates, charges, and radii affect the calculation.
+
+    The name fields are truncated to their column widths rather than allowed to
+    overflow, and that is load-bearing. They used to be minimum widths, so a
+    four-character residue name — `TARG` in the APBS example set, `MEOH` in
+    another — pushed every field after it one column to the right. sashimi's own
+    reader splits on whitespace and APBS's is lenient, so both round-tripped it
+    without complaint. DelPhi reads fixed columns: it parsed acetate as two
+    charged atoms carrying +80.84 e where the file says eight and -1, and
+    returned -865,205 kJ/mol against APBS's -196.90. Silently, for a year, on
+    any structure whose residue name did not happen to be three characters.
+
+    Truncation loses a character of a name nothing reads. Overflow loses the
+    charges and radii, which are the only things that matter.
     """
     lines = []
     for i in range(pqr.n_atoms):
@@ -87,7 +100,11 @@ def format_pqr(pqr: PQRData) -> str:
             res_name, res_seq, atom_name = "UNK", str(i + 1), "X"
         x, y, z = pqr.coords[i]
         lines.append(
-            f"ATOM  {i + 1:5d} {atom_name:>4s} {res_name:>3s} {res_seq:>5s}    "
+            # Widths are exact, not minimum: `.4s` truncates as well as pads.
+            # Names shorter than their field render byte-identically to the
+            # previous minimum-width form, which is why no recorded corpus
+            # number moves.
+            f"ATOM  {i + 1:5d} {atom_name:>4.4s} {res_name:<4.4s}{res_seq:>5s}    "
             f"{x:8.3f}{y:8.3f}{z:8.3f} {pqr.charges[i]:7.4f} {pqr.radii[i]:6.4f}"
         )
     lines.append("TER")

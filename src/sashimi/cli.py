@@ -60,12 +60,32 @@ def _corpus_solver(name: str) -> tuple[Solver[Any], SolverFamily]:
 
 
 def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case, ...]:
+    """The named cases, or every case in the tier.
+
+    A case that exists but sits outside the selected tier is reported as such
+    rather than as unknown. Those are different mistakes with different fixes —
+    raise `--tier`, versus check the spelling — and calling both "unknown" cost
+    a CI round trip: a measurement step named ten real cases, was told they did
+    not exist, and reported nothing while looking green.
+    """
     if not names:
         return cases
     known = {case.name: case for case in cases}
+    in_manifest = {case.name for case in MANIFEST}
     unknown = [n for n in names if n not in known]
     if unknown:
-        raise SystemExit(f"unknown case(s): {', '.join(unknown)}\navailable: {', '.join(known)}")
+        out_of_tier = [n for n in unknown if n in in_manifest]
+        misspelt = [n for n in unknown if n not in in_manifest]
+        problems = []
+        if out_of_tier:
+            problems.append(
+                f"not in the selected tier: {', '.join(out_of_tier)} — pass --tier full"
+            )
+        if misspelt:
+            problems.append(
+                f"unknown case(s): {', '.join(misspelt)}\navailable: {', '.join(known)}"
+            )
+        raise SystemExit("\n".join(problems))
     return tuple(known[n] for n in names)
 
 
