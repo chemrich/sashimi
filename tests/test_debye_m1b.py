@@ -43,7 +43,9 @@ from sashimi.apbs import ApbsSolver
 from sashimi.corpus import MANIFEST, Case
 from sashimi.debye import DebyeSolver
 from sashimi.delphi import DelphiSolver
-from sashimi.protocol import PotentialGrid, SolveResult
+from sashimi.delphi.discover import DelphiFlavour, discover_delphi
+from sashimi.delphi.options import SUPPORTED_SURFACES as DELPHI_SURFACES
+from sashimi.protocol import PotentialGrid, SolveResult, SurfaceModel
 from sashimi.validate import (
     DEFAULT_FIELD_FACTOR,
     BackendRun,
@@ -75,12 +77,41 @@ def case_named(name: str) -> Case:
     return next(case for case in MANIFEST if case.name == name)
 
 
+def require_delphi_that_builds_van_der_waals() -> None:
+    """Skip unless the installed DelPhi can build the boundary debye climbs.
+
+    **The `delphi` marker names a program, not a capability**, and the two
+    flavours differ exactly here: pyDelPhi has no van der Waals surface — its
+    `vdw` method rolls the probe, so it gives the molecular one, and the
+    `prbrad=0` that would produce a real vdW boundary aborts inside numba. A
+    marked test asking for that surface therefore *fails* rather than skips
+    wherever pyDelPhi is the flavour present.
+
+    CI found it: the `full` leg has a "Verify the pyDelPhi flavour actually ran"
+    step that re-runs `-m delphi` with `SASHIMI_DELPHI_PATH` pointed at
+    pyDelPhi, and three of these tests failed there while the main run was
+    green. ROADMAP.md section 12 already names the C++ flavour the touchstone
+    for precisely this reason.
+
+    Read from `SUPPORTED_SURFACES`, which is the module that owns the mapping,
+    rather than testing `flavour is CPP`: the question is what the binary can
+    build, and a flavour name is a proxy for it that can drift.
+    """
+    flavour = discover_delphi().flavour
+    if SurfaceModel.VAN_DER_WAALS not in DELPHI_SURFACES[flavour]:
+        pytest.skip(
+            f"{flavour.value} cannot build a van der Waals boundary, so it cannot be "
+            "an incumbent for a milestone measured on one"
+        )
+
+
 def graded(case: Case, factor: float = DEFAULT_FIELD_FACTOR):
     """Solve the case through both incumbents and debye, and grade debye.
 
     The reference set is fixed, not discovered. See the module docstring: with
     DelPhi omitted, `born-ion-vdw` reads 1.60x instead of 5.24x.
     """
+    require_delphi_that_builds_van_der_waals()
     request = case.request()
     solvers: list[tuple[str, object]] = [
         ("apbs", ApbsSolver()),
@@ -206,3 +237,15 @@ def test_a_field_grade_refuses_backends_asked_different_questions():
             charge_e=1.0,
             solvent_dielectric=case.solvent.solvent_dielectric,
         )
+
+
+def test_only_one_delphi_flavour_can_be_an_incumbent_here():
+    """Why these tests skip on pyDelPhi, asserted from the map that decides it.
+
+    Needs no binary: `SUPPORTED_SURFACES` is a static declaration, so this holds
+    the reason in place on every machine including the bare one. If pyDelPhi
+    ever grows a real van der Waals surface this fails, which is the right time
+    to revisit `require_delphi_that_builds_van_der_waals`.
+    """
+    assert SurfaceModel.VAN_DER_WAALS in DELPHI_SURFACES[DelphiFlavour.CPP]
+    assert SurfaceModel.VAN_DER_WAALS not in DELPHI_SURFACES[DelphiFlavour.PYDELPHI]
