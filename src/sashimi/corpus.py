@@ -174,7 +174,7 @@ class AnalyticReference:
 
     energy_kj_mol: float
     rtol: float
-    source: str
+    source: str  # how the number was derived, for the summary
     per_backend_rtol: tuple[tuple[str, float], ...] = ()
     gated: bool = True
 
@@ -187,7 +187,7 @@ class AnalyticReference:
         for prefix, tolerance in self.per_backend_rtol:
             if backend.startswith(prefix):
                 return tolerance
-        return self.rtol  # how the number was derived, for the summary
+        return self.rtol
 
 
 @dataclass(frozen=True)
@@ -219,7 +219,6 @@ class AnalyticField:
     charge_e: float
     cells_out: tuple[int, ...]  # k, in achieved grid cells beyond the boundary
     rtol: float
-    solvent_dielectric: float = 78.54
     per_backend_rtol: tuple[tuple[str, float], ...] = ()
 
     def rtol_for(self, backend: str) -> float:
@@ -232,8 +231,26 @@ class AnalyticField:
     def sample_radii(self, spacing: float) -> list[float]:
         return [self.radius_a + k * spacing for k in self.cells_out]
 
-    def exact_at(self, radii: Sequence[float]) -> list[float]:
-        return [born_potential(r, self.charge_e, self.solvent_dielectric) for r in radii]
+    def exact_at(self, radii: Sequence[float], solvent: SolventModel) -> list[float]:
+        """The closed form, taking the solvent from the case rather than restating it.
+
+        `born_potential` is the *unscreened* expression, so it describes the case
+        only at zero ionic strength. Carrying a private `solvent_dielectric`
+        here — as this did — meant a case could be paired with a field reference
+        describing different physics and nothing would say so: attaching one to
+        `born-ion-molecular-salt`, which already exists and is the natural M3
+        follow-up, would have compared a screened field against an unscreened
+        closed form and reported tens of percent as a solver defect. Refusing is
+        the same discipline the backends apply to a surface model they cannot
+        honour.
+        """
+        if solvent.ionic_strength != 0.0:
+            raise ValueError(
+                "the Born potential is unscreened, so a field reference cannot describe "
+                f"a case at {solvent.ionic_strength} M; sashimi.analytic has the screened "
+                "expression when a case needs one"
+            )
+        return [born_potential(r, self.charge_e, solvent.solvent_dielectric) for r in radii]
 
 
 @dataclass(frozen=True)
@@ -790,7 +807,7 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
         ),
-        analytic=_born(3.0, rtol=0.05),  # measured 2.36%
+        analytic=_born(3.0, rtol=0.05, delphi_rtol=0.001),  # measured 2.357% / 0.001%
         analytic_field=AnalyticField(
             radius_a=3.0,
             charge_e=1.0,
@@ -812,7 +829,7 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
         ),
-        analytic=_born(3.0, rtol=0.05),
+        analytic=_born(3.0, rtol=0.05, delphi_rtol=0.001),  # measured 2.357% / 0.001%
         analytic_field=AnalyticField(
             radius_a=3.0,
             charge_e=1.0,
@@ -1047,10 +1064,13 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
         ),
-        # rtol is unused while `gated=False` and is set to the measured APBS
-        # error rather than to something roomy, so that turning the gate on
-        # would fail loudly instead of passing vacuously.
-        analytic=_kirkwood(0.9, rtol=0.0985, gated=False),  # measured 9.848% / 4.288%
+        # `rtol` is unused while `gated=False`, and is deliberately set *below*
+        # what either code achieves — APBS 9.85%, DelPhi 4.29% — so that
+        # ungating this case fails loudly. The first version set it to the
+        # measured APBS error, which both codes then passed: a tolerance that
+        # says "nobody should judge this" while quietly judging it green is the
+        # vacuous check this case exists to avoid.
+        analytic=_kirkwood(0.9, rtol=0.01, gated=False),  # measured 9.848% / 4.288%
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -1341,7 +1361,7 @@ MANIFEST: tuple[Case, ...] = (
         # same 3.093% it shows on `born-ion-molecular` at eps_p = 1: the OBC2
         # offset is a property of the method, not of the dielectric, and holding
         # across both cases is evidence the dielectric factor itself is right.
-        analytic=_born(3.0, 1.0, 2.0, rtol=0.05),
+        analytic=_born(3.0, 1.0, 2.0, rtol=0.05, delphi_rtol=0.001),  # 2.263% / 0.010%
     ),
     Case(
         name="methoxide-molecular",
@@ -1538,6 +1558,15 @@ def build_case(
             "relative_error": abs(result.energy_kj_mol - exact) / abs(exact),
         }
 
+    # Omitted rather than recorded as null when there is nothing to say, the way
+    # a gridless summary omits `geometry`: shape follows the answer, and a
+    # rebuild should not write seventy files of `"analytic_field": null` for the
+    # sake of schema symmetry. CLAUDE.md asks that a corpus diff read as a
+    # result change, which it cannot do buried under schema noise. Spread in
+    # place rather than merged afterwards, so the key keeps its position and a
+    # rebuild does not reorder every file that has one.
+    field = _analytic_field_summary(case, result)
+
     summary: dict[str, Any] = {
         "name": case.name,
         "description": case.description,
@@ -1546,7 +1575,7 @@ def build_case(
         "family": family.value,
         "backend": result.provenance.backend,
         "analytic": analytic,
-        "analytic_field": _analytic_field_summary(case, result),
+        **({} if field is None else {"analytic_field": field}),
         "grid_spec": {
             "resolution": case.grid.resolution,
             "padding": case.grid.padding,
@@ -1582,7 +1611,7 @@ def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] |
     points[:, 0] = centre[0] + np.array(radii)
 
     got = grid.value_at(points)
-    exact = np.array(reference.exact_at(radii))
+    exact = np.array(reference.exact_at(radii, case.solvent))
     errors = np.abs(got - exact) / np.abs(exact)
     return {
         "spacing_used_a": spacing,
@@ -1817,9 +1846,14 @@ def _accuracy_tier(backend: str) -> AccuracyTier:
     """
     from sashimi.backends import reports  # noqa: PLC0415 — import cost off the hot path
 
-    for report in reports():
-        if backend.startswith(report.name):
-            return AccuracyTier(report.accuracy_tier)
+    # Longest prefix wins, so registering a backend whose name extends an
+    # existing one — `gb2` alongside `gb` — cannot silently inherit the other's
+    # tier. Registry order is not a safe tiebreak for a correctness check.
+    matches = sorted(
+        (r for r in reports() if backend.startswith(r.name)), key=lambda r: -len(r.name)
+    )
+    if matches:
+        return AccuracyTier(matches[0].accuracy_tier)
     return AccuracyTier.REFERENCE
 
 

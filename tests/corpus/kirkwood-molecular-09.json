@@ -7,7 +7,7 @@
   "backend": "apbs-3.4.1",
   "analytic": {
     "energy_kj_mol": -1193.9550983935123,
-    "rtol": 0.0985,
+    "rtol": 0.01,
     "source": "Kirkwood: q=1e at d/a=0.9 in a 3 A sphere, eps_p=1",
     "relative_error": 0.09847804848414435
   },

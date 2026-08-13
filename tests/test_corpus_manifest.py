@@ -71,7 +71,9 @@ def test_the_fast_tier_is_not_empty():
 
 
 @pytest.mark.parametrize(
-    "case", [c for c in MANIFEST if c.analytic is not None], ids=lambda c: c.name
+    "case",
+    [c for c in MANIFEST if c.analytic is not None and c.analytic.gated],
+    ids=lambda c: c.name,
 )
 def test_recorded_energies_sit_within_their_analytic_tolerance(case: Case):
     """The check that would fail if a backend had been wrong since the first build.
@@ -79,10 +81,36 @@ def test_recorded_energies_sit_within_their_analytic_tolerance(case: Case):
     Every other corpus assertion compares a solver against its own recording, so
     a number that was wrong on day one stays wrong forever and passes. This one
     compares the recording against the closed form.
+
+    **`gated` is honoured here and not only in `verify_case`.** It was not at
+    first, which made the flag a half-measure: `kirkwood-molecular-09` is
+    declared ungatable because both reference codes get *worse* under refinement
+    there, and it was still being judged from the files with 2.2e-5 of headroom.
+    A rebuild on an APBS that moved the fourth digit would have turned CI red on
+    the one case the manifest says nobody should judge.
     """
     assert case.analytic is not None
     summary = load_summary(case)
     assert summary["analytic"]["relative_error"] <= case.analytic.rtol
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in MANIFEST if c.analytic is not None and not c.analytic.gated],
+    ids=lambda c: c.name,
+)
+def test_an_ungated_case_is_still_recorded_against_its_closed_form(case: Case):
+    """Not judged is not the same as not measured.
+
+    The point of `gated=False` is that the deviation stays visible and diffable:
+    a reader should be able to see how far off the method is without the corpus
+    either blessing that number or calling it a failure.
+    """
+    summary = load_summary(case)
+
+    assert summary["analytic"] is not None
+    assert summary["analytic"]["relative_error"] > 0.0
+    assert summary["analytic"]["source"]
 
 
 def test_solvation_energy_does_not_depend_on_the_sign_of_the_charge():
@@ -270,6 +298,34 @@ def test_the_sharp_boundary_ladder_is_wide_enough_to_grade_a_solver_on():
     assert len(kirkwood) >= 3, "M2's ladder is three rungs"
     # And a convergence pair, which is the only way to state "monotonic".
     assert {c.grid.resolution for c in born} >= {0.5, 0.25}
+
+
+def test_the_tight_delphi_tolerances_are_actually_reaching_delphi():
+    """A per-backend tolerance keyed on a string nothing asserts is not a guard.
+
+    `rtol_for` matches a prefix of `Provenance.backend`, which DelPhi builds as
+    `f"{flavour}-{version}"` in `delphi/discover.py`. Reformat that identity —
+    `delphi-cpp-8.6`, say — and every tight tolerance silently reverts to the
+    shared one that exists to accommodate APBS, with the whole suite still
+    green. This reads the identity out of the recordings themselves, so the
+    coupling is asserted rather than assumed, and checks the recorded deviations
+    actually sit inside the tight bound rather than merely inside the loose one.
+    """
+    checked = 0
+    for name, _, other in cross_backend_cases("delphi"):
+        case = next(c for c in MANIFEST if c.name == name)
+        if case.analytic is None or not case.analytic.per_backend_rtol:
+            continue
+        identity = other["backend"]
+        tight = case.analytic.rtol_for(identity)
+        assert tight < case.analytic.rtol, (
+            f"{name}: {identity!r} did not match any per-backend prefix, so the "
+            f"tolerance fell back to the shared {case.analytic.rtol}"
+        )
+        assert other["analytic"]["relative_error"] <= tight, f"{name}: {other['analytic']}"
+        checked += 1
+
+    assert checked >= 15, "the tight tolerances are asserted on too little to mean anything"
 
 
 def test_every_recording_describes_the_case_it_answers():
@@ -646,7 +702,9 @@ def test_the_two_grid_codes_agree_where_they_can_be_compared():
     the one case with an analytic answer.
     """
     recorded = cross_backend_cases("delphi")
-    assert len(recorded) >= 19
+    # 35 as of M0. A floor that trails the real count by sixteen would let every
+    # sharp-boundary recording be deleted without a word.
+    assert len(recorded) >= 35
 
     for name, reference, other in recorded:
         deviation = abs(other["energy_kj_mol"] - reference["energy_kj_mol"]) / abs(
@@ -671,10 +729,17 @@ def test_no_recorded_delphi_answer_is_absurd():
     goes as q^2 so -1e reproduces +1e exactly; a lone sphere has the same
     molecular and van der Waals boundary; and DelPhi's corrected reaction field
     on a sphere does not move with the grid, so a convergence pair agrees to the
-    last digit. The key below is what the energy is allowed to depend on —
-    geometry, |charge|, and the two dielectric-and-salt parameters — so those
-    four cases form one group and any *other* pair sharing an answer still
+    last digit. The key below is what the energy is allowed to depend on, so
+    those cases form one group and any *other* pair sharing an answer still
     fails. Which is what the original bug was: two different molecules.
+
+    **Every solvent parameter is in the key, and leaving one out retires a guard
+    silently.** A first version omitted temperature, which grouped
+    `peptide-molecular` with `peptide-molecular-cold` — cases that differ only
+    by 298.15 K against 277 K, and by 0.02 kJ/mol. Had DelPhi regressed to
+    ignoring temperature, which is the exact bug that cost a day when it turned
+    out to want Celsius, the two would have become bit-identical and this test
+    would have called them the same physics and passed.
     """
     energies = {name: other["energy_kj_mol"] for name, _, other in cross_backend_cases("delphi")}
     by_case = {c.name: c for c in MANIFEST}
@@ -687,7 +752,11 @@ def test_no_recorded_delphi_answer_is_absurd():
             np.abs(structure.charges).tobytes(),
             structure.radii.tobytes(),
             case.solvent.solute_dielectric,
+            case.solvent.solvent_dielectric,
             case.solvent.ionic_strength,
+            case.solvent.temperature,
+            case.solvent.ion_radius,
+            case.solvent.surface_radius,
         )
 
     seen: dict[float, str] = {}

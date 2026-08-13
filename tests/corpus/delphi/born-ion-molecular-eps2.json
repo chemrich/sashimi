@@ -7,7 +7,7 @@
   "backend": "delphicpp-8.6",
   "analytic": {
     "energy_kj_mol": -112.83125295073636,
-    "rtol": 0.05,
+    "rtol": 0.001,
     "source": "Born: q=1e, a=3 A, eps_p=2",
     "relative_error": 9.634774479641014e-05
   },
