@@ -15,9 +15,13 @@ from __future__ import annotations
 import pytest
 
 from sashimi import backends
+from sashimi.apbs.options import SURFACE_KEYWORD
 from sashimi.cli import BACKEND_NAMES
+from sashimi.delphi.options import SUPPORTED_SURFACES as DELPHI_SURFACES
 from sashimi.errors import InputError
-from sashimi.protocol import AccuracyTier, SolverFamily
+from sashimi.gb.options import SUPPORTED_SURFACES as GB_SURFACES
+from sashimi.protocol import AccuracyTier, SolventModel, SolverFamily
+from sashimi.tabipb.options import SUPPORTED_SURFACES as TABIPB_SURFACES
 
 EXPECTED = ("apbs", "delphi", "tabipb", "gb")
 
@@ -70,6 +74,38 @@ def test_the_in_process_backend_is_always_available():
     reason `available_names()` is never empty, however bare the machine.
     """
     assert "gb" in backends.available_names()
+
+
+def test_every_backend_can_answer_the_default_surface_model():
+    """What the default is *for*, and the property it was chosen to have.
+
+    `smoothed-molecular` was the default until 2026-08-13 and is APBS's harmonic
+    averaging alone, so a request that named no surface refused on three
+    backends out of four — including `gb`, the tier that needs no binary and is
+    the only one guaranteed to be there. `molecular` is the one boundary every
+    shipped backend defines, and this is where a fifth backend that cannot
+    answer on it has to argue the case rather than quietly narrow the default.
+
+    Read from the modules that own the mapping rather than from
+    `reports()`, which is not the same claim: an undiscoverable DelPhi reports
+    *no* surface models, because which ones it has depends on the flavour found,
+    so a report-based version of this passed with a binary installed and failed
+    on the bare leg. Both DelPhi flavours are checked for the same reason — the
+    default has to be answerable by whichever one a machine happens to have.
+    """
+    declared = {
+        "apbs": frozenset(SURFACE_KEYWORD),
+        "tabipb": TABIPB_SURFACES,
+        "gb": GB_SURFACES,
+        **{f"delphi/{flavour.value}": models for flavour, models in DELPHI_SURFACES.items()},
+    }
+    # Every registered backend appears above, so a fifth one cannot arrive
+    # without either supporting the default or arguing here for narrowing it.
+    assert {name.split("/")[0] for name in declared} == set(backends.names())
+
+    default = SolventModel().surface_model
+    unsupported = sorted(name for name, models in declared.items() if default not in models)
+    assert unsupported == [], f"{unsupported} cannot answer the default {default.value!r}"
 
 
 def test_only_the_approximate_tier_says_it_approximates():

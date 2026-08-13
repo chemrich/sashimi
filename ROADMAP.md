@@ -1129,9 +1129,11 @@ molecular surface, is that surface behaving correctly.
 the natural limit of its own method, aborts it with a numba `TypingError` in
 0.2.0 and 0.3.0 alike. That is an upstream bug rather than a modelling
 difference, so the model is declined rather than mapped onto something adjacent.
-`SMOOTHED_MOLECULAR` — sashimi's *default* — is APBS-only, so a DelPhi solve at
-defaults raises `UnsupportedRequest` rather than substituting `MOLECULAR` and
-moving the answer by 2,000× the corpus tolerance.
+`SMOOTHED_MOLECULAR` is APBS-only, so a DelPhi solve that asks for it raises
+`UnsupportedRequest` rather than substituting `MOLECULAR` and moving the answer
+by 2,000× the corpus tolerance. It was sashimi's *default* until 2026-08-13,
+which made that refusal the reply to every defaulted DelPhi solve; the default
+is now `MOLECULAR`, the one model on this table every backend can answer.
 
 `GAUSSIAN` has no APBS counterpart and no closed form, and **no equivalent
 request has been established across the two DelPhi flavours**: matching `sigma`
@@ -1435,16 +1437,47 @@ architecture. The Proxmox VM and Tailscale (§11) belong here, not in phase 5.
 Planned 2026-08-13, in this order. The two items before debye are small and both
 remove something that would otherwise have to be worked around inside it.
 
-**1. The `molecular` default.** §14 resolved it; this lands it. **42 of 64
-corpus cases inherit `smoothed-molecular` from `SolventModel`'s dataclass
-default and 22 name a model explicitly**, so flipping the default silently
-rewrites what those 42 are asking. The order is therefore not optional: make all
-42 name `SMOOTHED_MOLECULAR` explicitly, **verify all 64 reproduce
-bit-identically**, and only then flip the default and update the MCP tool,
-README and capabilities text. Watch `cli._pick_surface_model` and the
-`comparable_surface_models` path. *Exit criterion:* `SolventModel()` is
-molecular, the corpus is bit-identical across the change, and a defaulted
-`sashimi_solve` succeeds on all four backends rather than one.
+**1. The `molecular` default ✅** — landed 2026-08-13. §14 resolved it; this
+lands it. **42 of 64 corpus cases inherited `smoothed-molecular` from
+`SolventModel`'s dataclass default and 22 named a model explicitly**, so
+flipping the default silently rewrites what those 42 are asking. The order was
+therefore not optional: all 42 were made to name `SMOOTHED_MOLECULAR`
+explicitly, all 64 verified bit-identical, and only then the default moved,
+along with the MCP tool defaults, `cli._pick_surface_model`, the README and the
+capabilities text.
+
+Bit-identity was checked at two levels, because the cheap one is the one that
+actually pins the question: a canonical dump of what all 64 cases *ask* —
+solvent model, grid, tier, analytic reference, and a hash of the coordinates,
+charges and radii each resolves to — is unchanged across both steps, and all 64
+re-solved `ok` against APBS after each. The default flip moving nothing is the
+whole return on doing the explicitness step first.
+
+The cost of the switch, recomputed from the recordings rather than quoted:
+**0.80% on ALA-GLY** (−212.496 → −214.196 kJ/mol) and **2.35% on hen lysozyme**
+(−4885.721 → −5000.598). At defaults on 1AKI, APBS now returns −3976.571 kJ/mol
+and `gb` −3879.083 — 2.45% apart, and the second of those is a call that
+refused outright before this change.
+
+Two guards came with it, both checked against the configuration where they
+should fire. `test_every_case_names_its_surface_model_rather_than_inheriting_one`
+reads `corpus.py`'s AST, because at runtime an inherited value and a stated one
+are the same value — the drift it catches is invisible from the objects.
+`test_every_backend_can_answer_the_default_surface_model` reads the surface sets
+from the modules that own them — both DelPhi flavours included — so it runs on a
+bare machine and cannot skip; reverting the default makes it name
+`['delphi/delphicpp', 'delphi/pydelphi', 'gb', 'tabipb']`, which is the
+measurement of the problem the flip fixes.
+
+That second guard was wrong once first, in this project's usual shape. It read
+`backends.reports()`, whose `surface_models` is empty for an *undiscoverable*
+DelPhi — the flavour decides the set, so an absent binary means an unknown one —
+and the docstring claimed it therefore ran anywhere. It passed locally, where
+all four backends are installed, and failed CI's `none` and `apbs-only` legs.
+The claim "this needs no binary" was itself untested; the three-profile matrix
+is what caught it, one push after being built. *Exit criterion, met:*
+`SolventModel()` is molecular, the corpus is bit-identical across the change,
+and a defaulted `sashimi_solve` reaches every backend rather than one.
 
 **2. Cross-flavour agreement, instead of pyDelPhi recordings.** A `delphi`-marked
 test solving three or four cheap shared cases through both flavours and
@@ -1547,8 +1580,8 @@ that is 64 cases with closed forms in it.
   the only one guaranteed to be present, was the least reachable thing in the
   package. `sashimi.backends` is the registry that made this one edit rather
   than three, and debye registers there in a single line.
-- **The default surface model becomes `molecular`** — decided, landing in the
-  next change rather than this one. It resolves §14's last question in the
+- **The default surface model becomes `molecular`** — decided here, landed in
+  the change after this one. It resolves §14's last question in the
   direction phase 7 pointed: it is the only model every shipped backend
   supports, where `smoothed-molecular` is APBS's alone, so a default request
   refuses on three of four backends. Measured cost of the switch: **0.80% on
@@ -1656,4 +1689,5 @@ summarised here.
   says a surface model is the largest modelling choice in the calculation. That
   is the ground the decision rests on. Refusing rather than substituting was
   still right and stays right; what changed is which model the request starts
-  from. Recorded in §12 with the corpus-explicitness step it needs first.
+  from. **Landed 2026-08-13**, after the corpus-explicitness step it needed
+  first; §12 records what the two steps measured.

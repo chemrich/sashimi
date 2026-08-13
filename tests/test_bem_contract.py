@@ -120,11 +120,19 @@ class TestUnsupportedIsAnInputError:
 
 class TestProvenanceIsUniversal:
     def test_every_backend_reports_provenance(self, ion):
-        result = StubBemSolver().solve(BoundaryElementRequest(structure=ion, mesh_density=0.5))
+        # An explicit surface model, because this asserted the protocol default
+        # and so re-encoded it: the echo has to be the *request's* value, which
+        # a test agreeing with whatever the dataclass says cannot show.
+        request = BoundaryElementRequest(
+            structure=ion,
+            mesh_density=0.5,
+            solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        )
+        result = StubBemSolver().solve(request)
         assert result.provenance.backend == "stub-bem-0"
         # Resolved parameters record what the backend actually used.
         assert result.provenance.resolved_parameters["mesh_density"] == 0.5
-        assert result.provenance.resolved_parameters["surface_model"] == "smoothed-molecular"
+        assert result.provenance.resolved_parameters["surface_model"] == "van-der-waals"
 
     def test_mesh_density_changes_the_mesh(self, ion):
         coarse = StubBemSolver().solve(BoundaryElementRequest(structure=ion, mesh_density=0.2))

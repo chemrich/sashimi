@@ -331,7 +331,9 @@ MANIFEST: tuple[Case, ...] = (
         description="Born ion, +1e on a 3 A sphere, vacuum reference. Closed form exists.",
         source="born-ion",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(3.0, rtol=0.015),  # measured 0.619%
     ),
     Case(
@@ -339,7 +341,9 @@ MANIFEST: tuple[Case, ...] = (
         description="Born ion at 2x resolution. Pairs with the coarse case to show convergence.",
         source="born-ion",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(3.0, rtol=0.008),  # measured 0.278%; the pair's whole point
         tier=CaseTier.STANDARD,
     ),
@@ -348,7 +352,11 @@ MANIFEST: tuple[Case, ...] = (
         description="Born ion in 150 mM 1:1 salt. Exercises the ion-declaration path.",
         source="born-ion",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.15),
+        solvent=SolventModel(
+            solute_dielectric=1.0,
+            ionic_strength=0.15,
+            surface_model=SurfaceModel.SMOOTHED_MOLECULAR,
+        ),
         # Deliberately no analytic reference. The Debye-Huckel screening term
         # depends on an ion-exclusion convention the backends do not share:
         # APBS's ionic contribution is -0.688 kJ/mol here and DelPhi's is
@@ -358,17 +366,24 @@ MANIFEST: tuple[Case, ...] = (
     ),
     Case(
         name="peptide-default",
-        description="ALA-GLY dipeptide at physiological salt with sashimi's defaults.",
+        description=(
+            "ALA-GLY dipeptide at physiological salt on the smoothed molecular "
+            "surface. Named for the defaults it was built from; the surface "
+            "default moved to `molecular` on 2026-08-13 and this case kept its "
+            "question, so the pair with `peptide-molecular` measures the switch."
+        ),
         source="ala-gly.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
     ),
     Case(
         name="peptide-low-dielectric",
         description="Same peptide with a harder solute interior; catches dielectric plumbing.",
         source="ala-gly.pqr",
         grid=GridSpec(resolution=0.6, padding=8.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
     ),
     # --- the analytic sweep -------------------------------------------------
     #
@@ -386,7 +401,9 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="born-ion-r1",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(1.0, rtol=0.08),  # measured 5.086%
     ),
     Case(
@@ -394,7 +411,9 @@ MANIFEST: tuple[Case, ...] = (
         description="The same undersized ion at 0.25 A: 5.1% becomes 3.2%, converging.",
         source="born-ion-r1",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(1.0, rtol=0.055),  # measured 3.197%
         tier=CaseTier.STANDARD,
     ),
@@ -403,7 +422,9 @@ MANIFEST: tuple[Case, ...] = (
         description="2 A sphere. Error falls to 0.8% once the ion spans a few grid points.",
         source="born-ion-r2",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(2.0, rtol=0.02),  # measured 0.796%
     ),
     Case(
@@ -411,7 +432,9 @@ MANIFEST: tuple[Case, ...] = (
         description="4 A sphere; with 3 A and 6 A this is the radius arm of the sweep.",
         source="born-ion-r4",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(4.0, rtol=0.015),  # measured 0.601%
     ),
     Case(
@@ -419,7 +442,9 @@ MANIFEST: tuple[Case, ...] = (
         description="6 A sphere, the best-resolved of the sweep at 0.46%.",
         source="born-ion-r6",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(6.0, rtol=0.015),  # measured 0.461%
     ),
     Case(
@@ -431,7 +456,9 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="born-ion-negative",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(3.0, -1.0, rtol=0.015),  # measured 0.619%, same as +1e
     ),
     Case(
@@ -439,7 +466,9 @@ MANIFEST: tuple[Case, ...] = (
         description="+2e: the q^2 scaling, which must be 4x the +1e energy and is.",
         source="born-ion-divalent",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(3.0, 2.0, rtol=0.015),  # measured 0.619%
     ),
     Case(
@@ -447,7 +476,9 @@ MANIFEST: tuple[Case, ...] = (
         description="Solute dielectric 2, the protein-interior value. Exercises 1/eps_p - 1/eps_s.",
         source="born-ion",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=2.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(3.0, 1.0, 2.0, rtol=0.015),  # measured 0.598%
     ),
     Case(
@@ -455,7 +486,9 @@ MANIFEST: tuple[Case, ...] = (
         description="Solute dielectric 4; with eps_p 1 and 2 this is the dielectric arm.",
         source="born-ion",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solute_dielectric=4.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=4.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_born(3.0, 1.0, 4.0, rtol=0.015),  # measured 0.571%
     ),
     # --- real chemistry -----------------------------------------------------
@@ -479,7 +512,11 @@ MANIFEST: tuple[Case, ...] = (
         source="apbs-examples/methanol.pqr",
         grid=GridSpec(resolution=0.25, padding=10.0),
         solvent=SolventModel(
-            solute_dielectric=2.0, solvent_dielectric=78.00, ionic_strength=0.0, temperature=300.0
+            solute_dielectric=2.0,
+            solvent_dielectric=78.00,
+            ionic_strength=0.0,
+            temperature=300.0,
+            surface_model=SurfaceModel.SMOOTHED_MOLECULAR,
         ),
         tier=CaseTier.STANDARD,
     ),
@@ -489,7 +526,11 @@ MANIFEST: tuple[Case, ...] = (
         source="apbs-examples/methoxide.pqr",
         grid=GridSpec(resolution=0.25, padding=10.0),
         solvent=SolventModel(
-            solute_dielectric=2.0, solvent_dielectric=78.00, ionic_strength=0.0, temperature=300.0
+            solute_dielectric=2.0,
+            solvent_dielectric=78.00,
+            ionic_strength=0.0,
+            temperature=300.0,
+            surface_model=SurfaceModel.SMOOTHED_MOLECULAR,
         ),
         tier=CaseTier.STANDARD,
     ),
@@ -498,7 +539,9 @@ MANIFEST: tuple[Case, ...] = (
         description="Neutral acid, 8 atoms. With acetate this is an ionization pair.",
         source="apbs-examples/acetic-acid.pqr",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(solute_dielectric=2.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -506,7 +549,9 @@ MANIFEST: tuple[Case, ...] = (
         description="Its conjugate base at -1e; the charged half of the ionization pair.",
         source="apbs-examples/acetate.pqr",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(solute_dielectric=2.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=2.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -517,7 +562,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/fas2.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -525,7 +570,7 @@ MANIFEST: tuple[Case, ...] = (
         description="1,403 atoms at -5e: the most negatively charged case here.",
         source="apbs-examples/barstar.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -533,7 +578,7 @@ MANIFEST: tuple[Case, ...] = (
         description="Barstar's binding partner at +2e; a charge-complementary pair.",
         source="apbs-examples/barnase.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -545,7 +590,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/2LZT-ASP66.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -556,7 +601,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/1a63.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -564,7 +609,7 @@ MANIFEST: tuple[Case, ...] = (
         description="2,482 atoms, the largest case; 13 s, which is why it is not standard.",
         source="apbs-examples/hca.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.FULL,
     ),
     # --- charge placement ---------------------------------------------------
@@ -579,7 +624,9 @@ MANIFEST: tuple[Case, ...] = (
         description="Charge at 0.3 of the way to the boundary of a 3 A sphere.",
         source="kirkwood-03",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_kirkwood(0.3, rtol=0.005),  # measured 0.097%
         tier=CaseTier.STANDARD,
     ),
@@ -588,7 +635,9 @@ MANIFEST: tuple[Case, ...] = (
         description="Halfway out. The series is well past the monopole here.",
         source="kirkwood-05",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_kirkwood(0.5, rtol=0.012),  # measured 0.473%
         tier=CaseTier.STANDARD,
     ),
@@ -597,7 +646,9 @@ MANIFEST: tuple[Case, ...] = (
         description="0.7 out, where the reaction field is dominated by high multipoles.",
         source="kirkwood-07",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_kirkwood(0.7, rtol=0.005),  # measured 0.114%
         tier=CaseTier.STANDARD,
     ),
@@ -609,7 +660,9 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="kirkwood-09",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(solute_dielectric=1.0, ionic_strength=0.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR
+        ),
         analytic=_kirkwood(0.9, rtol=0.12),  # measured 7.678%
         tier=CaseTier.STANDARD,
     ),
@@ -710,14 +763,14 @@ MANIFEST: tuple[Case, ...] = (
         description="ALA-GLY at zero ionic strength; the low end of the salt arm.",
         source="ala-gly.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(ionic_strength=0.0),
+        solvent=SolventModel(ionic_strength=0.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
     ),
     Case(
         name="peptide-high-salt",
         description="500 mM: a Debye length of 4.3 A, well inside the solute's own size.",
         source="ala-gly.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(ionic_strength=0.5),
+        solvent=SolventModel(ionic_strength=0.5, surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
     ),
     Case(
         name="peptide-cold",
@@ -729,14 +782,14 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="ala-gly.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(temperature=277.0),
+        solvent=SolventModel(temperature=277.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
     ),
     Case(
         name="peptide-low-solvent-dielectric",
         description="Solvent dielectric 4, a membrane interior rather than water.",
         source="ala-gly.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(solvent_dielectric=4.0),
+        solvent=SolventModel(solvent_dielectric=4.0, surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
     ),
     # --- charge states, binding partners, and scale --------------------------
     #
@@ -748,7 +801,7 @@ MANIFEST: tuple[Case, ...] = (
         description="A single aspartate at -1e. 12 atoms — a residue, not a molecule.",
         source="apbs-examples/ASP66.pqr",
         grid=GridSpec(resolution=0.25, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
     ),
     Case(
         name="lysozyme-protonated",
@@ -759,7 +812,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/2LZT-ASH66.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -770,7 +823,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/2LZT-noASP66.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -778,7 +831,7 @@ MANIFEST: tuple[Case, ...] = (
         description="FKBP with an empty binding site; pairs with `fkbp-dmso`.",
         source="apbs-examples/fkbp-apo.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -790,7 +843,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/fkbp-dmso.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -801,7 +854,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/ion-protein-complex.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.FULL,
     ),
     Case(
@@ -813,7 +866,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/hca-complex.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.FULL,
     ),
     Case(
@@ -821,7 +874,7 @@ MANIFEST: tuple[Case, ...] = (
         description="5,877 atoms at -12e; where the grid guardrail starts relaxing resolution.",
         source="apbs-examples/actin-monomer.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.FULL,
     ),
     Case(
@@ -833,7 +886,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/mache.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.FULL,
     ),
     Case(
@@ -844,7 +897,7 @@ MANIFEST: tuple[Case, ...] = (
         ),
         source="apbs-examples/fas2.pqr",
         grid=GridSpec(resolution=0.35, padding=10.0),
-        solvent=SolventModel(),
+        solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
         tier=CaseTier.FULL,
     ),
     # --- the shared surface, widened ----------------------------------------

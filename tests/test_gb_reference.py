@@ -187,10 +187,12 @@ def test_gb_is_faster_than_the_solver_it_triages_for():
 def test_a_mismatched_surface_is_refused_rather_than_approximated():
     """Being an approximation buys latitude on accuracy, not on the question.
 
-    `smoothed-molecular` is sashimi's default and APBS-only. GB declines it at
-    the door — the same refusal DelPhi makes — rather than substituting the
-    molecular surface and reporting a number that is 2,000 times corpus
-    tolerance away from what was asked for.
+    `smoothed-molecular` is APBS-only — and was sashimi's default until
+    2026-08-13, so this refusal used to greet every defaulted GB solve. It is
+    asked for explicitly now, and GB still declines it at the door — the same
+    refusal DelPhi makes — rather than substituting the molecular surface and
+    reporting a number that is 2,000 times corpus tolerance away from what was
+    asked for.
     """
     system = system_for(peptide(), SurfaceModel.SMOOTHED_MOLECULAR)
 

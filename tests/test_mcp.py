@@ -15,7 +15,7 @@ from fastmcp.exceptions import ToolError
 
 from sashimi.dx import write_dx
 from sashimi.mcp import mcp
-from sashimi.protocol import PotentialGrid
+from sashimi.protocol import PotentialGrid, SolventModel
 from sashimi.tabipb.discover import discover_tabipb
 from tests.helpers import installed_or_skip
 
@@ -420,6 +420,45 @@ class TestDiscoverySurface:
                 {"pqr_path": str(self.ion_pqr(tmp_path)), "surface_model": "banana"},
             )
 
+    async def test_the_tools_default_to_the_surface_model_the_protocol_does(self, client):
+        """Three literals, one decision, and nothing tying them together.
+
+        Both tool signatures spell the default as a string for the JSON schema's
+        sake, so they can drift from `SolventModel`'s — and an agent reading the
+        schema would then be told one boundary while a defaulted solve used
+        another. Read from the advertised schema rather than from the module, so
+        this checks what a caller is actually shown.
+        """
+        expected = SolventModel().surface_model.value
+        tools = {tool.name: tool for tool in await client.list_tools()}
+
+        for name in ("sashimi_solve", "sashimi_validate_inputs"):
+            schema = tools[name].inputSchema["properties"]["surface_model"]
+            assert schema["default"] == expected, f"{name} advertises {schema['default']!r}"
+
+    async def test_solve_rejects_an_unknown_surface_model_the_same_way(self, client, tmp_path):
+        """Both tools take this as a string; only one used to check it.
+
+        An unknown value reached `sashimi_solve` as a bare `ValueError`, so an
+        agent got a traceback naming what was wrong and not what would work.
+        The near-miss is the realistic case: `molecular` became the default on
+        2026-08-13, so asking for the old boundary means typing
+        `smoothed-molecular` by hand.
+        """
+        with pytest.raises(ToolError, match="unknown surface_model") as caught:
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.ion_pqr(tmp_path)),
+                    "backend": "gb",
+                    "compute_energy": True,
+                    "surface_model": "smoothed_molecular",
+                },
+            )
+
+        # The alternatives, which is the half a bare ValueError never carried.
+        assert "smoothed-molecular" in str(caught.value)
+
     @pytest.mark.apbs
     async def test_validate_agrees_with_what_solve_actually_does(self, client, tmp_path):
         """The prediction is worthless if it disagrees with the real thing."""
@@ -485,6 +524,31 @@ class TestBackendSelection:
         assert "grid" not in result
         assert "no field" in result["summary"]
 
+    async def test_a_defaulted_solve_reaches_the_backend_that_needs_no_binary(
+        self, client, tmp_path
+    ):
+        """The exit criterion for moving the default to `molecular`.
+
+        Naming no surface used to mean `smoothed-molecular`, which `gb` does not
+        have — so the simplest request an agent can make refused on the one
+        backend guaranteed to be installed. Nothing here names a surface, which
+        is the entire point of the test; it asserts what the solve resolved to
+        rather than trusting that it ran.
+        """
+        result = payload(
+            await client.call_tool(
+                "sashimi_solve",
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "compute_energy": True,
+                },
+            )
+        )
+
+        assert result["energy_kj_mol"] < 0
+        assert result["resolved_parameters"]["surface_model"] == "molecular"
+
     async def test_asking_the_energy_only_backend_for_no_energy_is_refused(self, client, tmp_path):
         """It computes one number. Not wanting it is a request for nothing."""
         with pytest.raises(ToolError, match="asks it for nothing"):
@@ -510,14 +574,21 @@ class TestBackendSelection:
     ):
         """The pre-flight an agent needs now that it has a choice to get wrong.
 
-        `smoothed-molecular` is the default and three of the four backends
-        refuse it, so this is the common failure — and free to discover here
-        rather than after a structure has been prepared and a solve started.
+        `smoothed-molecular` has to be *asked for* to reach this: it was the
+        default until 2026-08-13, which made the refusal arrive unbidden on
+        three backends out of four. The model is named here rather than
+        inherited, so this keeps testing the pre-flight instead of the default —
+        it is free to discover here and expensive after a structure has been
+        prepared and a solve started.
         """
         report = payload(
             await client.call_tool(
                 "sashimi_validate_inputs",
-                {"pqr_path": str(self.peptide(tmp_path)), "backend": "gb"},
+                {
+                    "pqr_path": str(self.peptide(tmp_path)),
+                    "backend": "gb",
+                    "surface_model": "smoothed-molecular",
+                },
             )
         )
 

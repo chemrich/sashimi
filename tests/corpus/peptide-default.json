@@ -1,6 +1,6 @@
 {
   "name": "peptide-default",
-  "description": "ALA-GLY dipeptide at physiological salt with sashimi's defaults.",
+  "description": "ALA-GLY dipeptide at physiological salt on the smoothed molecular surface. Named for the defaults it was built from; the surface default moved to `molecular` on 2026-08-13 and this case kept its question, so the pair with `peptide-molecular` measures the switch.",
   "source": "ala-gly.pqr",
   "tier": "fast",
   "family": "finite-difference",

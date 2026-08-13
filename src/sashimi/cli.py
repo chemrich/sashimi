@@ -150,8 +150,10 @@ def _verify(args: argparse.Namespace) -> int:
 def _pick_surface_model(requested: str | None) -> SurfaceModel:
     """A surface model the installed backends can all actually run.
 
-    Cross-validation has to pick one, because sashimi's default
-    (`smoothed-molecular`) is APBS-only and every DelPhi solve at it refuses.
+    Cross-validation has to pick one rather than take the protocol default,
+    because what every *installed* backend shares is a property of the machine:
+    `molecular` is the default precisely because all four shipped backends
+    answer on it, but the comparison has to hold when the set is something else.
     Choosing is not the same as substituting silently: the choice is printed,
     and an explicit `--surface` that some backend cannot honour fails at solve
     time with that backend's own message rather than being quietly replaced.

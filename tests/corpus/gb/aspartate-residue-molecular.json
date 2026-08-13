@@ -1,6 +1,6 @@
 {
   "name": "aspartate-residue-molecular",
-  "description": "One aspartate at -1e, 12 atoms, on the shared surface: between `acetate-molecular`'s eight atoms and the peptide's twenty, which is exactly the size range where a boundary-element mesher stops being able to answer at all.",
+  "description": "One aspartate at -1e, 12 atoms, on the shared surface: between `acetate-molecular`'s eight atoms and the peptide's twenty, which is the size range where a boundary-element mesher stops being able to answer. Measured: TABI-PB aborts on this one immediately, on `stoul: no conversion` *after* reporting the surface built, where acetate instead runs past its 600 s timeout. Same size class, two unrelated mechanisms, so neither is 'too small' as a rule.",
   "source": "apbs-examples/ASP66.pqr",
   "tier": "standard",
   "family": "analytic",
