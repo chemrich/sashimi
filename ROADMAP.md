@@ -727,7 +727,22 @@ Two Linux legs run per push, and they cover different things:
 |---|---|---|
 | `ubuntu-latest, full` | APBS, DelPhi (both flavours), TABI-PB | every backend, the corpus, cross-validation |
 | `ubuntu-latest, apbs-only` | APBS | **the README's own recommended install**, and nothing else |
+| `ubuntu-latest, none` | nothing | a fresh checkout, and the configuration `sashimi.gb` exists for |
 | `macos-latest, full` | APBS, pyDelPhi | osx-arm64 as a first-class platform — main, weekly, on demand |
+
+**A marker selects and deselects; it does not skip.** `tests/conftest.py` makes
+it skip, once, for every marked test present and future — because fixing the
+instances one at a time was treating a rule that was never enforced. Four bugs
+of that exact shape surfaced on 2026-08-12 alone. Until it existed, a bare
+checkout failed 56 tests and CI hid it by deselecting the markers instead, so
+"sashimi works with nothing installed" — the property `sashimi.gb` provides and
+protean's fallback path depends on — was never tested. It is now 452 passed,
+130 skipped, and the `none` leg holds it there.
+
+What stops a skip-on-absence rule from hiding real breakage is not the hook: it
+is the "Verify the <backend> tier actually ran" steps, which assert each tier
+ran wherever its binary exists. A skip is only safe when something else insists
+the tests are not always skipped.
 
 The `apbs-only` leg exists because a test that needs a binary without saying so
 passes wherever that binary happens to be installed, and every leg used to carry

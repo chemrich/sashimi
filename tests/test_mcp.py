@@ -378,7 +378,14 @@ class TestDiscoverySurface:
         result = payload(await client.call_tool("sashimi_capabilities", {}))
         assert any("nonlinear" in item for item in result["not_supported"])
 
+    @pytest.mark.apbs
     async def test_validate_reports_cost_without_solving(self, client, tmp_path):
+        """`ok` folds in whether the backend is installed, so this needs one.
+
+        The grid arithmetic it checks is binary-free and covered as such in
+        tests/test_capabilities.py; what needs APBS present is the claim that a
+        well-formed request comes back `ok`.
+        """
         result = payload(
             await client.call_tool(
                 "sashimi_validate_inputs",

@@ -238,11 +238,23 @@ class TestValidateRequest:
         report = validate_request(ion(), GridSpec(resolution=0.25, padding=10.0))
         assert report["cost"]["grid"]["estimated_map_mb"] == pytest.approx(29.0, rel=0.05)
 
-    def test_a_relaxed_resolution_warns_but_does_not_block(self):
-        """The solve would still run, and the result would say it was relaxed."""
+    def test_a_relaxed_resolution_is_reported(self):
+        """Pure arithmetic, so it holds on a machine with nothing installed."""
         report = validate_request(ion(), GridSpec(resolution=0.05, max_points=65**3))
         assert report["cost"]["grid"]["resolution_relaxed"] is True
         assert any("caps the grid" in p for p in report["problems"])
+
+    @pytest.mark.apbs
+    def test_a_relaxed_resolution_warns_but_does_not_block(self):
+        """The solve would still run, and the result would say it was relaxed.
+
+        Marked `apbs` for what looks like a dry run, because `ok` folds in
+        whether the backend is *present*: with APBS absent this is false for a
+        reason that has nothing to do with the grid. The claim being made —
+        a relaxation is a warning rather than a refusal — can only be seen when
+        nothing else is blocking.
+        """
+        report = validate_request(ion(), GridSpec(resolution=0.05, max_points=65**3))
         assert report["ok"] is True
 
     def test_an_impossible_grid_blocks(self):

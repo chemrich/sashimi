@@ -28,7 +28,12 @@ jobs:
       fail-fast: false
       # Which runners, and why.
       #
-      # `full` carries every backend this project can install. `apbs-only` is
+      # `full` carries every backend this project can install. `none` carries
+      # nothing at all — the machine a fresh checkout runs on, and the one
+      # `sashimi.gb` exists for, since it is the only backend that cannot be
+      # missing. It is also the configuration protean's fallback path runs in,
+      # and until 2026-08-13 a bare checkout failed 56 tests because a marker
+      # selects but does not skip. `apbs-only` is
       # the README's own recommended install and nothing else, which is what
       # most users and contributors will actually have — and it is the leg that
       # catches the failure mode this project keeps hitting: a test that needs a
@@ -46,7 +51,7 @@ jobs:
       # a third party that changes rarely, and every commit is exercised on
       # osx-arm64 locally before it is pushed.
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"}]' || '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"},{"os":"macos-latest","profile":"full"}]') }}
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"},{"os":"ubuntu-latest","profile":"none"}]' || '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"},{"os":"ubuntu-latest","profile":"none"},{"os":"macos-latest","profile":"full"}]') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -61,6 +66,7 @@ jobs:
       # ways. conda-forge carries the same 3.4.1 for linux-64 and osx-arm64 from
       # one channel with a public recipe, which is what CI should be testing.
       - uses: mamba-org/setup-micromamba@v3.2.1
+        if: matrix.profile != 'none'
         with:
           environment-name: apbs
           create-args: apbs=3.4.1
@@ -70,6 +76,7 @@ jobs:
           cache-environment: true
 
       - name: Point sashimi at the conda-forge APBS
+        if: matrix.profile != 'none'
         shell: bash -el {0}
         run: |
           apbs_bin="$(micromamba run -n apbs which apbs)"
