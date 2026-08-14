@@ -23,16 +23,19 @@ from sashimi.analytic import born_solvation_energy
 from sashimi.apbs.grid import size_grid
 from sashimi.corpus import (
     CORPUS_DIR,
+    FIELD_DIRECTIONS,
     MANIFEST,
     TIER_ORDER,
     AnalyticReference,
     Case,
     CaseTier,
+    _analytic_field_summary,
     build_case,
     cases_for_tier,
     load_summary,
     verify_case,
 )
+from sashimi.debye import DebyeSolver
 from sashimi.protocol import (
     FiniteDifferenceRequest,
     PotentialGrid,
@@ -770,3 +773,85 @@ def test_no_recorded_delphi_answer_is_absurd():
 
     for name, energy in energies.items():
         assert -20_000 < energy < 0, f"{name}: {energy}"
+
+
+def test_the_field_check_samples_every_cubic_symmetry_class():
+    """One ray is not a measurement of a staircase, and this is what says so.
+
+    A sphere discretized on a Cartesian grid has the grid's cubic symmetry, so
+    its error varies over three direction classes — <100> along the axes, <110>
+    through the face diagonals, <111> through the body diagonals. The check
+    shipped sampling `centre + r*x_hat` alone, which for a spherically symmetric
+    problem reads as an arbitrary-but-harmless choice and is not: it recorded
+    APBS's worst case and understated DelPhi's by 2.6x.
+    """
+    classes = {
+        tuple(sorted(abs(round(float(c), 6)) for c in direction))
+        for _, direction in FIELD_DIRECTIONS
+    }
+    assert len(classes) == 3, f"expected three symmetry classes, got {sorted(classes)}"
+
+    # Each class carries more than one representative, so an axis swap or a sign
+    # error in the sampling has somewhere to show up.
+    for _, direction in FIELD_DIRECTIONS:
+        assert float(np.linalg.norm(direction)) == pytest.approx(1.0)
+    assert len(FIELD_DIRECTIONS) >= 6
+    assert any(float(d[0]) < 0 for _, d in FIELD_DIRECTIONS), "no sign-flipped direction"
+
+
+def test_a_single_ray_would_have_understated_the_recorded_error():
+    """The finding itself, held against the recordings.
+
+    If the sampling ever collapses back to one direction — or to a set that
+    misses the diagonals — the recorded worst error falls and this fails. Stated
+    as a ratio rather than a named case so it survives the tolerances moving.
+    """
+    ratios = {}
+    for case in MANIFEST:
+        if case.analytic_field is None:
+            continue
+        for label, directory in (("apbs", CORPUS_DIR), ("delphicpp", DELPHI_DIRECTORY)):
+            path = directory / f"{case.name}.json"
+            if not path.is_file():
+                continue
+            field = json.loads(path.read_text())["analytic_field"]
+            errors = np.array(field["relative_errors"])  # [radius][direction]
+            axis = field["directions"].index("+x")
+            ratios[f"{label}/{case.name}"] = float(
+                field["max_relative_error"] / errors[:, axis].max()
+            )
+
+    assert ratios, "no field recordings found"
+    worst = max(ratios.values())
+    assert worst >= 1.5, (
+        "no recorded case is materially worse off-axis than along +x, which is what "
+        f"makes a single-ray sample wrong; best ratio seen was {worst:.2f}x. Ratios: "
+        f"{ {k: round(v, 2) for k, v in ratios.items() if v > 1.05} }"
+    )
+
+
+def test_the_axis_directions_agree_for_a_centred_sphere():
+    """Grid centring, which nothing else here would catch — and it needs no binary.
+
+    A lone sphere sits at the centre of its own bounding box, and every backend
+    builds an odd-sized grid, so the atom lands exactly on a node and the four
+    <100> samples must read the same value. They agree to under 0.001 percentage
+    points in the recordings; a grid centred half a cell off would break this
+    while leaving the *worst* error, and so every tolerance, untouched.
+
+    Solved with debye rather than read from a file, because this is a claim
+    about the geometry rather than about a recording — and because debye needs
+    nothing installed, so it runs on the bare leg where the recordings' own
+    backends do not.
+    """
+    case = next(c for c in MANIFEST if c.name == "born-ion-vdw")
+    summary = _analytic_field_summary(case, DebyeSolver().solve(case.request()))
+    assert summary is not None
+
+    errors = np.array(summary["relative_errors"])  # [radius][direction]
+    axis_columns = [summary["directions"].index(d) for d in ("+x", "+y", "+z", "-x")]
+    for radius, row in zip(summary["radii_a"], errors[:, axis_columns], strict=True):
+        assert float(np.ptp(row)) < 1e-4, (
+            f"the <100> samples disagree by {np.ptp(row):.2e} at r = {radius:.4f} A, "
+            "which says the grid is not centred on the sphere"
+        )

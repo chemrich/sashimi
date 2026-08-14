@@ -190,6 +190,36 @@ class AnalyticReference:
         return self.rtol
 
 
+def _unit(x: float, y: float, z: float) -> FloatArray:
+    vector = np.array([x, y, z], dtype=float)
+    return vector / float(np.linalg.norm(vector))
+
+
+# The directions every field check samples, as one corpus-wide rule rather than
+# a per-case choice. ROADMAP.md section 12 states the general form: a rule
+# chosen per test is how two checks come to disagree about what they measured.
+#
+# The three cubic symmetry classes, because those are what a staircased sphere's
+# error varies over: <100> along the axes, <110> through the face diagonals,
+# <111> through the body diagonals. Two of the classes carry a sign-flipped
+# representative as well. Those are redundant for a centred sphere on an
+# odd-sized grid — the atom sits exactly on a node, so +x and -x must agree —
+# which is the point: `tests/test_corpus_field.py` asserts they do, and a grid
+# whose centring is off by half a cell is a defect nothing else here would see.
+FIELD_DIRECTIONS: tuple[tuple[str, FloatArray], ...] = (
+    ("+x", _unit(1, 0, 0)),
+    ("+y", _unit(0, 1, 0)),
+    ("+z", _unit(0, 0, 1)),
+    ("-x", _unit(-1, 0, 0)),
+    ("110", _unit(1, 1, 0)),
+    ("011", _unit(0, 1, 1)),
+    ("111", _unit(1, 1, 1)),
+    ("-1-1-1", _unit(-1, -1, -1)),
+)
+
+FIELD_DIRECTION_NAMES: tuple[str, ...] = tuple(name for name, _ in FIELD_DIRECTIONS)
+
+
 @dataclass(frozen=True)
 class AnalyticField:
     """A closed-form *potential* to check a solver's field against.
@@ -213,6 +243,17 @@ class AnalyticField:
     Sampling *on* the interface is left alone deliberately. Every shipped solver
     is ~100% wrong there and that is not a defect any of them can fix; it is an
     ill-posed question about a grid.
+
+    **The sample is a sphere's worth of directions, not one ray**, and that was
+    the second parameter this rule turned out to be conditioned on. It shipped
+    sampling `centre + r*x_hat` alone, which reads as arbitrary-but-harmless for
+    a spherically symmetric problem — and is not, because the *error* is not
+    spherically symmetric. A sphere on a Cartesian grid is a staircase, and the
+    staircase has the grid's cubic symmetry: at 0.25 A on `born-ion-vdw-fine`,
+    two cells out, DelPhi C++ reads +0.736% along an axis and -1.890% along the
+    body diagonal, while APBS reads +1.019% and -0.674%. **Which ray is worst
+    depends on the backend**, so a single ray recorded APBS's true worst case and
+    understated DelPhi's by a factor of 2.6.
     """
 
     radius_a: float  # the dielectric boundary, A
@@ -230,6 +271,17 @@ class AnalyticField:
 
     def sample_radii(self, spacing: float) -> list[float]:
         return [self.radius_a + k * spacing for k in self.cells_out]
+
+    def sample_points(self, centre: FloatArray, spacing: float) -> FloatArray:
+        """Every (direction, radius) pair, radius-major, as (M, 3) coordinates.
+
+        Radius-major so the flat order matches `itertools.product(radii,
+        directions)`, which is how the summary's nested lists are built.
+        """
+        radii = self.sample_radii(spacing)
+        return np.array(
+            [centre + direction * radius for radius in radii for _, direction in FIELD_DIRECTIONS]
+        )
 
     def exact_at(self, radii: Sequence[float], solvent: SolventModel) -> list[float]:
         """The closed form, taking the solvent from the case rather than restating it.
@@ -826,8 +878,11 @@ MANIFEST: tuple[Case, ...] = (
             radius_a=3.0,
             charge_e=1.0,
             cells_out=(2, 4, 8),
-            rtol=0.065,  # measured 3.187% APBS / 0.150% DelPhi
-            per_backend_rtol=(("delphicpp", 0.004),),
+            # Across all eight directions: 3.186% APBS, 0.789% DelPhi. The old
+            # numbers here were +x only, and DelPhi's 0.150% was the ray it
+            # happens to be best on — its face diagonals are 5.3x worse.
+            rtol=0.064,
+            per_backend_rtol=(("delphicpp", 0.016),),
         ),
     ),
     Case(
@@ -851,8 +906,11 @@ MANIFEST: tuple[Case, ...] = (
             radius_a=3.0,
             charge_e=1.0,
             cells_out=(2, 4, 8),
-            rtol=0.065,  # measured 3.187% APBS / 0.150% DelPhi
-            per_backend_rtol=(("delphicpp", 0.004),),
+            # Across all eight directions: 3.186% APBS, 0.789% DelPhi. The old
+            # numbers here were +x only, and DelPhi's 0.150% was the ray it
+            # happens to be best on — its face diagonals are 5.3x worse.
+            rtol=0.064,
+            per_backend_rtol=(("delphicpp", 0.016),),
         ),
     ),
     # --- the sharp-boundary ladder ------------------------------------------
@@ -889,7 +947,7 @@ MANIFEST: tuple[Case, ...] = (
             radius_a=1.0,
             charge_e=1.0,
             cells_out=(2, 4, 8),
-            rtol=0.035,  # measured 1.165% APBS / 1.727% DelPhi
+            rtol=0.035,  # all directions: 1.165% APBS / 1.727% DelPhi (axes worst)
         ),
     ),
     Case(
@@ -905,7 +963,10 @@ MANIFEST: tuple[Case, ...] = (
             radius_a=2.0,
             charge_e=1.0,
             cells_out=(2, 4, 8),
-            rtol=0.10,  # measured 4.744% APBS / 1.556% DelPhi
+            # All directions: 4.744% APBS (axes) / 2.521% DelPhi (body diagonal,
+            # 1.6x its +x reading).
+            rtol=0.095,
+            per_backend_rtol=(("delphicpp", 0.051),),
         ),
     ),
     Case(
@@ -925,7 +986,7 @@ MANIFEST: tuple[Case, ...] = (
             radius_a=4.0,
             charge_e=1.0,
             cells_out=(2, 4, 8),
-            rtol=0.03,  # measured 1.412% APBS / 1.126% DelPhi
+            rtol=0.029,  # all directions: 1.412% APBS / 1.239% DelPhi
         ),
     ),
     Case(
@@ -941,7 +1002,10 @@ MANIFEST: tuple[Case, ...] = (
             radius_a=6.0,
             charge_e=1.0,
             cells_out=(2, 4, 8),
-            rtol=0.02,  # measured 0.900% APBS / 0.723% DelPhi
+            # All directions: 1.531% APBS / 1.902% DelPhi. Both were under 1%
+            # on +x alone; the body diagonal is where this radius is worst, and
+            # the old 0.02 would now fail. That is the result change M1a is.
+            rtol=0.038,
         ),
     ),
     Case(
@@ -999,7 +1063,9 @@ MANIFEST: tuple[Case, ...] = (
             radius_a=3.0,
             charge_e=1.0,
             cells_out=(2, 4, 8),
-            rtol=0.017,  # measured 0.827% APBS / 0.736% DelPhi
+            # All directions: 1.107% APBS / 1.891% DelPhi, both on the body
+            # diagonal, against 0.827% / 0.736% on +x alone.
+            rtol=0.038,
         ),
         tier=CaseTier.STANDARD,
     ),
@@ -1024,7 +1090,10 @@ MANIFEST: tuple[Case, ...] = (
             radius_a=3.0,
             charge_e=1.0,
             cells_out=(2, 4, 8),
-            rtol=0.021,  # measured 1.019% APBS / 0.736% DelPhi
+            # All directions: 1.050% APBS / 1.891% DelPhi. This is the case
+            # ROADMAP.md section 12 quotes for M1b's bar, and the reason that bar
+            # has to be re-argued: neither reference solver clears 1% at k = 2.
+            rtol=0.038,
         ),
         tier=CaseTier.STANDARD,
     ),
@@ -1626,24 +1695,36 @@ def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] |
     spacing = float(np.max(grid.spacing))
     radii = reference.sample_radii(spacing)
     centre = case.structure().center()
-    points = np.tile(centre, (len(radii), 1))
-    points[:, 0] = centre[0] + np.array(radii)
 
-    got = grid.value_at(points)
+    got = grid.value_at(reference.sample_points(centre, spacing))
     exact = np.array(reference.exact_at(radii, case.solvent))
-    errors = np.abs(got - exact) / np.abs(exact)
+    # Radius-major, so reshaping recovers [radius][direction] — see `sample_points`.
+    values = got.reshape(len(radii), len(FIELD_DIRECTIONS))
+    errors = np.abs(values - exact[:, None]) / np.abs(exact)[:, None]
+
+    worst = np.unravel_index(int(np.argmax(errors)), errors.shape)
     return {
         "spacing_used_a": spacing,
         "cells_out": list(reference.cells_out),
         "radii_a": [float(r) for r in radii],
+        "directions": list(FIELD_DIRECTION_NAMES),
         "exact_kT_e": [float(v) for v in exact],
-        "values_kT_e": [float(v) for v in got],
-        "relative_errors": [float(e) for e in errors],
+        # [radius][direction]. Nested rather than flat because the whole point of
+        # this block is that the two axes are not interchangeable.
+        "values_kT_e": [[float(v) for v in row] for row in values],
+        "relative_errors": [[float(e) for e in row] for row in errors],
         "max_relative_error": float(np.max(errors)),
+        "worst_sample": {
+            "direction": FIELD_DIRECTION_NAMES[worst[1]],
+            "radius_a": float(radii[worst[0]]),
+            "cells_out": reference.cells_out[worst[0]],
+            "relative_error": float(errors[worst]),
+        },
         "rtol": reference.rtol_for(result.provenance.backend),
         "source": (
             f"Born potential: q={reference.charge_e:g}e outside a "
-            f"{reference.radius_a:g} A sphere, sampled at a + k*h"
+            f"{reference.radius_a:g} A sphere, sampled at a + k*h along "
+            f"{len(FIELD_DIRECTIONS)} directions"
         ),
     }
 
@@ -1942,16 +2023,16 @@ def _verify_analytic_field(case: Case, fresh: dict[str, Any]) -> list[Discrepanc
     tolerance = reference.rtol_for(fresh["backend"])
     if error <= tolerance:
         return []
-    worst = int(np.argmax(field["relative_errors"]))
+    worst = field["worst_sample"]
     return [
         Discrepancy(
             case.name,
             "analytic_field.max_relative_error",
             tolerance,
             error,
-            f"{error:.3%} from the closed-form potential at r = {field['radii_a'][worst]:.4g} A "
-            f"({reference.cells_out[worst]} cells beyond a {reference.radius_a:g} A boundary), "
-            f"tolerance {tolerance:.3%}",
+            f"{error:.3%} from the closed-form potential at r = {worst['radius_a']:.4g} A "
+            f"({worst['cells_out']} cells beyond a {reference.radius_a:g} A boundary) "
+            f"along {worst['direction']}, tolerance {tolerance:.3%}",
         )
     ]
 
