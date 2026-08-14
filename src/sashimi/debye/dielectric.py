@@ -11,32 +11,34 @@ is exactly the configuration M1 is graded on — so it is written now rather tha
 discovered at M3.
 
 The dielectric is sampled at face centres rather than averaged over the face.
-That is the same first-order choice APBS makes with `srfm mol`, and it is worth
-naming as a choice — but it is no longer an *open* one. From M1 until M1c this
-docstring said a volume-fraction average was "the obvious place to look"; M1c
-looked, and the answer is no. ROADMAP.md section 12 M1c has the numbers; the
-short version, because it is the kind of thing that gets retried:
+**That is the same choice APBS makes with `srfm mol`, and remembering so is not
+trivia — it disqualifies APBS as the reference for any experiment on this line.**
+From M1 until M1c this docstring called a volume-fraction average "the obvious
+place to look". M1c looked; ROADMAP.md section 12, "M1c — the spike ran", carries
+the numbers and the retraction. The short version:
 
-- A dielectric smoothed over a band of `w` cells does damp the grid-phase
-  oscillation M1b measured, but far less than the summary statistic suggests.
-  The *swing ratio* falls from 5.35x to 1.56x mostly because the best
-  configurations get worse (0.773% -> 1.975%); the **worst** near-field error,
-  which is what a consumer sees, only moves 4.138% -> 3.085%.
-- Blended arithmetically it wrecks the energy: 0.853% -> 3.545% at 0.25 A,
-  through M1's 1% bar at every width tried.
-- Blended **harmonically** — the textbook mean for flux normal to a layered
-  interface — it looked like a large win, 0.853% -> 0.107% on the Born ion and
-  still monotonic under refinement at w = 1.
-- **And that was a fixture artifact.** On real unions of spheres it goes the
-  other way: ALA-GLY -0.409% -> +3.565% against APBS, barnase (1,730 atoms)
-  -1.102% -> +5.153%, which is outside the ~2.3% band the reference-tier codes
-  occupy among themselves. A single convex sphere centred on a node is the best
-  case for a band smoother; a real surface has concave junctions where
-  `min_i(|x - c_i| - r_i)` is not the distance to the union, and thin solvent
-  channels a band fills in.
+- Smoothing the dielectric over a band of `w` cells damps the grid-phase
+  oscillation M1b measured far less than the summary statistic suggests. The
+  *swing ratio* falls 5.35x -> 1.56x mostly because the best configurations get
+  worse (0.773% -> 1.975%); the **worst** near-field error, which is what a
+  consumer sees, moves only 4.138% -> 3.085%. That is why M4a was dropped, and it
+  is the one conclusion here graded against an exact reference.
+- Blended arithmetically it wrecks the energy: 0.853% -> 3.545% at 0.25 A.
+  Blended **harmonically** — the textbook mean for flux normal to a layered
+  interface — it made the Born energy **8x better**: 0.853% -> 0.107% at 0.25 A,
+  monotonic, no sign flips, across the whole ladder.
+- That energy result is **open, not refuted.** It was first written up as a
+  fixture artifact, on the strength of real-structure energies drifting from APBS
+  (ALA-GLY -0.409% -> +3.565%, barnase -1.102% -> +5.153% at w = 1). A review
+  pointed out that APBS makes the same hard assignment under test, so that
+  comparison cannot referee it. A self-contained refinement study on ALA-GLY then
+  found harmonic *more* grid-insensitive, not less — fitted slope 0.117 against
+  hard's -4.178.
 
-So the face-centre sample stays. Anything that revisits it has to be graded on a
-real structure before the Born ion, not after.
+So the face-centre sample stays, on the field axis, which is the axis debye's
+consumer reads. **Anything that revisits this needs a reference that does not
+itself discretize a volumetric dielectric** — TABI-PB, a closed form, or a truly
+converged grid. Reaching for APBS or DelPhi here measures a shared bias.
 """
 
 from __future__ import annotations
