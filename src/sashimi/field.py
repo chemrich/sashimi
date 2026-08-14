@@ -40,6 +40,7 @@ __all__ = [
     "errors_by_radius",
     "sample_points",
     "sample_radii",
+    "sample_values",
     "worst_error_over_directions",
 ]
 
@@ -74,6 +75,12 @@ FIELD_DIRECTION_NAMES: tuple[str, ...] = tuple(name for name, _ in FIELD_DIRECTI
 
 def sample_radii(radius_a: float, spacing: float, cells_out: tuple[int, ...]) -> list[float]:
     """`a + k*h`, the radii at which a field may be compared with a closed form."""
+    if not cells_out:
+        raise ValueError(
+            "cells_out is empty, so there is nothing to sample. A comparison built from "
+            "no samples is not a lenient one — every all()-shaped verdict over it reads "
+            "as agreement."
+        )
     if any(k < MIN_CELLS_OUT for k in cells_out):
         raise ValueError(
             f"cells_out={cells_out} would sample within {MIN_CELLS_OUT} cells of the "
@@ -89,6 +96,25 @@ def sample_points(centre: FloatArray, radius: float) -> FloatArray:
     return np.array([centre + direction * radius for _, direction in FIELD_DIRECTIONS])
 
 
+def sample_values(grid: PotentialGrid, centre: FloatArray, radius: float) -> FloatArray:
+    """The eight direction values at one radius, refusing any that fell off the map.
+
+    A NaN is an error rather than a skipped point: `PotentialGrid.value_at`
+    returns NaN off-grid precisely so it cannot be mistaken for a measurement,
+    and both a silently dropped direction and a `NaN` written into a recording
+    report the best of whatever remained.
+    """
+    values = grid.value_at(sample_points(centre, radius))
+    if not np.isfinite(values).all():
+        finite = np.isfinite(values)
+        outside = [name for name, ok in zip(FIELD_DIRECTION_NAMES, finite, strict=True) if not ok]
+        raise ValueError(
+            f"the map does not cover r = {radius:.4g} A along {outside}; a field "
+            "comparison cannot silently drop the directions that fell off the grid"
+        )
+    return values
+
+
 def worst_error_over_directions(
     grid: PotentialGrid,
     centre: FloatArray,
@@ -102,14 +128,7 @@ def worst_error_over_directions(
     mistaken for a measurement, and silently dropping it would report the best
     of whatever remained.
     """
-    values = grid.value_at(sample_points(centre, radius))
-    if not np.isfinite(values).all():
-        finite = np.isfinite(values)
-        outside = [name for name, ok in zip(FIELD_DIRECTION_NAMES, finite, strict=True) if not ok]
-        raise ValueError(
-            f"the map does not cover r = {radius:.4g} A along {outside}; a field "
-            "comparison cannot silently drop the directions that fell off the grid"
-        )
+    values = sample_values(grid, centre, radius)
     errors = np.abs(values - exact) / abs(exact)
     worst = int(np.argmax(errors))
     return float(errors[worst]), FIELD_DIRECTION_NAMES[worst]

@@ -37,6 +37,8 @@ incumbents.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from sashimi.apbs import ApbsSolver
@@ -45,7 +47,7 @@ from sashimi.debye import DebyeSolver
 from sashimi.delphi import DelphiSolver
 from sashimi.delphi.discover import DelphiFlavour, discover_delphi
 from sashimi.delphi.options import SUPPORTED_SURFACES as DELPHI_SURFACES
-from sashimi.protocol import PotentialGrid, SolveResult, SurfaceModel
+from sashimi.protocol import AccuracyTier, PotentialGrid, SolveResult, SurfaceModel
 from sashimi.validate import (
     DEFAULT_FIELD_FACTOR,
     BackendRun,
@@ -133,7 +135,6 @@ def graded(case: Case, factor: float = DEFAULT_FIELD_FACTOR):
         centre=case.structure().center(),
         radius_a=reference.radius_a,
         charge_e=reference.charge_e,
-        solvent_dielectric=case.solvent.solvent_dielectric,
         cells_out=reference.cells_out,
         factor=factor,
     )
@@ -195,23 +196,106 @@ def test_the_grade_samples_every_backend_at_the_same_radii():
     assert set(grade.errors) >= {"apbs", "debye"}
 
 
-@pytest.mark.apbs
-def test_a_field_grade_refuses_a_candidate_with_nothing_to_grade_it_against():
-    """An approximation is not a yardstick for a discretization."""
+def test_a_field_grade_refuses_a_lone_backend():
+    """One map is not a comparison. Needs no binary, and is marked accordingly.
+
+    This was marked `apbs` while solving only with debye, so it skipped on the
+    bare leg — the one configuration this repo most wants a pure-Python refusal
+    path covered in.
+    """
     case = case_named("born-ion-vdw")
     request = case.request()
-    result = DebyeSolver().solve(request)
-    runs = [BackendRun.from_result("debye", result, request)]
+    runs = [BackendRun.from_result("debye", DebyeSolver().solve(request), request)]
 
     with pytest.raises(Incomparable, match="at least"):
         grade_field(
-            runs,
+            runs, candidate="debye", centre=case.structure().center(), radius_a=3.0, charge_e=1.0
+        )
+
+
+def test_a_field_grade_refuses_an_approximation_as_the_yardstick():
+    """ "An approximation is not a yardstick for a discretization" — reached, not just written.
+
+    The branch cannot be hit by any shipped backend: `sashimi.gb` returns no
+    field and TABI-PB returns a `SurfacePotential`, so both are filtered out
+    before the reference-tier count is taken. It was therefore a guard that
+    could not fire, and the test that claimed to cover it asserted on the
+    *count* message instead. Constructing the run directly is what reaches it,
+    and it is the shape a future in-process approximate FD backend would have.
+    """
+    case = case_named("born-ion-vdw")
+    request = case.request()
+    candidate = BackendRun.from_result("debye", DebyeSolver().solve(request), request)
+    approximate = dataclasses.replace(
+        candidate, name="an-approximation", accuracy_tier=AccuracyTier.APPROXIMATE
+    )
+
+    with pytest.raises(Incomparable, match="approximation is not a yardstick"):
+        grade_field(
+            [candidate, approximate],
             candidate="debye",
             centre=case.structure().center(),
             radius_a=3.0,
             charge_e=1.0,
-            solvent_dielectric=case.solvent.solvent_dielectric,
         )
+
+
+def test_a_field_grade_refuses_a_closed_form_describing_different_physics():
+    """The dielectric and the temperature must be the runs', not the caller's.
+
+    Both shift the Born potential by a factor common to every backend, and the
+    verdict is a *ratio* of errors — so a common offset drives every ratio
+    towards 1.0 and the grade passes. `corpus.AnalyticField.exact_at` refuses
+    exactly this on ionic strength; these are the other two axes, and they were
+    caller arguments nothing cross-checked until a review asked.
+    """
+    case = case_named("born-ion-vdw")
+    request = case.request()
+    run = BackendRun.from_result("debye", DebyeSolver().solve(request), request)
+    assert run.solvent_dielectric == case.solvent.solvent_dielectric
+    assert run.temperature == case.solvent.temperature
+
+    for attribute, value, message in (
+        ("solvent_dielectric", 40.0, "solvent dielectric"),
+        ("temperature", 277.0, "temperature"),
+    ):
+        other = dataclasses.replace(run, name="other", **{attribute: value})  # type: ignore[arg-type]
+        with pytest.raises(Incomparable, match=message):
+            grade_field(
+                [run, other],
+                candidate="debye",
+                centre=case.structure().center(),
+                radius_a=3.0,
+                charge_e=1.0,
+            )
+
+
+def test_a_field_grade_refuses_a_sample_inside_the_interface_cell():
+    """`sashimi.field` owns the sampling rule, so `grade_field` has to go through it.
+
+    It computed `a + k*h` inline, which bypassed the `MIN_CELLS_OUT` guard that
+    module exists to hold — `cells_out=(1,)` would have sampled the cell the
+    dielectric interface passes through and reported an O(1) interpolation
+    error as a solver gap. `cells_out=()` was worse: no ratios at all, and
+    `agrees` is an `all()`, so nothing to check reads as agreement.
+    """
+    case = case_named("born-ion-vdw")
+    request = case.request()
+    runs = [
+        BackendRun.from_result("debye", DebyeSolver().solve(request), request),
+        BackendRun.from_result("apbs-like", DebyeSolver().solve(request), request),
+    ]
+    kwargs = {
+        "candidate": "debye",
+        "centre": case.structure().center(),
+        "radius_a": 3.0,
+        "charge_e": 1.0,
+    }
+
+    with pytest.raises(ValueError, match="cells of the boundary"):
+        grade_field(runs, cells_out=(1,), **kwargs)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="nothing to sample"):
+        grade_field(runs, cells_out=(), **kwargs)  # type: ignore[arg-type]
 
 
 @pytest.mark.apbs
@@ -223,7 +307,7 @@ def test_a_field_grade_refuses_backends_asked_different_questions():
     runs = [
         BackendRun.from_result("apbs", ApbsSolver().solve(case.request()), case.request()),
         BackendRun.from_result(
-            "debye-on-another-surface",
+            "apbs-on-another-surface",
             ApbsSolver().solve(molecular.request()),
             molecular.request(),
         ),
@@ -235,7 +319,6 @@ def test_a_field_grade_refuses_backends_asked_different_questions():
             centre=case.structure().center(),
             radius_a=3.0,
             charge_e=1.0,
-            solvent_dielectric=case.solvent.solvent_dielectric,
         )
 
 

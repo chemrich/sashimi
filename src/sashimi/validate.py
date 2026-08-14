@@ -148,6 +148,15 @@ class BackendRun:
     equation: Equation
     potential: PotentialGrid | None
     ionic_strength: float = 0.0  # M; decides whether differing terms coincide
+    # What a closed form has to be evaluated at to describe this run. Carried
+    # rather than passed in beside it: a Born potential taken at a different
+    # dielectric or temperature than the solver used shifts the reference by a
+    # factor common to every backend, and because `grade_field`'s verdict is a
+    # *ratio* of errors, a large common offset drives every ratio towards 1.0
+    # and the grade passes. `corpus.AnalyticField.exact_at` refuses the same
+    # class of mismatch on ionic strength; these are the other two axes.
+    solvent_dielectric: float = 78.54
+    temperature: float = 298.15
     wall_seconds: float | None = None
     accuracy_tier: AccuracyTier = AccuracyTier.REFERENCE
 
@@ -165,6 +174,8 @@ class BackendRun:
             equation=getattr(request, "equation", Equation.LINEAR),
             potential=potential,
             ionic_strength=request.solvent.ionic_strength,
+            solvent_dielectric=request.solvent.solvent_dielectric,
+            temperature=request.solvent.temperature,
             wall_seconds=result.provenance.wall_seconds,
             accuracy_tier=result.provenance.accuracy_tier,
         )
@@ -615,6 +626,18 @@ def check_field_comparable(runs: Sequence[BackendRun]) -> None:
             )
     if len({run.ionic_strength for run in runs}) > 1:
         raise Incomparable("cannot compare fields across differing ionic strength")
+    for attribute, label in (
+        ("solvent_dielectric", "solvent dielectric"),
+        ("temperature", "temperature"),
+    ):
+        values = {getattr(run, attribute) for run in runs}
+        if len(values) > 1:
+            raise Incomparable(
+                f"cannot compare fields across differing {label}: {sorted(values)}. The "
+                "closed form is evaluated once for every backend, so a mismatch here "
+                "moves the reference by a factor common to all of them — and a common "
+                "offset drives a ratio of errors towards 1.0, which reads as agreement."
+            )
 
 
 def grade_field(
@@ -624,7 +647,6 @@ def grade_field(
     centre: FloatArray,
     radius_a: float,
     charge_e: float,
-    solvent_dielectric: float,
     cells_out: tuple[int, ...] = (2, 4, 8),
     factor: float = DEFAULT_FIELD_FACTOR,
 ) -> FieldGrade:
@@ -635,7 +657,7 @@ def grade_field(
     further from the boundary in its own cells, never closer.
     """
     from sashimi.analytic import born_potential  # noqa: PLC0415 — closed form, not a solver
-    from sashimi.field import errors_by_radius  # noqa: PLC0415
+    from sashimi.field import errors_by_radius, sample_radii  # noqa: PLC0415
 
     with_field = [run for run in runs if run.potential is not None]
     check_field_comparable(with_field)
@@ -662,10 +684,22 @@ def grade_field(
         )
 
     spacing = max(float(np.max(run.potential.spacing)) for run in with_field)  # type: ignore[union-attr]
-    radii = [radius_a + k * spacing for k in cells_out]
+    # Through `sashimi.field`, not inline: that module owns the rule that a
+    # sample must clear the interface cell, and an inline `a + k*h` here is the
+    # second copy its docstring says there must not be. It also rejects
+    # `cells_out=()`, which would otherwise produce no ratios at all — and
+    # `agrees` is an `all()`, so no ratios reads as agreement.
+    radii = sample_radii(radius_a, spacing, cells_out)
+
+    reference_solvent = with_field[0]
 
     def exact_at(radius: float) -> float:
-        return born_potential(radius, charge_e, solvent_dielectric)
+        return born_potential(
+            radius,
+            charge_e,
+            reference_solvent.solvent_dielectric,
+            reference_solvent.temperature,
+        )
 
     errors: dict[str, tuple[float, ...]] = {}
     directions: dict[str, tuple[str, ...]] = {}

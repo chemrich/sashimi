@@ -34,8 +34,8 @@ from sashimi.analytic import (
 from sashimi.field import (
     FIELD_DIRECTION_NAMES,
     FIELD_DIRECTIONS,
-    sample_points,
     sample_radii,
+    sample_values,
 )
 from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
@@ -981,10 +981,21 @@ MANIFEST: tuple[Case, ...] = (
     # are the extremes of the radius arm above, on the surface debye can answer,
     # which is the cheapest way to make the gate span a = 1 to 6 A.
     #
-    # They are not duplicates of their `molecular` twins. A probe cannot carve a
-    # re-entrant surface out of a lone sphere, so the two boundaries describe the
-    # same geometry — and `srad 0` and `srad 1.4` still build different dielectric
-    # maps of it, which `born-ion-vdw-fine` measures as 0.787% against 0.621%.
+    # **On the reference legs these mostly are duplicates of their `molecular`
+    # twins, and the first version of this comment claimed otherwise.** Checked
+    # against the recordings: `born-ion-vdw-r1` is numerically identical to
+    # `born-ion-molecular-r1` on both APBS and DelPhi in every key but the
+    # surface model and `resolved_parameters`, and `-r6` is identical on DelPhi.
+    # Only `-r6` on APBS moves, by 0.19%. That is the physics — a probe cannot
+    # carve a re-entrant surface out of a lone sphere — and `srad 0` against
+    # `srad 1.4` only builds a visibly different dielectric map once the grid is
+    # fine enough to see it, which `born-ion-vdw-fine` measures at 0.25 A as
+    # 0.787% against 0.621%.
+    #
+    # They earn their place for debye, which cannot build `molecular` at all and
+    # would otherwise have M1b resting on two cases at one radius. They do not
+    # earn it by adding an independent reference-tier result, and a reader of a
+    # corpus diff should not be told they do.
     Case(
         name="born-ion-vdw-r1",
         description=(
@@ -1715,8 +1726,12 @@ def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] |
     centre = case.structure().center()
 
     exact = np.array(reference.exact_at(radii, case.solvent))
+    # Through `sashimi.field`, which refuses a sample that fell off the map
+    # rather than recording a bare NaN: `json.dumps` writes `NaN` happily, it is
+    # not valid JSON per spec, and the discrepancy would be reported as "nan%".
+    # Every current case clears the box, so this is about the next one.
     values = np.array(
-        [grid.value_at(sample_points(centre, radius)) for radius in radii]
+        [sample_values(grid, centre, radius) for radius in radii]
     )  # [radius][direction]
     errors = np.abs(values - exact[:, None]) / np.abs(exact)[:, None]
 
