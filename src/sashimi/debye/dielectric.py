@@ -11,12 +11,41 @@ is exactly the configuration M1 is graded on — so it is written now rather tha
 discovered at M3.
 
 The dielectric is sampled at face centres rather than averaged over the face.
-That is the same first-order choice APBS makes with `srfm mol`, and it is worth
-naming as a choice: a volume-fraction average would put the boundary error at
-second order and is the obvious place to look if M1's 1% turns out to be out of
-reach. It is not free — the fraction of a face lying inside a union of spheres
-has no closed form — so it is not paid for before the measurement says it is
-needed.
+**That is the same choice APBS makes with `srfm mol`, and remembering so is not
+trivia — it disqualifies APBS as the reference for any experiment on this line.**
+From M1 until M1c this docstring called a volume-fraction average "the obvious
+place to look". M1c looked; ROADMAP.md section 12, "M1c — the spike ran", carries
+the numbers and the retraction. The short version:
+
+- Smoothing the dielectric over a band of `w` cells damps the grid-phase
+  oscillation M1b measured far less than the summary statistic suggests. The
+  *swing ratio* falls 5.35x -> 1.56x mostly because the best configurations get
+  worse (0.773% -> 1.975%); the **worst** near-field error, which is what a
+  consumer sees, moves only 4.138% -> 3.085%. **That is the whole reason M4a was
+  dropped** — a quarter is not worth two to three days on an axis where debye
+  already matches both incumbents.
+- Blended arithmetically it wrecks the energy: 0.853% -> 3.545% at 0.25 A.
+  Blended **harmonically** — the textbook mean for flux normal to a layered
+  interface — it made the Born energy **8x better**: 0.853% -> 0.107% at 0.25 A,
+  monotonic, no sign flips, across the whole ladder.
+- That energy result is **open, and the evidence for it has since strengthened.**
+  It was first written up as a fixture artifact, on the strength of real-structure
+  energies drifting from APBS (ALA-GLY -0.409% -> +3.565%, barnase -1.102% ->
+  +5.153% at w = 1) — and APBS makes the same hard assignment under test, so that
+  comparison cannot referee it. A reference-free refinement study on ALA-GLY then
+  found all three schemes extrapolating to within 0.25% of one limit, with
+  harmonic reaching it several times sooner: at h = 0.13 A hard is still 1.1% out
+  where harmonic is inside 0.16%.
+
+Both bullets above are graded against exact references — the Born potential and
+the Born energy respectively. What separates them is that the *field* result
+needs no other evidence, while the *energy* result's real-geometry check had to
+be redone once the first reference turned out to share the bias under test.
+
+So the face-centre sample stays, on the field axis, which is the axis debye's
+consumer reads. **Anything that revisits this needs a reference that does not
+itself discretize a volumetric dielectric** — TABI-PB, a closed form, or a truly
+converged grid. Reaching for APBS or DelPhi here measures a shared bias.
 """
 
 from __future__ import annotations
