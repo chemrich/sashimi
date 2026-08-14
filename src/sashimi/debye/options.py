@@ -23,13 +23,18 @@ __all__ = [
     "check_surface",
 ]
 
-# M1's surface, and only M1's surface. The solvent-excluded (`MOLECULAR`)
-# boundary is M4: it needs a probe rolled over the union of spheres, which is
-# the hardest single construction on the ladder and is not something to
-# approximate quietly with a union of inflated spheres — that is a different
-# surface with the same name, which is the mistake `sashimi.gb` made once and
-# ROADMAP.md section 7 records twice.
-SUPPORTED_SURFACES: frozenset[SurfaceModel] = frozenset({SurfaceModel.VAN_DER_WAALS})
+# Both sharp boundaries, as of M4. The solvent-excluded (`MOLECULAR`) surface is
+# built in `debye.surface` by rolling a probe over the union of spheres — not by
+# inflating the spheres, which is a different surface wearing the same name and
+# the mistake `sashimi.gb` made once and ROADMAP.md section 7 records twice.
+#
+# `SMOOTHED_MOLECULAR` will never join them: harmonic averaging over a 9-point
+# stencil is APBS's discretization rather than a boundary, and M1c measured what
+# debye would gain by smoothing its own dielectric — the worst near-field error
+# moves 4.138% -> 3.085%, which is why M4a was dropped. `GAUSSIAN` is DelPhi's.
+SUPPORTED_SURFACES: frozenset[SurfaceModel] = frozenset(
+    {SurfaceModel.VAN_DER_WAALS, SurfaceModel.MOLECULAR}
+)
 
 # The nonlinear equation is representable in the protocol and solved by nobody
 # here; `backends.IMPLEMENTED_EQUATIONS` says the same thing for the shipped
@@ -94,11 +99,10 @@ def check_surface(model: SurfaceModel) -> None:
     if model not in SUPPORTED_SURFACES:
         supported = ", ".join(sorted(m.value for m in SUPPORTED_SURFACES))
         raise UnsupportedRequest(
-            f"debye builds the {supported} boundary and was asked for "
-            f"{model.value!r}. The solvent-excluded surface is ROADMAP.md "
-            "section 12 M4; harmonic averaging is APBS's and debye will not "
-            "have one. Ask APBS or DelPhi for those, or request "
-            "surface_model='van-der-waals'."
+            f"debye builds the {supported} boundaries and was asked for "
+            f"{model.value!r}. Harmonic averaging is APBS's discretization and a "
+            "Gaussian dielectric is DelPhi's; debye will have neither. Ask that "
+            "backend for those, or request one of the sharp boundaries."
         )
 
 
