@@ -21,19 +21,26 @@ the numbers and the retraction. The short version:
   oscillation M1b measured far less than the summary statistic suggests. The
   *swing ratio* falls 5.35x -> 1.56x mostly because the best configurations get
   worse (0.773% -> 1.975%); the **worst** near-field error, which is what a
-  consumer sees, moves only 4.138% -> 3.085%. That is why M4a was dropped, and it
-  is the one conclusion here graded against an exact reference.
+  consumer sees, moves only 4.138% -> 3.085%. **That is the whole reason M4a was
+  dropped** — a quarter is not worth two to three days on an axis where debye
+  already matches both incumbents.
 - Blended arithmetically it wrecks the energy: 0.853% -> 3.545% at 0.25 A.
   Blended **harmonically** — the textbook mean for flux normal to a layered
   interface — it made the Born energy **8x better**: 0.853% -> 0.107% at 0.25 A,
   monotonic, no sign flips, across the whole ladder.
-- That energy result is **open, not refuted.** It was first written up as a
-  fixture artifact, on the strength of real-structure energies drifting from APBS
-  (ALA-GLY -0.409% -> +3.565%, barnase -1.102% -> +5.153% at w = 1). A review
-  pointed out that APBS makes the same hard assignment under test, so that
-  comparison cannot referee it. A self-contained refinement study on ALA-GLY then
-  found harmonic *more* grid-insensitive, not less — fitted slope 0.117 against
-  hard's -4.178.
+- That energy result is **open, and the evidence for it has since strengthened.**
+  It was first written up as a fixture artifact, on the strength of real-structure
+  energies drifting from APBS (ALA-GLY -0.409% -> +3.565%, barnase -1.102% ->
+  +5.153% at w = 1) — and APBS makes the same hard assignment under test, so that
+  comparison cannot referee it. A reference-free refinement study on ALA-GLY then
+  found all three schemes extrapolating to within 0.25% of one limit, with
+  harmonic reaching it several times sooner: at h = 0.13 A hard is still 1.1% out
+  where harmonic is inside 0.16%.
+
+Both bullets above are graded against exact references — the Born potential and
+the Born energy respectively. What separates them is that the *field* result
+needs no other evidence, while the *energy* result's real-geometry check had to
+be redone once the first reference turned out to share the bias under test.
 
 So the face-centre sample stays, on the field axis, which is the axis debye's
 consumer reads. **Anything that revisits this needs a reference that does not

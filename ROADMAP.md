@@ -2228,10 +2228,12 @@ default-off option, and measured both axes M1c required.
 
 **Axis 1, the phase oscillation it was aimed at. It improves, but far less than
 the summary statistic says.** Worst-direction error at r = 4 Å on `born-ion-vdw`,
-swept over paddings 3–11 Å. *Note the shipped row reads 4.138% where M1b's table
-above reads 4.101% for the same case and quantity: M1b swept 2–14 Å, so the two
-sweeps sample different sets of achieved spacings and pick up different maxima.
-Both are debye at its worst over the range swept; neither supersedes the other.*
+swept over paddings 3–11 Å. *The shipped row reads 4.138% where M1b's table above
+reads 4.101% for the same case and quantity, and the reason is the sweep range:
+M1b swept paddings **2–9 Å** and peaked at h = 0.46354, this swept **3–11 Å** and
+picked up padding 10 → h = 0.46429, just past the peak. Neither range contains
+the other, both are debye at its worst over what was swept, and the two maxima
+are 0.9% apart on the shoulder of the same peak.*
 
 | w (cells) | blend | best h | worst h | swing |
 |---|---|---|---|---|
@@ -2285,38 +2287,52 @@ does not" is in part agreement about a **shared discretization bias**, and a
 verdict whose reference shares the incumbent's bias is exactly the class M1b was
 corrected for one milestone earlier.
 
-**The self-contained test, which needs no external reference.** Solve ALA-GLY
-down a refinement ladder under each scheme and compare where they are heading and
-how fast they get there. Energies in kJ/mol; h = 0.16 and 0.125 return identical
-values because debye's lattice quantisation lands them on one grid, so the finest
-*distinct* point is h = 0.16:
+**The self-contained test, which needs no external reference.** Solve ALA-GLY down
+a refinement ladder under each scheme and compare where they are heading and how
+fast they get there. Energies in kJ/mol, tabulated against the **achieved**
+max-axis spacing — the quantity `check_same_lattice` returns — with
+`max_points` raised from its 161³ default so the fine end is a refinement point:
 
-| scheme | 0.50 | 0.40 | 0.30 | 0.25 | 0.20 | 0.16 | fitted L | slope A |
-|---|---|---|---|---|---|---|---|---|
-| hard | −227.82 | −224.20 | −222.39 | −220.74 | −220.61 | −220.28 | −219.71 | −4.178 |
-| harmonic w=0.5 | −218.16 | −217.62 | −216.92 | −216.81 | −216.75 | −216.81 | −216.81 | 0.117 |
-| harmonic w=1.0 | −218.80 | −217.97 | −216.93 | −216.70 | −216.41 | −216.47 | −216.21 | −1.659 |
+| scheme | 0.4672 | 0.3905 | 0.2929 | 0.2492 | 0.1967 | 0.1699 | 0.1495 | 0.1289 | fitted L | A |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hard | −227.82 | −224.20 | −222.39 | −220.74 | −220.61 | −220.27 | −220.02 | −219.20 | −216.84 | **−19.7** |
+| harmonic w=0.5 | −218.16 | −217.62 | −216.92 | −216.81 | −216.75 | −216.83 | −216.86 | −216.86 | −217.09 | 1.67 |
+| harmonic w=1.0 | −218.80 | −217.97 | −216.93 | −216.70 | −216.41 | −216.42 | −216.44 | −216.46 | −216.54 | 0.70 |
 
-Two things follow, and neither is the original claim. **The gap does not close
-the way "the band is `w·h`, so both share a limit" predicts** — it stalls near
-3.5 kJ rather than tracking h — but the extrapolated limits sit only 1.61% apart,
-which is not far enough apart to call them different limits either. And
-**harmonic is dramatically the more grid-insensitive scheme**: slope 0.117 and
-−1.659 against hard's −4.178, i.e. it has nearly arrived at h = 0.3 where hard is
-still moving at h = 0.2.
+*The first version of this table was wrong twice and a review caught both: it
+regressed on the **requested** resolution rather than the achieved spacing —
+`size_grid` turns a 0.5 Å request into `[0.4672, 0.4393, 0.4576]` — and its two
+finest points were identical not through "lattice quantisation" but because
+`GridSpec.max_points` defaults to 4,173,281 = 161³ and `grid.py`'s step-down loop
+clamped both to it. Regressing on the wrong abscissa against a clamp artefact is
+how it read a stalled gap.*
 
-**So the honest position on real geometry is: undetermined, and the admissible
-evidence leans toward harmonic rather than away.** The one reference that is
-exact — the Born closed form — says harmonic is 8× better. The one that is not
-exact (APBS) is disqualified. Nothing measured here shows harmonic to be worse on
-a union of spheres; the original claim that it did was reading a shared bias.
+**Corrected, the three schemes agree.** The extrapolated limits sit **0.25%
+apart** (0.549 kJ/mol), and the gap is clean `O(h)` — gap/h is flat at −16 to −21
+across the whole ladder — so they do share a continuum limit, exactly as "the
+band is `w·h`, so it vanishes" predicts. The earlier "stalls near 3.5 kJ" was the
+clamp: the two finest points were one grid, so the gap could not move.
 
-**What would settle it**, for whoever picks this up: a reference that does not
-discretize a volumetric dielectric at all. TABI-PB is the boundary-element
-backend already in the tree and is the natural choice; a Kirkwood case grades the
-off-centre-charge geometry against a closed form; and a genuinely converged
-fine-grid solve needs h well below 0.16 Å, which the `n = m·8 + 1` lattice makes
-awkward to hit precisely.
+**And harmonic is far nearer that shared limit at every usable spacing.** Against
+L ≈ −216.8: at h = 0.25 hard is 1.8% out where harmonic is 0.00–0.05%; at
+h = 0.13 hard is still **1.1%** out where harmonic is 0.03–0.16%. The fitted
+slopes say the same — hard is at −19.7 and still moving fast at the finest point,
+harmonic at 0.70–1.67 and essentially arrived by h ≈ 0.29. Hard's fit also
+carries 10–20× harmonic's residual, which is itself the signature of a scheme not
+yet in its asymptotic regime.
+
+**So the honest position on real geometry is: the admissible evidence points
+toward harmonic, not away.** A reference-free convergence study says it reaches
+the common answer several times sooner, and the one exact reference (Born) says
+it is 8× better. The APBS comparison that said otherwise is disqualified. Nothing
+measured here shows harmonic to be worse on a union of spheres.
+
+**What would settle it properly**, for whoever picks this up: a reference that
+discretizes no volumetric dielectric — TABI-PB is the boundary-element backend
+already in the tree, and a Kirkwood case brings a closed form to an off-centre
+charge. *Note the finer grids above needed only `GridSpec(max_points=...)`; an
+earlier draft of this section blamed the `n = m·8 + 1` lattice, which is wrong —
+the lattice produces those spacings happily, and the cap is one keyword away.*
 
 *The lesson I drew first — "grade a dielectric change on a real structure before
 the closed form" — was the right instinct and the wrong conclusion, because the
@@ -2357,8 +2373,14 @@ Numbers a future attempt has to beat: **3.085%** worst-case near field, and
 the repo has only `src/` and `tests/`, and `tests/` forbids `print`.* Replace
 `sashimi.debye.linear.dielectric_faces` (patch it **there**, not on
 `sashimi.debye.dielectric`, which `linear` imported from directly) with one that
-computes, per face-centre axis, a signed distance `d = min_i(|x − c_i| − r_i)`
-saturated at `+band` with `band = w·h`, a solvent fraction
+computes, per face-centre axis, `d = min_i(|x − c_i| − r_i)` saturated at `+band`
+with `band = w·h` — **an approximate signed distance, and the approximation is
+worth keeping in view**: it is the exact exterior distance to each sphere
+separately, but near a concave junction between two spheres it is not the
+distance to their union. That caveat was written down in the first draft, then
+deleted along with the APBS-based claim it happened to sit next to; it never
+depended on APBS and remains a live candidate explanation for any residual
+hard-versus-harmonic difference on real geometry — a solvent fraction
 `f = clip(½(1 + t + sin(πt)/π), 0, 1)` at `t = d/band` — antisymmetric, so the
 half-way dielectric sits on the surface — and then either
 `ε = ε_p + f(ε_s − ε_p)` (arithmetic) or `1/ε = (1−f)/ε_p + f/ε_s` (harmonic).
@@ -2374,11 +2396,12 @@ was asked and it should not be smuggled in under a dropped milestone.
 
 Harmonically blending the dielectric over a band made the Born solvation energy
 **8× more accurate** — the one measurement in this milestone with an exact
-reference and no methodological objection against it. On real structures the
-scheme is more grid-insensitive by a factor of ~3 in the fitted slope. Whether
-that is real accuracy or a compensating error is *undetermined*, for the reason
-the retraction above gives: the reference used to check it shared the bias under
-test.
+reference and no methodological objection against it. The reference-free
+refinement study above then agreed independently: all three schemes extrapolate
+to within 0.25% of one common limit, and harmonic arrives there several times
+sooner (fitted slope 0.70–1.67 against hard's −19.7, and still 1.1% out at
+h = 0.13 Å where harmonic is inside 0.16%). Two independent lines now point the
+same way, which is more than the retracted claim ever had against them.
 
 **Before anyone acts on this**, the reference problem has to be solved first —
 TABI-PB, a Kirkwood closed form, or a genuinely converged grid. Then the field
@@ -2396,7 +2419,7 @@ is the same shape as the `relaxation` knob `debye/options.py` refuses to carry.
 | M1 ✅ | LPBE on a Cartesian grid, vdW surface | **met**: 0.853% at 0.25 Å against a 1% per-backend tolerance, falling monotonically 3.836 → 1.576 → 0.853 → 0.479% under refinement |
 | M1a ✅ | **The field check has to see more than one ray** | done — the section below: eight directions across the three cubic symmetry classes, all sixteen field recordings re-measured, and the tolerances that moved moved because the diagonal is worse than the axis |
 | M1b ✅ | **The field, graded against the incumbents** | debye within **2× the best reference-tier solver installed**, at radii common to every backend **and on one shared lattice**. Decided 2026-08-14 by Charlie, over a round number: debye reproduces DelPhi C++'s discretization to three decimals, so "no worse than the worst incumbent" is a bar it meets by construction — a check that cannot fail. **Met on all four cases: 1.01 / 1.01 / 1.05 / 1.69× worst at a/h = 12, 12, 6, 2.** The first measurement reported 5.24× and 8.64× on the two under-resolved cases; that was grid phase, not interface handling, and the section above is the correction |
-| M1c ✅ | **The dielectric spike** | **ran; M4a is dropped.** A smoothed dielectric moves the *worst* near-field error only 4.138% → 3.085% — the swing ratio flatters it — which does not justify M4a's two to three days on an axis where debye is already at parity. Separately it made the Born energy **8× better**, which is left open rather than acted on: the real-structure check that appeared to contradict it used APBS, which shares the hard assignment under test. The knob is not landed |
+| M1c ✅ | **The dielectric spike** | **ran; M4a is dropped.** A smoothed dielectric moves the *worst* near-field error only 4.138% → 3.085% — the swing ratio flatters it — which does not justify M4a's two to three days on an axis where debye is already at parity. Separately it made the Born energy **8× better**, left open rather than acted on: the real-structure check that appeared to contradict it used APBS, which shares the hard assignment under test, and a reference-free convergence study since points the other way. The knob is not landed |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
