@@ -38,7 +38,15 @@ At the spacings two backends both land on, debye is at parity with both:
     debye vs APBS         0.871-1.116x over 16 shared spacings (born-ion-vdw)
                           1.037-1.617x over 18 shared spacings (r1)
 
-so the worst honest ratio anywhere is 1.62x and M1b is met on all four cases.
+so debye tracks both incumbents at matched spacing. The shipped gate, which pins
+one lattice per case rather than joining wherever backends coincide, reads
+
+    born-ion-vdw-r6    a/h = 12   1.00 / 1.01 / 1.01x
+    born-ion-vdw-fine  a/h = 12   1.00 / 1.01 / 1.00x
+    born-ion-vdw       a/h =  6   1.00 / 1.05 / 1.01x
+    born-ion-vdw-r1    a/h =  2   1.69 / 1.19 / 1.04x
+
+so 1.69x at worst, against a bar of 2, and M1b is met on all four.
 
 Three controls, because the claim is that a recorded measurement was wrong:
 reading grid **nodes** directly with no interpolation shows the same swing, so it
@@ -66,6 +74,7 @@ from __future__ import annotations
 
 import dataclasses
 
+import numpy as np
 import pytest
 
 from sashimi.apbs import ApbsSolver
@@ -75,11 +84,18 @@ from sashimi.delphi import DelphiSolver
 from sashimi.delphi.discover import DelphiFlavour, discover_delphi
 from sashimi.delphi.options import SUPPORTED_SURFACES as DELPHI_SURFACES
 from sashimi.field import sample_values
-from sashimi.protocol import AccuracyTier, PotentialGrid, SolveResult, SurfaceModel
+from sashimi.protocol import (
+    AccuracyTier,
+    Equation,
+    PotentialGrid,
+    SolveResult,
+    SurfaceModel,
+)
 from sashimi.validate import (
     DEFAULT_FIELD_FACTOR,
     BackendRun,
     Incomparable,
+    check_same_lattice,
     grade_field,
 )
 
@@ -93,11 +109,36 @@ from sashimi.validate import (
 # span it — 12, 12, 6, 2 — rather than to span resolution or radius. That is what
 # the first measurement got wrong: `born-ion-vdw-r6` and `born-ion-vdw` sit at
 # the *same* h = 0.5 A and differ only in how many cells cross the radius.
+#
+# **The padding also has to keep the outermost sample clear of the box face**,
+# which a review caught after the lattice fix and which three of the four
+# original choices failed. The boundary condition lives on that face, and a
+# sample near it inflates **APBS** specifically — the reference — which flatters
+# debye. Measured at fixed lattice, worst-direction error at r = a + 8h against
+# the margin expressed in units of that radius:
+#
+#   margin/r_out   APBS           DelPhi C++     debye
+#   0.14           0.637%         0.118%         0.111%    <- born-ion-vdw @ 5.0
+#   0.60           0.301-0.413%   0.233-0.370%   0.234-0.380%
+#   >= 1.29        0.119-0.396%   converged      converged
+#
+# So the paddings below are the smallest common lattice clearing
+# `MIN_BOX_MARGIN_RATIO`, and `grade_field` now refuses anything that does not —
+# the old values are the mutation that reddens it.
 COMMON_LATTICE = {
-    "born-ion-vdw-r6": (10.0, 12.0),
+    "born-ion-vdw-r6": (18.0, 12.0),
     "born-ion-vdw-fine": (9.0, 12.0),
-    "born-ion-vdw": (5.0, 6.0),
-    "born-ion-vdw-r1": (7.0, 2.0),
+    "born-ion-vdw": (13.0, 6.0),
+    "born-ion-vdw-r1": (15.0, 2.0),
+}
+
+# What each case's padding was before the box-margin finding, kept because it is
+# the mutation that makes the new guard fire. `fine` is absent: its 9.0 already
+# cleared the margin, which is why the table above shows it converged.
+CONTAMINATED_PADDING = {
+    "born-ion-vdw-r6": 10.0,
+    "born-ion-vdw": 5.0,
+    "born-ion-vdw-r1": 7.0,
 }
 
 
@@ -266,6 +307,102 @@ def test_the_near_field_error_depends_on_grid_phase_more_than_on_the_solver():
         f"({errors}); if that is now small, the comparison across lattices that "
         "check_same_lattice refuses may no longer be the trap it was"
     )
+
+
+def grid_at(spacing, origin=(0.0, 0.0, 0.0), n=41):
+    """A `PotentialGrid` with a chosen lattice. Values are irrelevant to these checks."""
+    return PotentialGrid(
+        values=np.zeros((n, n, n)),
+        origin=np.asarray(origin, float),
+        spacing=np.asarray(spacing, float),
+    )
+
+
+def run_on(name: str, grid: PotentialGrid) -> BackendRun:
+    return BackendRun(
+        name=name,
+        energy_kj_mol=None,
+        energy_term=None,
+        surface_model=SurfaceModel.VAN_DER_WAALS,
+        equation=Equation.LINEAR,
+        potential=grid,
+    )
+
+
+def test_the_lattice_check_refuses_differing_spacing_and_offset_needing_no_binary():
+    """Both halves of `check_same_lattice`, reached directly. **Runs on the bare leg.**
+
+    The binary-marked test above exercises the spacing half through real
+    backends, which is the honest end-to-end version and which *skips* wherever
+    APBS or DelPhi is absent — so on CI's pure-Python leg the whole refusal path
+    was uncovered. And the **offset** half could not fire at all through any
+    shipped backend: all three sizers place `origin = centre - fglen/2` on an odd
+    node count, so the solute lands exactly on a node and the fractional offsets
+    are identically zero. That is ROADMAP.md section 7's guard-that-cannot-fire,
+    and the fix that section prescribes is to construct the state directly.
+    """
+    centre = np.array([10.0, 10.0, 10.0])
+
+    same = [run_on("a", grid_at((0.5, 0.5, 0.5))), run_on("b", grid_at((0.5, 0.5, 0.5)))]
+    assert check_same_lattice(same, centre) == pytest.approx(0.5)
+
+    differing = [run_on("a", grid_at((0.5, 0.5, 0.5))), run_on("b", grid_at((0.4, 0.4, 0.4)))]
+    with pytest.raises(Incomparable, match="differing lattices"):
+        check_same_lattice(differing, centre)
+
+    # Same spacing, solute half a cell over: a different staircase.
+    shifted = [
+        run_on("a", grid_at((0.5, 0.5, 0.5), origin=(0.0, 0.0, 0.0))),
+        run_on("b", grid_at((0.5, 0.5, 0.5), origin=(0.25, 0.0, 0.0))),
+    ]
+    with pytest.raises(Incomparable, match="differently within a cell"):
+        check_same_lattice(shifted, centre)
+
+
+def test_the_lattice_check_accepts_two_identical_anisotropic_grids():
+    """A non-cubic solute gives anisotropic spacing, and that is not a mismatch.
+
+    `apbs.grid.size_grid` returns [0.4672, 0.4393, 0.4004] on `peptide-vdw`. The
+    first version of this check took a single max-minus-min over an (n_grids, 3)
+    array, which folds a grid's own anisotropy into the cross-backend spread — so
+    two **byte-identical** anisotropic lattices were refused, with a message that
+    printed one `h` per backend and contradicted itself. The comparison has to be
+    per axis, and the returned spacing has to be the coarsest axis because
+    `sample_radii` must clear the interface cell on all three.
+    """
+    centre = np.array([10.0, 10.0, 9.0])
+    grid = grid_at((0.5, 0.5, 0.45))
+    runs = [run_on("a", grid), run_on("b", grid)]
+
+    assert check_same_lattice(runs, centre) == pytest.approx(0.5)
+
+
+def test_a_field_grade_refuses_samples_that_do_not_clear_the_box():
+    """The box-margin guard, with the paddings that produced the finding as its mutation.
+
+    Needs no binary: debye alone, solved twice, at the padding each case carried
+    before the margin was measured. The guard is one-sided in a way worth
+    restating — it is **APBS** that a near-face sample inflates, and inflating the
+    *reference* raises the yardstick and flatters the candidate.
+    """
+    for name, padding in CONTAMINATED_PADDING.items():
+        case = case_named(name)
+        request = request_for(case, padding)
+        reference = case.analytic_field
+        assert reference is not None
+        runs = [
+            BackendRun.from_result("debye", DebyeSolver().solve(request), request),
+            BackendRun.from_result("also-debye", DebyeSolver().solve(request), request),
+        ]
+        with pytest.raises(Incomparable, match="clears the outermost sample"):
+            grade_field(
+                runs,
+                candidate="debye",
+                centre=case.structure().center(),
+                radius_a=reference.radius_a,
+                charge_e=reference.charge_e,
+                cells_out=reference.cells_out,
+            )
 
 
 def test_a_field_grade_refuses_a_lone_backend():

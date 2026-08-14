@@ -2068,10 +2068,10 @@ written:
 
 | case | a/h | h | ratios | as first measured |
 |---|---|---|---|---|
-| `born-ion-vdw-r6` | 12 | 0.50 Å | 1.01 / 1.02 / 1.03× | 1.01 / 1.02 / 1.03× |
+| `born-ion-vdw-r6` | 12 | 0.50 Å | 1.00 / 1.01 / 1.01× | 1.01 / 1.02 / 1.03× |
 | `born-ion-vdw-fine` | 12 | 0.25 Å | 1.00 / 1.01 / 1.00× | 1.77 / 1.00 / 1.01× |
-| `born-ion-vdw` | 6 | 0.50 Å | **1.01 / 1.10 / 0.94×** | 5.24 / 4.81 / 3.74× |
-| `born-ion-vdw-r1` | 2 | 0.50 Å | **1.65 / 1.13 / 1.00×** | 8.64 / 3.61 / 1.55× |
+| `born-ion-vdw` | 6 | 0.50 Å | **1.00 / 1.05 / 1.01×** | 5.24 / 4.81 / 3.74× |
+| `born-ion-vdw-r1` | 2 | 0.50 Å | **1.69 / 1.19 / 1.04×** | 8.64 / 3.61 / 1.55× |
 
 Even `fine`, which passed, was being compared across lattices — APBS at
 h = 0.2031 Å against debye's 0.25 Å — and its 1.77× was the same artifact
@@ -2112,12 +2112,47 @@ changes should expect its field tolerance to move by much more than the edit
 looks like it should cost. Flagged here rather than re-measured; the recordings
 are untouched by this milestone.
 
-*This is §7's class again, and a new member of it: a gate that pinned one
-variable and left a stronger one free.* Item 9 in that list was a verdict that
-moved with the *installed set*; this is a verdict that moved with the *lattice
-each backend happened to choose*, and both moved in the incumbents' favour. The
-lesson that generalises: when a comparison controls for a variable, ask what else
-varies that the controlled variable was standing in for.
+**And a second free variable, found by review after the lattice was pinned: the
+box.** Pinning a padding to obtain a common lattice chose, for three of the four
+cases, a box whose face was too near the *outermost* sample — and the boundary
+condition lives on that face. Measured at fixed lattice, worst-direction error at
+r = a + 8h against the margin in units of that radius:
+
+| margin / r_out | APBS | DelPhi C++ | debye |
+|---|---|---|---|
+| 0.14 | **0.637%** | 0.118% | 0.111% |
+| 0.60 | 0.301–0.413% | 0.233–0.370% | 0.234–0.380% |
+| ≥ 1.29 | 0.119–0.396% | converged | converged |
+
+**Only APBS moves** — consistent with mg-auto's focusing carrying its coarse
+grid's boundary treatment inward — and APBS is a *reference*. An inflated
+reference raises the yardstick, and the verdict is candidate ÷ reference, so the
+contamination flatters debye. Same direction as the other two.
+
+`check_samples_clear_the_box` now refuses it, and the paddings moved to the
+smallest common lattice that clears the margin. The ratios in the table above are
+the corrected ones; the contaminated paddings read 1.01 / 1.10 / **0.94**× on
+`born-ion-vdw`, and that 0.94× — debye apparently *beating* the best reference —
+was the contamination showing.
+
+**Worth recording how this was missed, because the control looked sufficient.**
+Box-size independence *was* checked, at the innermost sample (r = a + 2h), where
+padding moves the answer by 2%. The contamination is at the outermost (r = a +
+8h), where it moves it by 5.4×. **A control has to be evaluated where the effect
+would be, not where the measurement is most convenient** — which is §7's "ask
+what the rule is conditioned on, then evaluate at the extremes", arrived at from
+yet another direction.
+
+*This is §7's class again, and two new members of it: a gate that pinned one
+variable and left a stronger one free — twice.* Item 9 in that list was a verdict
+that moved with the *installed set*; these are verdicts that moved with the
+*lattice each backend happened to choose* and with the *box that lattice implied*.
+All three moved in the incumbents' favour, and that is not coincidence: the
+incumbents' defaults are what the cases were built around, so an uncontrolled
+variable tends to sit where it suits them. The lesson that generalises: when a
+comparison controls for a variable, ask what else varies that the controlled
+variable was standing in for — and when you find one, **enumerate the rest rather
+than pinning the one that just bit**.
 
 ### M1c — the dielectric spike, and why the full thing waits for M4
 
@@ -2180,7 +2215,7 @@ rung, M2 through M4, is debye catching up to what they already do.
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
 | M1 ✅ | LPBE on a Cartesian grid, vdW surface | **met**: 0.853% at 0.25 Å against a 1% per-backend tolerance, falling monotonically 3.836 → 1.576 → 0.853 → 0.479% under refinement |
 | M1a ✅ | **The field check has to see more than one ray** | done — the section below: eight directions across the three cubic symmetry classes, all sixteen field recordings re-measured, and the tolerances that moved moved because the diagonal is worse than the axis |
-| M1b ✅ | **The field, graded against the incumbents** | debye within **2× the best reference-tier solver installed**, at radii common to every backend **and on one shared lattice**. Decided 2026-08-14 by Charlie, over a round number: debye reproduces DelPhi C++'s discretization to three decimals, so "no worse than the worst incumbent" is a bar it meets by construction — a check that cannot fail. **Met on all four cases: 1.01 / 1.00 / 1.10 / 1.65× worst at a/h = 12, 12, 6, 2.** The first measurement reported 5.24× and 8.64× on the two under-resolved cases; that was grid phase, not interface handling, and the section above is the correction |
+| M1b ✅ | **The field, graded against the incumbents** | debye within **2× the best reference-tier solver installed**, at radii common to every backend **and on one shared lattice**. Decided 2026-08-14 by Charlie, over a round number: debye reproduces DelPhi C++'s discretization to three decimals, so "no worse than the worst incumbent" is a bar it meets by construction — a check that cannot fail. **Met on all four cases: 1.01 / 1.01 / 1.05 / 1.69× worst at a/h = 12, 12, 6, 2.** The first measurement reported 5.24× and 8.64× on the two under-resolved cases; that was grid phase, not interface handling, and the section above is the correction |
 | M1c | **The dielectric spike** — half a day, next | a *number*, either way: does a dielectric that varies continuously with h damp the 5.3× phase oscillation, and what does it do to M1's energy? Approved 2026-08-14; the section above carries the design and the risk |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |

@@ -77,6 +77,7 @@ __all__ = [
     "DEFAULT_FIELD_FACTOR",
     "LATTICE_OFFSET_CELLS",
     "LATTICE_RTOL",
+    "MIN_BOX_MARGIN_RATIO",
     "N_PROBES",
     "PROBE_SEED",
     "Backend",
@@ -87,6 +88,7 @@ __all__ = [
     "SolverFamily",
     "System",
     "check_same_lattice",
+    "check_samples_clear_the_box",
     "compare_results",
     "grade_field",
     "overlap_probe_points",
@@ -540,11 +542,16 @@ def with_surface_model(
 # with DelPhi does not make a solver within a factor of APBS.
 
 # How much worse than the best installed reference solver a candidate may be.
-# Measured rather than chosen: across every spacing two backends both landed on,
-# the largest honest ratio anywhere is 1.62x (debye against APBS on the a/h = 2
-# case) and the typical one is 1.00x. A factor of 2 therefore sits just above
-# what near-peer discretizations actually do to each other, which is the only
-# useful place to put it.
+# Measured rather than chosen. **The number the shipped gate actually reads is
+# 1.69x** — debye against APBS on `born-ion-vdw-r1`, a/h = 2 — and the typical one
+# is 1.01x, so a factor of 2 leaves 1.18x of headroom above what near-peer
+# discretizations do to each other. Quote the gate's number here and not the
+# 1.62x from the offline shared-spacing sweep: they measure slightly different
+# things (the sweep joins backends wherever they happen to coincide; the gate
+# pins one lattice per case), and this comment is the record of where the
+# constant came from, so it has to match the assertion that runs. It has already
+# drifted once — a review caught it reading 1.62 when the gate said 1.65, and
+# then the box-margin fix moved the gate to 1.69.
 DEFAULT_FIELD_FACTOR = 2.0
 
 # A candidate and something to grade it against.
@@ -565,6 +572,24 @@ LATTICE_RTOL = 1e-6
 # since it takes a face centre crossing the boundary to change the staircase. So
 # anything from ~1e-4 to ~1e-2 would behave identically here.
 LATTICE_OFFSET_CELLS = 1e-3
+
+# A sample must be at least this many times its own radius clear of the box face.
+# The boundary condition is applied on that face, so a sample near it reads the
+# approximation there rather than the solver — and it is the **reference** that
+# gets inflated, which flatters the candidate. Measured on the M1b cases at fixed
+# lattice, as the outermost sample's worst-direction error against margin/r_out:
+#
+#   margin/r_out   APBS            DelPhi C++      debye
+#   0.14           0.637%          0.118%          0.111%     <- 5.4x inflated
+#   0.60           0.301-0.413%    0.233-0.370%    0.234-0.380%
+#   >= 1.29        0.119-0.396%    converged       converged
+#
+# Only APBS is affected, which is consistent with mg-auto's focusing carrying its
+# coarse grid's boundary treatment inward. A floor of 1.0 is the round number
+# below the cheapest clean measurement and above the worst dirty one — "the
+# sample is nearer the solute than the box face" — and every M1b case now clears
+# it by 29% or more. It is a floor, not a target: prefer paddings that clear it.
+MIN_BOX_MARGIN_RATIO = 1.0
 
 
 @dataclass(frozen=True)
@@ -713,10 +738,17 @@ def check_same_lattice(runs: Sequence[BackendRun], centre: FloatArray) -> float:
         raise Incomparable("no backend produced a volumetric field")
 
     spacings = np.array([np.asarray(grid.spacing, dtype=float) for grid in grids])
-    span = float(spacings.max() - spacings.min())
-    if span > LATTICE_RTOL * float(spacings.mean()):
+    # Per axis **across grids**, not a global max-min. A global span folds the
+    # grid's own anisotropy into the cross-backend spread, so two byte-identical
+    # anisotropic lattices are refused — and the message then prints one `h` per
+    # backend and contradicts itself. `apbs.grid.size_grid` returns anisotropic
+    # spacing for any non-cubic solute (on `peptide-vdw`, [0.4672, 0.4393,
+    # 0.4004]), so this fires the first time a grade is pointed at anything that
+    # is not a single sphere.
+    span = np.ptp(spacings, axis=0)
+    if np.any(span > LATTICE_RTOL * spacings.mean(axis=0)):
         detail = ", ".join(
-            f"{run.name} h = {float(np.max(run.potential.spacing)):.6g} A"
+            f"{run.name} h = {np.round(np.asarray(run.potential.spacing, dtype=float), 6).tolist()}"
             for run in runs
             if run.potential is not None
         )
@@ -745,7 +777,58 @@ def check_same_lattice(runs: Sequence[BackendRun], centre: FloatArray) -> float:
             f"within a cell: fractional offsets {offsets.tolist()}, differing by "
             f"{float(deltas.max()):.3g} of a cell. Same spacing, different staircase."
         )
-    return float(spacings.mean())
+    # The **coarsest** axis, because `sample_radii` has to clear the interface
+    # cell on every axis and a mean would under-report it on an anisotropic grid.
+    # Every grid here is the same grid by now, so this is a max over axes only.
+    return float(spacings.max())
+
+
+def check_samples_clear_the_box(
+    runs: Sequence[BackendRun],
+    centre: FloatArray,
+    radius_a: float,
+    spacing: float,
+    cells_out: tuple[int, ...],
+) -> None:
+    """Refuse a grade whose outermost sample sits too near the box face.
+
+    The sibling of `check_same_lattice`, and found the same way — by a review
+    asking what *else* the comparison left free once the lattice was pinned.
+
+    The boundary condition lives on the box face. A sample close to it reads that
+    approximation rather than the solver, and the damage is one-sided: on
+    `born-ion-vdw` at a margin of 1 A, **APBS** reads 0.637% at the outermost
+    radius against 0.124% on the same lattice in a larger box, while DelPhi and
+    debye are unmoved at 0.118 and 0.111%. An inflated *reference* raises the
+    yardstick, and since the verdict is candidate/reference, it flatters the
+    candidate — the exact direction this module exists to refuse.
+
+    Worth being explicit that this was missed by a control that looked like it
+    covered it: box-size independence was checked at the *innermost* sample
+    (r = a + 2h), where padding moves the answer by 2%, and the contamination is
+    at the *outermost* (r = a + 8h). A control has to be evaluated where the
+    effect would be, not where the measurement is most convenient.
+    """
+    if not cells_out:
+        return  # `sample_radii` refuses this, with a better message
+    outermost = radius_a + max(cells_out) * spacing
+    centre = np.asarray(centre, dtype=float).reshape(DIMENSIONS)
+    for run in runs:
+        if run.potential is None:
+            continue
+        grid = run.potential
+        origin = np.asarray(grid.origin, dtype=float)
+        far = origin + (np.asarray(grid.shape) - 1) * np.asarray(grid.spacing, dtype=float)
+        margin = float(np.min(np.minimum(centre - origin, far - centre)) - outermost)
+        if margin < MIN_BOX_MARGIN_RATIO * outermost:
+            raise Incomparable(
+                f"{run.name}'s box clears the outermost sample (r = {outermost:.4g} A) by "
+                f"only {margin:.4g} A, under the {MIN_BOX_MARGIN_RATIO:g}x of that radius "
+                "this needs. The boundary condition is applied on the box face, so a "
+                "sample near it measures that approximation rather than the solver — and "
+                "it inflates the *reference*, which flatters the candidate. Increase "
+                "padding, keeping every backend on one lattice."
+            )
 
 
 def grade_field(
@@ -760,9 +843,15 @@ def grade_field(
 ) -> FieldGrade:
     """Grade `candidate`'s field against the best reference-tier solver present.
 
-    The sample radii come from the **coarsest** grid in the comparison, so every
-    backend's sample clears its own interface cell — a backend on a finer grid is
-    further from the boundary in its own cells, never closer.
+    **Every backend must have solved on one lattice**, which `check_same_lattice`
+    enforces and which is what makes the ratio mean anything — grid phase moves
+    the near-field error by more than these solvers differ from each other. The
+    sample radii therefore come from that single shared spacing (its coarsest
+    axis, so a sample clears the interface cell on every axis), and the box must
+    clear the outermost sample by `MIN_BOX_MARGIN_RATIO` times its radius.
+
+    An earlier version took the radii from the *coarsest grid* of several, which
+    is what you do when the lattices are allowed to differ. They are not.
     """
     from sashimi.analytic import born_potential  # noqa: PLC0415 — closed form, not a solver
     from sashimi.field import errors_by_radius, sample_radii  # noqa: PLC0415
@@ -795,6 +884,7 @@ def grade_field(
     # grid phase moves the near-field error by more than the solvers differ, so
     # this is what makes the ratio below mean anything at all.
     spacing = check_same_lattice(with_field, centre)
+    check_samples_clear_the_box(with_field, centre, radius_a, spacing, cells_out)
     # Through `sashimi.field`, not inline: that module owns the rule that a
     # sample must clear the interface cell, and an inline `a + k*h` here is the
     # second copy its docstring says there must not be. It also rejects
