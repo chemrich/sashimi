@@ -2023,7 +2023,7 @@ precondition and was taken for the whole of it — see the correction below.*
 **Two cases were added to make the gate mean anything.** M1b rested on the two
 van der Waals field cases, both at a = 3 Å, so `born-ion-vdw-r1` and
 `born-ion-vdw-r6` now carry the extremes of the radius arm onto the surface debye
-can build. The corpus is 81 cases.
+can build. The corpus was 81 cases here; M2 took it to 85.
 
 **The first measurement was wrong, and the correction is below.** It reported
 debye at 5.24× the best reference on `born-ion-vdw` and 8.64× on
@@ -2413,6 +2413,69 @@ worth regressing M1b for.
 **The knob is not landed.** A default-off parameter that a measurement rejected
 is the same shape as the `relaxation` knob `debye/options.py` refuses to carry.
 
+### M2 — the off-centre charge, and the four cases that had to exist first
+
+**Met 2026-08-14. debye reads 1.047 / 1.254 / 1.328% against the Kirkwood series
+at d/a = 0.3 / 0.5 / 0.7, against a 1.5% bar.**
+
+**The blocker, and it is M0's own lesson one surface along.** Every Kirkwood rung
+in the corpus was on `smoothed-molecular` or `molecular`; debye's
+`SUPPORTED_SURFACES` is `van-der-waals` alone. So M2's exit criterion named cases
+debye refuses **by name** — it was unreachable by construction, exactly as M2 was
+unreachable before M0 for the same reason at one surface less. M0 had considered
+a van der Waals Kirkwood and dropped it deliberately, on the reasoning that
+"another sphere geometry re-measures what the existing rungs already measure".
+That is true of APBS and DelPhi, which build both surfaces, and false of the one
+solver M2 exists to grade. **The class worth carrying: a case added for coverage
+of the incumbents is not automatically coverage of the candidate.**
+
+`kirkwood-vdw-{03,05,07}` are added gated and `kirkwood-vdw-09` recorded-not-
+gated, reusing the existing PQRs. The corpus is **85 cases**; APBS records all
+85, DelPhi C++ 41.
+
+**The relabel is not an identity, which is worth knowing before assuming it.** For
+the *Born* geometry it is — `born-ion-molecular` and `born-ion-vdw` record
+−233.9996297277 to the last digit, because the solvent-excluded surface of an
+isolated convex sphere is that sphere. Add Kirkwood's zero-radius charge atom and
+APBS's two surfaces separate by ~0.24% (at d/a = 0.3, −253.191 against −253.792)
+while DelPhi's stay bit-identical. So the new cases carry their own measured
+tolerances rather than inheriting the molecular twins'.
+
+| | APBS | DelPhi C++ | debye | shared rtol | debye's bar |
+|---|---|---|---|---|---|
+| d/a = 0.3 | 1.083% | 0.097% | **1.047%** | 2.2% | 1.5% |
+| d/a = 0.5 | 1.239% | 0.205% | **1.254%** | 2.5% | 1.5% |
+| d/a = 0.7 | 3.896% | 0.416% | **1.328%** | 8% | 1.5% |
+| d/a = 0.9 | 9.854% | 4.288% | 8.280% | ungated | — |
+
+**The bar is 1.5% flat, decided by Charlie over the shared tolerance**, and the
+reason is §7's. debye reproduces APBS's discretization, and APBS is what sets the
+shared number, so grading debye there is a bar it meets by construction. 1.5% is
+fixed independently of what debye does — it would have failed had debye read 1.6%
+at d/a = 0.7 — and it is **stricter than APBS manages on that rung**, which is
+what makes M2 a claim rather than a formality. `test_debye_m2.py` asserts that
+relation directly, so the bar cannot quietly become the loose one.
+
+**The finding, recorded and deliberately not gated: at d/a ≥ 0.5 on a sharp
+boundary, nothing converges monotonically.** M1 required the Born error to fall
+at every refinement step. Across 1.0 / 0.5 / 0.35 / 0.25 / 0.2 Å at d/a = 0.7:
+
+| backend | 1.0 | 0.5 | 0.35 | 0.25 | 0.2 |
+|---|---|---|---|---|---|
+| APBS | −38.311 | −2.136 | −2.713 | −3.896 | −0.381 |
+| DelPhi C++ | −4.718 | −0.493 | −1.093 | −0.416 | −0.371 |
+| debye | +0.726 | −28.171 | −6.211 | −1.328 | −1.893 |
+
+**None of the three is monotonic**, so requiring it would be the mirror image of
+a check that cannot fail — a check that cannot *pass*. §12 already made this call
+at d/a = 0.9; the measurement extends it to 0.5 and 0.7, which nobody had run.
+The single-resolution numbers M2 gates on are therefore accuracy claims and not
+convergence claims, and the distinction is stated rather than blurred. It also
+means debye's tidy 1.328% at d/a = 0.7 is partly the resolution it was asked for:
+it reads −1.893% at 0.2 Å. The control that made "record, do not gate" the right
+call rather than the convenient one is the two incumbent rows above — running
+them is what turned "debye has a problem here" into "this geometry does".
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
@@ -2420,7 +2483,7 @@ is the same shape as the `relaxation` knob `debye/options.py` refuses to carry.
 | M1a ✅ | **The field check has to see more than one ray** | done — the section below: eight directions across the three cubic symmetry classes, all sixteen field recordings re-measured, and the tolerances that moved moved because the diagonal is worse than the axis |
 | M1b ✅ | **The field, graded against the incumbents** | debye within **2× the best reference-tier solver installed**, at radii common to every backend **and on one shared lattice**. Decided 2026-08-14 by Charlie, over a round number: debye reproduces DelPhi C++'s discretization to three decimals, so "no worse than the worst incumbent" is a bar it meets by construction — a check that cannot fail. **Met on all four cases: 1.01 / 1.01 / 1.05 / 1.69× worst at a/h = 12, 12, 6, 2.** The first measurement reported 5.24× and 8.64× on the two under-resolved cases; that was grid phase, not interface handling, and the section above is the correction |
 | M1c ✅ | **The dielectric spike** | **ran; M4a is dropped.** A smoothed dielectric moves the *worst* near-field error only 4.138% → 3.085% — the swing ratio flatters it — which does not justify M4a's two to three days on an axis where debye is already at parity. Separately it made the Born energy **8× better**, left open rather than acted on: the real-structure check that appeared to contradict it used APBS, which shares the hard assignment under test, and a reference-free convergence study since points the other way. The knob is not landed |
-| M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
+| M2 ✅ | Off-centre charge | **met**: 1.047 / 1.254 / 1.328% against the Kirkwood series at d/a = 0.3 / 0.5 / 0.7, against a **1.5%** bar set independently of debye and stricter than APBS manages at the hardest rung. Needed four new `van-der-waals` Kirkwood cases first — every existing rung was on a surface debye refuses. **Not d/a = 0.9**, which no shipped solver reproduces; and at d/a ≥ 0.5 *nothing* converges monotonically, so M2 gates accuracy and records convergence |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
