@@ -1,38 +1,65 @@
 """M1b: debye's field, graded against the best solver already installed.
 
 ROADMAP.md section 12 M1b. The bar is **not** a round number, and the reason is
-worth stating once. debye reproduces DelPhi C++'s discretization to three
-decimal places, so any bar of the form "no worse than the worst incumbent" is
-one it meets by construction rather than by merit — a check that cannot fail, in
-section 7's sense, wearing the costume of a milestone. Against the *best*
-incumbent at each sample it is a real measurement: agreeing with DelPhi does not
-put a solver within a factor of APBS.
+worth stating once. debye reproduces DelPhi C++'s discretization to three decimal
+places, so any bar of the form "no worse than the worst incumbent" is one it
+meets by construction rather than by merit — a check that cannot fail, in section
+7's sense, wearing the costume of a milestone. Against the *best* incumbent at
+each sample it is a real measurement: agreeing with DelPhi does not put a solver
+within a factor of APBS.
 
-Every backend is sampled at the **same physical radii**, taken from the coarsest
-grid in the comparison. The corpus's own field check deliberately does not do
-this — it samples `a + k*h` on each backend's own achieved spacing, because
-every sample must clear *its* interface cell — and the consequence is that a
-coarser grid is sampled further out, where the error is smaller. Comparing those
-numbers across backends reads a sampling difference as an accuracy difference.
+**This file previously recorded a gap that was not there, and the correction is
+the most useful thing in it.** M1b's first measurement reported debye at 5.24x
+the best reference on `born-ion-vdw` and 8.64x on `born-ion-vdw-r1`, concluded
+that debye's near-interface handling fell behind DelPhi's where the sphere was
+under-resolved, and pointed the next milestone at the Matched Interface and
+Boundary literature. All of that was an artifact of **grid phase**.
 
-These tests need reference solvers to grade against, so unlike the rest of
-debye's suite they are marked and they skip on a bare machine. That is the
-honest shape of "as good as the incumbents": without an incumbent there is no
-claim to check.
+The comparison sampled every backend at the same physical radii — which it had to
+— but left each one on the lattice its own grid sizing happened to choose. It
+graded debye at a/h = 6.46 against DelPhi at a/h = 6.00. Holding the sample
+radius fixed at r = 4 A on the 3 A sphere and varying only the spacing across
+0.43-0.50 A, the worst-direction error swings
 
-**They pin the reference set to APBS *and* DelPhi C++ rather than grading
+    APBS        0.585% .. 3.915%   (6.7x)
+    DelPhi C++  0.763% .. 3.837%   (5.0x)
+    debye       0.773% .. 4.101%   (5.3x)
+
+and on the 1 A sphere APBS alone spans 21x. The error collapses wherever a/h
+nears an integer: the discretized cavity is a staircase, and its shape changes
+discretely as face centres cross the sphere, so at low a/h a single face flipping
+is a large fraction of the boundary. **Every finite-difference backend here does
+this.** It is a property of hard midpoint dielectric assignment, not of debye.
+
+At the spacings two backends both land on, debye is at parity with both:
+
+    debye vs DelPhi C++   0.994-1.013x over 11 shared spacings (born-ion-vdw)
+                          1.000-1.062x over 13 shared spacings (r1)
+    debye vs APBS         0.871-1.116x over 16 shared spacings (born-ion-vdw)
+                          1.037-1.617x over 18 shared spacings (r1)
+
+so the worst honest ratio anywhere is 1.62x and M1b is met on all four cases.
+
+Three controls, because the claim is that a recorded measurement was wrong:
+reading grid **nodes** directly with no interpolation shows the same swing, so it
+is the solver's field and not `sashimi.field`'s sampling; the error is
+anisotropic across the cubic direction classes, which is the staircase's
+signature and not a monopole defect; and at fixed h = 0.5 changing the padding
+from 3 to 13 A moves debye's error only 0.7735% -> 0.7916%, so the box is not
+doing the work that the spacing is.
+
+`grade_field` now refuses a comparison across lattices outright — see
+`sashimi.validate.check_same_lattice`. It is refused rather than annotated
+because there is no honest way to read the number: the per-backend spacings were
+already reported in `notes`, they were visible, and the verdict was wrong anyway.
+
+**These tests pin the reference set to APBS *and* DelPhi C++ rather than grading
 against whatever is installed, and that is not caution — it is required for the
-verdict to exist.** The first draft fell back to APBS alone when DelPhi was
-absent, and `born-ion-vdw` flips from 5.24x to 1.60x under that fallback: the
-sample radii come from the coarsest grid in the comparison, so dropping DelPhi's
-h = 0.5 A moves them, and the yardstick changes from DelPhi's 0.789% to APBS's
-2.453%. Both moves favour debye. A milestone whose verdict depends on what
-happens to be installed is not a gate, and CI would have found this the hard
-way: the strict xfails would have XPASSed on the `apbs-only` leg.
-
-`grade_field` itself stays flexible — grading against whatever you have is a
-legitimate thing for a library to do. It is the *claim* that has to pin its
-incumbents.
+verdict to exist.** An earlier draft fell back to APBS alone when DelPhi was
+absent, which moved both the sample radii and the yardstick in debye's favour. A
+milestone whose verdict depends on what happens to be installed is not a gate.
+Each case now also pins the **padding**, for the same class of reason: it is what
+puts all three backends on one lattice, and the grade is meaningless otherwise.
 """
 
 from __future__ import annotations
@@ -47,6 +74,7 @@ from sashimi.debye import DebyeSolver
 from sashimi.delphi import DelphiSolver
 from sashimi.delphi.discover import DelphiFlavour, discover_delphi
 from sashimi.delphi.options import SUPPORTED_SURFACES as DELPHI_SURFACES
+from sashimi.field import sample_values
 from sashimi.protocol import AccuracyTier, PotentialGrid, SolveResult, SurfaceModel
 from sashimi.validate import (
     DEFAULT_FIELD_FACTOR,
@@ -55,24 +83,22 @@ from sashimi.validate import (
     grade_field,
 )
 
-# The van der Waals field cases, which are the ones debye can answer at all,
-# split by what actually predicts the verdict: **a/h, the number of cells across
-# the sphere's radius.** Not resolution, and not radius — `born-ion-vdw-r6` at
-# h = 0.5 A is at parity while `born-ion-vdw` at the same h is 5.2x off, and the
-# difference between them is that one sphere is twelve cells across and the
-# other six.
+# case -> the padding that puts APBS, DelPhi C++ and debye on **one** lattice,
+# and the a/h it produces. Not free parameters: each was found by asking the
+# three backends' own `size_grid` what spacing a padding resolves to and keeping
+# the ones where all three agree to better than 1e-6 relative. They agree
+# exactly, because each lands on a binary fraction of the same box.
 #
-#   born-ion-vdw-r6    a/h = 12   1.01 / 1.02 / 1.03x   parity
-#   born-ion-vdw-fine  a/h = 12   1.77 / 1.00 / 1.01x   parity
-#   born-ion-vdw       a/h =  6   5.24 / 4.81 / 3.74x   outside
-#   born-ion-vdw-r1    a/h =  2   8.64 / 3.61 / 1.55x   outside
-#
-# So debye's near field degrades faster than the incumbents' as the sphere stops
-# being resolved, and DelPhi C++ holds up where it does not. That is the shape of
-# an interface-handling gap rather than a discretization error — which is what
-# ROADMAP.md section 10's referee tier exists for.
-AT_PARITY = ("born-ion-vdw-r6", "born-ion-vdw-fine")
-UNDER_RESOLVED = ("born-ion-vdw", "born-ion-vdw-r1")
+# a/h is the number that predicts the error's size, so the cases are chosen to
+# span it — 12, 12, 6, 2 — rather than to span resolution or radius. That is what
+# the first measurement got wrong: `born-ion-vdw-r6` and `born-ion-vdw` sit at
+# the *same* h = 0.5 A and differ only in how many cells cross the radius.
+COMMON_LATTICE = {
+    "born-ion-vdw-r6": (10.0, 12.0),
+    "born-ion-vdw-fine": (9.0, 12.0),
+    "born-ion-vdw": (5.0, 6.0),
+    "born-ion-vdw-r1": (7.0, 2.0),
+}
 
 
 def case_named(name: str) -> Case:
@@ -107,14 +133,21 @@ def require_delphi_that_builds_van_der_waals() -> None:
         )
 
 
-def graded(case: Case, factor: float = DEFAULT_FIELD_FACTOR):
+def request_for(case: Case, padding: float | None = None):
+    base = case.request()
+    if padding is None:
+        return base
+    return dataclasses.replace(base, grid=dataclasses.replace(base.grid, padding=padding))
+
+
+def graded(case: Case, padding: float | None = None, factor: float = DEFAULT_FIELD_FACTOR):
     """Solve the case through both incumbents and debye, and grade debye.
 
-    The reference set is fixed, not discovered. See the module docstring: with
-    DelPhi omitted, `born-ion-vdw` reads 1.60x instead of 5.24x.
+    The reference set is fixed, not discovered, and so is the padding. See the
+    module docstring for both.
     """
     require_delphi_that_builds_van_der_waals()
-    request = case.request()
+    request = request_for(case, padding)
     solvers: list[tuple[str, object]] = [
         ("apbs", ApbsSolver()),
         ("delphicpp", DelphiSolver()),
@@ -142,58 +175,97 @@ def graded(case: Case, factor: float = DEFAULT_FIELD_FACTOR):
 
 @pytest.mark.apbs
 @pytest.mark.delphi
-@pytest.mark.parametrize("name", AT_PARITY)
-def test_debye_is_within_a_factor_of_the_best_incumbent_where_the_sphere_is_resolved(name):
-    """M1b's exit criterion, on the cases that meet it.
+@pytest.mark.parametrize("name", sorted(COMMON_LATTICE))
+def test_debye_is_within_a_factor_of_the_best_incumbent(name):
+    """M1b's exit criterion, on every case — including the two it was thought to fail.
 
-    Twelve cells across the radius, and debye is at 1.77x the best reference at
-    the closest sample and at parity further out — which is what "as good as the
-    incumbents" looks like when the grid resolves the interface.
+    These two were `strict` xfails carrying a 5.24x and an 8.64x, and closing the
+    gap was supposed to turn them red. It did, but not by improving debye: the
+    gap was the comparison, and the ratios above were between two different
+    lattices. Graded on one lattice, all four cases pass.
     """
-    grade = graded(case_named(name))
+    case = case_named(name)
+    padding, expected_cells = COMMON_LATTICE[name]
+    grade = graded(case, padding=padding)
 
+    # The padding is load-bearing, so assert it bought what it was chosen for
+    # rather than trusting that it still does.
+    assert grade.cells_across_radius == pytest.approx(expected_cells, rel=1e-6)
     assert grade.agrees, grade.summary()
     assert max(grade.ratios) < DEFAULT_FIELD_FACTOR
 
 
 @pytest.mark.apbs
 @pytest.mark.delphi
-@pytest.mark.parametrize("name", UNDER_RESOLVED)
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "M1b is not met where the sphere is under-resolved: debye is 5.24x the best "
-        "reference on born-ion-vdw (a/h = 6) and 8.64x on born-ion-vdw-r1 (a/h = 2), "
-        "against DelPhi C++'s 0.789% and APBS's 1.079% on grids no finer than debye's. "
-        "Not the grid — at APBS's exact spacing debye reads 3.212% against APBS's "
-        "3.186% — but the near-interface handling. Strict, so that closing the gap "
-        "turns this red and says so rather than passing quietly."
-    ),
-)
-def test_debye_is_within_a_factor_of_the_best_incumbent_where_it_is_not(name):
-    grade = graded(case_named(name))
-    assert grade.agrees, grade.summary()
+def test_a_field_grade_refuses_two_backends_on_different_lattices():
+    """The check whose absence produced M1b's wrong verdict, with the mutation that reddens it.
+
+    ROADMAP.md section 7's rule, applied: a guard lands with the mutation that
+    makes it fire. The mutation here is the *original measurement* — grade at the
+    corpus case's own padding of 10 A, where debye's grid sizing lands on
+    h = 0.4643 and DelPhi's on h = 0.5000. That is exactly what M1b did, and it
+    is what reported 5.24x.
+    """
+    require_delphi_that_builds_van_der_waals()
+    case = case_named("born-ion-vdw")
+    request = request_for(case)  # the case's own padding — the mismatching one
+    runs = [
+        BackendRun.from_result(name, solver.solve(request), request)
+        for name, solver in (
+            ("apbs", ApbsSolver()),
+            ("delphicpp", DelphiSolver()),
+            ("debye", DebyeSolver()),
+        )
+    ]
+    spacings = {float(max(run.potential.spacing)) for run in runs}  # type: ignore[union-attr]
+    assert len(spacings) > 1, f"the mutation did not mutate: every backend got {spacings}"
+
+    with pytest.raises(Incomparable, match="differing lattices"):
+        grade_field(
+            runs,
+            candidate="debye",
+            centre=case.structure().center(),
+            radius_a=case.analytic_field.radius_a,  # type: ignore[union-attr]
+            charge_e=case.analytic_field.charge_e,  # type: ignore[union-attr]
+        )
 
 
-@pytest.mark.apbs
-@pytest.mark.delphi
-def test_the_grade_samples_every_backend_at_the_same_radii():
-    """The property that makes a cross-backend field number mean anything.
+def test_the_near_field_error_depends_on_grid_phase_more_than_on_the_solver():
+    """The finding underneath the correction, pinned so it cannot be quietly lost.
 
-    Without it a coarse grid is sampled further from the boundary than a fine
-    one and reads a smaller error for it: on `born-ion-vdw` the corpus samples
-    DelPhi at r = 4.0 A and APBS at r = 3.81 A, because each uses its own
-    achieved spacing.
+    Two debye solves of the same physical question, differing only in the lattice
+    they land on, at the *same* physical sample radius. If this ever stops
+    holding — because debye grows a dielectric treatment that varies continuously
+    with h instead of in steps — this test is the one that should be revisited
+    first, and it should be revisited rather than deleted: the number it pins is
+    the reason `check_same_lattice` exists.
+
+    Needs no binary. debye is the whole experiment, which is the point: the
+    incumbents show the same swing, so nothing here is about which solver runs.
     """
     case = case_named("born-ion-vdw")
-    grade = graded(case)
+    centre = case.structure().center()
+    exact = case.analytic_field.exact_at([4.0], case.solvent)[0]  # type: ignore[union-attr]
 
-    assert len(grade.radii_a) == len(case.analytic_field.cells_out)  # type: ignore[union-attr]
-    # The radii come from the coarsest grid, so every backend's sample clears
-    # its own interface cell by at least `cells_out` of its own spacing.
-    for radius, cells in zip(grade.radii_a, case.analytic_field.cells_out, strict=True):  # type: ignore[union-attr]
-        assert radius == pytest.approx(3.0 + cells * grade.spacing_used_a)
-    assert set(grade.errors) >= {"apbs", "debye"}
+    errors = {}
+    for padding in (5.0, 10.0):  # -> h = 0.5000 (a/h = 6.00) and h = 0.4643 (a/h = 6.46)
+        result = DebyeSolver().solve(request_for(case, padding))
+        assert isinstance(result.potential, PotentialGrid)
+        values = sample_values(result.potential, centre, 4.0)
+        errors[float(max(result.potential.spacing))] = max(
+            abs(v - exact) / abs(exact) for v in values
+        )
+
+    assert len(errors) == 2, f"both paddings landed on one lattice: {errors}"
+    worst, best = max(errors.values()), min(errors.values())
+    # Measured at 4.14% against 0.77%. Asserted loosely, because the claim is
+    # "phase dominates", not "phase is exactly 5.4x" — but a factor of three is
+    # already far larger than the 1.62x that separates these three solvers.
+    assert worst / best > 3.0, (
+        f"grid phase moved debye's near-field error by only {worst / best:.2f}x "
+        f"({errors}); if that is now small, the comparison across lattices that "
+        "check_same_lattice refuses may no longer be the trap it was"
+    )
 
 
 def test_a_field_grade_refuses_a_lone_backend():

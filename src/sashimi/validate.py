@@ -75,6 +75,8 @@ __all__ = [
     "DEFAULT_APPROXIMATION_TOLERANCE",
     "DEFAULT_ENERGY_TOLERANCE",
     "DEFAULT_FIELD_FACTOR",
+    "LATTICE_OFFSET_CELLS",
+    "LATTICE_RTOL",
     "N_PROBES",
     "PROBE_SEED",
     "Backend",
@@ -84,6 +86,7 @@ __all__ = [
     "Incomparable",
     "SolverFamily",
     "System",
+    "check_same_lattice",
     "compare_results",
     "grade_field",
     "overlap_probe_points",
@@ -537,31 +540,54 @@ def with_surface_model(
 # with DelPhi does not make a solver within a factor of APBS.
 
 # How much worse than the best installed reference solver a candidate may be.
-# Measured rather than chosen: on the corpus's fine van der Waals case debye is
-# 1.77x the best reference at the closest sample, and on the coarse one it is
-# 5.2x. A factor of 2 therefore passes what is already as good as the incumbents
-# and fails what is not, which is the only useful place to put it.
+# Measured rather than chosen: across every spacing two backends both landed on,
+# the largest honest ratio anywhere is 1.62x (debye against APBS on the a/h = 2
+# case) and the typical one is 1.00x. A factor of 2 therefore sits just above
+# what near-peer discretizations actually do to each other, which is the only
+# useful place to put it.
 DEFAULT_FIELD_FACTOR = 2.0
 
 # A candidate and something to grade it against.
 MIN_FIELD_BACKENDS = 2
+
+# How closely two backends' achieved spacings must agree to count as the same
+# lattice. Not a physical tolerance — it absorbs the round trip through DelPhi's
+# seven-significant-figure output and nothing else. Two backends that genuinely
+# land on the same grid agree to ~3e-8 relative; the next distinct lattice is
+# ~1e-2 away, so there is nothing for this number to be sensitive to.
+LATTICE_RTOL = 1e-6
+
+# The same question for *where the solute sits within a cell*, and a separate
+# number because it is a separate quantity: a fraction of a cell, not a relative
+# error on a length. Both bounds are wide. DelPhi's origin arrives through the
+# same seven-figure format, which on a ~10 A coordinate is ~1e-5 A, or ~2e-5 of a
+# half-angstrom cell; and the phase differences that matter are tenths of a cell,
+# since it takes a face centre crossing the boundary to change the staircase. So
+# anything from ~1e-4 to ~1e-2 would behave identically here.
+LATTICE_OFFSET_CELLS = 1e-3
 
 
 @dataclass(frozen=True)
 class FieldGrade:
     """A candidate backend's field against the best reference solver's, per radius.
 
-    Every backend is sampled at the **same physical radii**, which is the whole
-    reason this is not `corpus`'s field check. That one samples `a + k*h` on each
-    backend's own achieved spacing — correct there, because every sample must
-    clear *its* interface cell — and it means a coarser grid is sampled further
-    out, where the error is smaller. Comparing those numbers across backends
-    reads a sampling difference as an accuracy difference: on the corpus's coarse
-    case DelPhi is sampled at r = 4.0 A and APBS at r = 3.81 A.
+    Every backend is sampled at the same physical radii **on one shared lattice**,
+    which is the whole reason this is not `corpus`'s field check. That one samples
+    `a + k*h` on each backend's own achieved spacing — correct there, because
+    every sample must clear *its* interface cell — and it means a coarser grid is
+    sampled further out, where the error is smaller.
+
+    Equal radii were the first half of that and were not enough. The second half
+    is `check_same_lattice`, and it is the half M1b was missing: the near-field
+    error varies more with grid phase than between solvers, so a comparison at
+    equal radii but unequal spacing still reads phase as accuracy. `a/h` is
+    carried on the grade for the same reason — it is the number that predicts the
+    result, so a verdict that does not state it is not reproducible.
     """
 
     radii_a: tuple[float, ...]
-    spacing_used_a: float  # the coarsest grid in the comparison, which sets the radii
+    spacing_used_a: float  # the one lattice every backend solved on
+    cells_across_radius: float  # a/h — what actually predicts the error's size
     errors: Mapping[str, tuple[float, ...]]  # backend -> worst-direction error per radius
     worst_directions: Mapping[str, tuple[str, ...]]
     best_reference: tuple[str, ...]  # which reference solver was best, per radius
@@ -579,6 +605,7 @@ class FieldGrade:
             "candidate": self.candidate,
             "radii_a": list(self.radii_a),
             "spacing_used_a": self.spacing_used_a,
+            "cells_across_radius": self.cells_across_radius,
             "errors": {name: list(values) for name, values in self.errors.items()},
             "worst_directions": {name: list(v) for name, v in self.worst_directions.items()},
             "best_reference": list(self.best_reference),
@@ -596,7 +623,8 @@ class FieldGrade:
             f"{self.candidate} is {verdict} {self.factor:g}x the best reference field: "
             f"worst {self.ratios[worst]:.2f}x at r = {self.radii_a[worst]:.4g} A "
             f"({self.errors[self.candidate][worst]:.3%} against {best}'s "
-            f"{self.errors[best][worst]:.3%})"
+            f"{self.errors[best][worst]:.3%}), at h = {self.spacing_used_a:.4g} A, "
+            f"a/h = {self.cells_across_radius:.4g}"
         )
 
 
@@ -638,6 +666,86 @@ def check_field_comparable(runs: Sequence[BackendRun]) -> None:
                 "moves the reference by a factor common to all of them — and a common "
                 "offset drives a ratio of errors towards 1.0, which reads as agreement."
             )
+
+
+def check_same_lattice(runs: Sequence[BackendRun], centre: FloatArray) -> float:
+    """Refuse a field comparison across backends that solved on different lattices.
+
+    Returns the common spacing. **This is the check M1b needed and did not have,
+    and its absence produced a wrong milestone verdict**, so it is worth stating
+    what it is for rather than only what it does.
+
+    Sampling every backend at the same physical radii is necessary and is not
+    sufficient. The near-field error of a staircase-dielectric solver depends far
+    more strongly on *where the lattice falls* than on which solver is running
+    it: holding the sample radius fixed at r = 4 A on a 3 A sphere and varying
+    only the spacing over 0.43-0.50 A, the worst-direction error swings
+
+        APBS        0.585% .. 3.915%   (6.7x)
+        DelPhi C++  0.763% .. 3.837%   (5.0x)
+        debye       0.773% .. 4.101%   (5.3x)
+
+    and on the 1 A sphere APBS alone spans 21x. The error collapses wherever a/h
+    approaches an integer, because the discretized cavity is a staircase and its
+    shape changes discretely as face centres cross the sphere. That is a property
+    of hard midpoint dielectric assignment, which all three backends share — not
+    a property of any one of them.
+
+    So a grade taken across two lattices reads phase as accuracy, and it does so
+    at a magnitude that swamps every real difference between these solvers. M1b
+    graded debye at a/h = 6.46 against DelPhi at a/h = 6.00 and read 5.24x; at
+    the eleven spacings the two backends both land on, the ratio is 0.994-1.013x.
+
+    The comparison is refused rather than annotated because there is no honest
+    way to interpret the number. Reported per-backend spacing would have made the
+    mismatch *visible* — `grade_field` already emitted it in `notes` — and it was
+    visible, and the verdict was still wrong, which is ROADMAP.md section 7's
+    point about a check that cannot fail wearing the costume of a measurement.
+
+    Phase is spacing *and* offset: two grids of the same h with the solute half a
+    cell apart in them are different staircases. Both are checked. Every backend
+    here centres an odd-dimensioned grid on the molecule, so the offsets agree by
+    construction today — which is exactly why the check is written from the
+    geometry rather than trusted to stay that way.
+    """
+    grids = [run.potential for run in runs if run.potential is not None]
+    if not grids:
+        raise Incomparable("no backend produced a volumetric field")
+
+    spacings = np.array([np.asarray(grid.spacing, dtype=float) for grid in grids])
+    span = float(spacings.max() - spacings.min())
+    if span > LATTICE_RTOL * float(spacings.mean()):
+        detail = ", ".join(
+            f"{run.name} h = {float(np.max(run.potential.spacing)):.6g} A"
+            for run in runs
+            if run.potential is not None
+        )
+        raise Incomparable(
+            f"cannot grade a field across differing lattices: {detail}. The near-field "
+            "error depends more strongly on where the lattice falls relative to the "
+            "solute than on which solver produced it — up to 21x across one backend at "
+            "fixed physical radius — so a ratio taken across two spacings reports grid "
+            "phase as accuracy. Solve every backend on one lattice, by choosing a "
+            "padding they all round to the same spacing."
+        )
+
+    centre = np.asarray(centre, dtype=float).reshape(DIMENSIONS)
+    offsets = np.array(
+        [
+            np.mod((centre - np.asarray(grid.origin, dtype=float)) / np.asarray(grid.spacing), 1.0)
+            for grid in grids
+        ]
+    )
+    # Wrapped, because an offset of 1 - eps and one of eps are the same phase.
+    deltas = np.abs(offsets - offsets[0])
+    deltas = np.minimum(deltas, 1.0 - deltas)
+    if float(deltas.max()) > LATTICE_OFFSET_CELLS:
+        raise Incomparable(
+            "cannot grade a field across lattices that place the solute differently "
+            f"within a cell: fractional offsets {offsets.tolist()}, differing by "
+            f"{float(deltas.max()):.3g} of a cell. Same spacing, different staircase."
+        )
+    return float(spacings.mean())
 
 
 def grade_field(
@@ -683,7 +791,10 @@ def grade_field(
             f"{by_name[candidate].ionic_strength} M"
         )
 
-    spacing = max(float(np.max(run.potential.spacing)) for run in with_field)  # type: ignore[union-attr]
+    # One lattice for every backend, or no comparison. See `check_same_lattice`:
+    # grid phase moves the near-field error by more than the solvers differ, so
+    # this is what makes the ratio below mean anything at all.
+    spacing = check_same_lattice(with_field, centre)
     # Through `sashimi.field`, not inline: that module owns the rule that a
     # sample must clear the interface cell, and an inline `a + k*h` here is the
     # second copy its docstring says there must not be. It also rejects
@@ -715,13 +826,14 @@ def grade_field(
         best_names.append(best.name)
         ratios.append(errors[candidate][index] / errors[best.name][index])
 
-    notes = tuple(
-        f"{run.name} solved on h = {float(np.max(run.potential.spacing)):.4f} A"  # type: ignore[union-attr]
-        for run in with_field
+    notes = (
+        f"every backend solved on h = {spacing:.6g} A, a/h = {radius_a / spacing:.4g}",
+        *(f"{run.name}: {run.accuracy_tier.value}" for run in with_field),
     )
     return FieldGrade(
         radii_a=tuple(radii),
         spacing_used_a=spacing,
+        cells_across_radius=radius_a / spacing,
         errors=errors,
         worst_directions=directions,
         best_reference=tuple(best_names),
