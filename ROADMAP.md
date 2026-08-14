@@ -2119,15 +2119,73 @@ each backend happened to choose*, and both moved in the incumbents' favour. The
 lesson that generalises: when a comparison controls for a variable, ask what else
 varies that the controlled variable was standing in for.
 
+### M1c — the dielectric spike, and why the full thing waits for M4
+
+**Split decided 2026-08-14 by Charlie: spike now, implement after M4.**
+
+The phase oscillation is a property of **hard midpoint dielectric assignment** —
+ε is ε_p or ε_s at each face centre, so the discretized cavity changes shape in
+steps as face centres cross the surface. A dielectric that varied *continuously*
+with h would not, and `sashimi/debye/dielectric.py` has named volume-fraction
+averaging as "the obvious place to look" since M1. This is the first measurement
+that makes a case for paying for it, and it is also the reason not to pay for all
+of it yet: the case is a strong physical argument, not a result.
+
+**M1c is half a day and buys a number.** The cheapest scheme that varies
+continuously is a smoothed Heaviside on signed distance — for a union of spheres
+the distance is a small change to the window loop `inside_union_of_spheres`
+already runs, then ε = ε_p + (ε_s − ε_p)·H(d/w) with w ≈ h. Roughly 40 lines and
+no new data structures. Rerun the phase sweep from the section above and read off
+whether debye's 5.3× drops. **The exit criterion is the number, not an
+improvement** — "it does not help" is a result that closes a question which has
+been sitting open in a docstring since M1.
+
+**Why the full implementation is two to three days, not half of one.** Real
+area-fraction averaging needs the fraction of a face lying inside a *union* of
+spheres, which has no closed form, so it is quadrature: an n×n subsample per
+face, union-correct because each subsample tests against every nearby sphere. Then
+arithmetic versus harmonic averaging is a **measurement** rather than a choice,
+which doubles the experiment count. The implementation trap is cost, and it is a
+trap this repo has already fallen into once: `_solute_mask` took 64 s on a
+1,960-atom protein by evaluating every atom against the whole grid (§7), and a
+naive per-face quadrature walks straight back into it.
+
+**The risk to watch, because it is quiet.** Born energy goes as 1/a, so a 1%
+shift in the *effective* cavity radius is a 1% shift in energy — and M1's
+headline is 0.853% against a 1% bar. Any smoothing not symmetric about the true
+surface moves the effective radius and can spend that whole margin without
+anything looking wrong. M1c should therefore report the **energy** alongside the
+oscillation, not just the field.
+
+**Why it waits for M4.** M4 rewrites what counts as solute — a probe rolled over
+the union of spheres — so an averaging scheme built now against a union of
+spheres is partly rework. That risk is mostly avoidable by construction, and the
+avoidance is the design constraint: **write the averaging against an
+inside/distance oracle rather than against spheres**, so M4 swaps the oracle and
+keeps the averaging. Building it once, after the surface debye ships exists, is
+what the ordering buys.
+
+**What is being given up by waiting**, stated so it is a decision and not a
+drift: the measurement harness is warm now, the M1b gate is phase-fair as of this
+milestone and is exactly the instrument this change needs grading against, and
+debye has **no corpus recordings** — so today the change moves none, where after
+M5 the same change moves every debye case and needs a `BACKEND_VERSION` bump.
+Against that, nothing is blocked: M1b is met, and the oscillation hits the
+incumbents equally, so debye is not disadvantaged by it. It is the one place
+debye could be *better* than APBS and DelPhi rather than at parity — every other
+rung, M2 through M4, is debye catching up to what they already do.
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
 | M1 ✅ | LPBE on a Cartesian grid, vdW surface | **met**: 0.853% at 0.25 Å against a 1% per-backend tolerance, falling monotonically 3.836 → 1.576 → 0.853 → 0.479% under refinement |
 | M1a ✅ | **The field check has to see more than one ray** | done — the section below: eight directions across the three cubic symmetry classes, all sixteen field recordings re-measured, and the tolerances that moved moved because the diagonal is worse than the axis |
 | M1b ✅ | **The field, graded against the incumbents** | debye within **2× the best reference-tier solver installed**, at radii common to every backend **and on one shared lattice**. Decided 2026-08-14 by Charlie, over a round number: debye reproduces DelPhi C++'s discretization to three decimals, so "no worse than the worst incumbent" is a bar it meets by construction — a check that cannot fail. **Met on all four cases: 1.01 / 1.00 / 1.10 / 1.65× worst at a/h = 12, 12, 6, 2.** The first measurement reported 5.24× and 8.64× on the two under-resolved cases; that was grid phase, not interface handling, and the section above is the correction |
+| M1c | **The dielectric spike** — half a day, next | a *number*, either way: does a dielectric that varies continuously with h damp the 5.3× phase oscillation, and what does it do to M1's energy? Approved 2026-08-14; the section above carries the design and the risk |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
+| M4a | **Fractional-volume dielectric**, if and only if M1c says it is worth it | the phase oscillation measurably smaller than the incumbents', with M1's energy still inside 1%. Deliberately *after* M4 so the averaging is built once, against the surface debye actually ships |
 | M5 | Registry integration | `sashimi corpus verify --backend debye --tier fast` passes |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone** |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here |
