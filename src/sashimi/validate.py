@@ -74,15 +74,18 @@ from sashimi.protocol import (
 __all__ = [
     "DEFAULT_APPROXIMATION_TOLERANCE",
     "DEFAULT_ENERGY_TOLERANCE",
+    "DEFAULT_FIELD_FACTOR",
     "N_PROBES",
     "PROBE_SEED",
     "Backend",
     "BackendRun",
     "Comparison",
+    "FieldGrade",
     "Incomparable",
     "SolverFamily",
     "System",
     "compare_results",
+    "grade_field",
     "overlap_probe_points",
     "validate",
     "validate_system",
@@ -145,6 +148,15 @@ class BackendRun:
     equation: Equation
     potential: PotentialGrid | None
     ionic_strength: float = 0.0  # M; decides whether differing terms coincide
+    # What a closed form has to be evaluated at to describe this run. Carried
+    # rather than passed in beside it: a Born potential taken at a different
+    # dielectric or temperature than the solver used shifts the reference by a
+    # factor common to every backend, and because `grade_field`'s verdict is a
+    # *ratio* of errors, a large common offset drives every ratio towards 1.0
+    # and the grade passes. `corpus.AnalyticField.exact_at` refuses the same
+    # class of mismatch on ionic strength; these are the other two axes.
+    solvent_dielectric: float = 78.54
+    temperature: float = 298.15
     wall_seconds: float | None = None
     accuracy_tier: AccuracyTier = AccuracyTier.REFERENCE
 
@@ -162,6 +174,8 @@ class BackendRun:
             equation=getattr(request, "equation", Equation.LINEAR),
             potential=potential,
             ionic_strength=request.solvent.ionic_strength,
+            solvent_dielectric=request.solvent.solvent_dielectric,
+            temperature=request.solvent.temperature,
             wall_seconds=result.provenance.wall_seconds,
             accuracy_tier=result.provenance.accuracy_tier,
         )
@@ -505,4 +519,214 @@ def with_surface_model(
     """The same request on a different surface, for picking a shared model."""
     return dataclasses.replace(
         request, solvent=dataclasses.replace(request.solvent, surface_model=model)
+    )
+
+
+# --- grading a field against the incumbents ----------------------------------
+#
+# The energy half of this module asks "do the backends agree with each other".
+# This asks a narrower and harder question: **is a candidate solver's field as
+# good as the best one already installed**, measured against the closed form
+# both are approximating. ROADMAP.md section 12 M1b is the caller.
+#
+# Grading against the incumbents rather than against a round number is what
+# makes the bar mean something. debye reproduces DelPhi C++'s discretization to
+# three decimal places, so "no worse than the worst incumbent" is a bar it meets
+# by construction rather than by merit — a check that cannot fail, in section
+# 7's sense. Against the *best* incumbent it is a real measurement: agreeing
+# with DelPhi does not make a solver within a factor of APBS.
+
+# How much worse than the best installed reference solver a candidate may be.
+# Measured rather than chosen: on the corpus's fine van der Waals case debye is
+# 1.77x the best reference at the closest sample, and on the coarse one it is
+# 5.2x. A factor of 2 therefore passes what is already as good as the incumbents
+# and fails what is not, which is the only useful place to put it.
+DEFAULT_FIELD_FACTOR = 2.0
+
+# A candidate and something to grade it against.
+MIN_FIELD_BACKENDS = 2
+
+
+@dataclass(frozen=True)
+class FieldGrade:
+    """A candidate backend's field against the best reference solver's, per radius.
+
+    Every backend is sampled at the **same physical radii**, which is the whole
+    reason this is not `corpus`'s field check. That one samples `a + k*h` on each
+    backend's own achieved spacing — correct there, because every sample must
+    clear *its* interface cell — and it means a coarser grid is sampled further
+    out, where the error is smaller. Comparing those numbers across backends
+    reads a sampling difference as an accuracy difference: on the corpus's coarse
+    case DelPhi is sampled at r = 4.0 A and APBS at r = 3.81 A.
+    """
+
+    radii_a: tuple[float, ...]
+    spacing_used_a: float  # the coarsest grid in the comparison, which sets the radii
+    errors: Mapping[str, tuple[float, ...]]  # backend -> worst-direction error per radius
+    worst_directions: Mapping[str, tuple[str, ...]]
+    best_reference: tuple[str, ...]  # which reference solver was best, per radius
+    candidate: str
+    ratios: tuple[float, ...]  # candidate error / best reference error
+    factor: float = DEFAULT_FIELD_FACTOR
+    notes: tuple[str, ...] = ()
+
+    @property
+    def agrees(self) -> bool:
+        return all(ratio <= self.factor for ratio in self.ratios)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "candidate": self.candidate,
+            "radii_a": list(self.radii_a),
+            "spacing_used_a": self.spacing_used_a,
+            "errors": {name: list(values) for name, values in self.errors.items()},
+            "worst_directions": {name: list(v) for name, v in self.worst_directions.items()},
+            "best_reference": list(self.best_reference),
+            "ratios": list(self.ratios),
+            "factor": self.factor,
+            "agrees": self.agrees,
+            "notes": list(self.notes),
+        }
+
+    def summary(self) -> str:
+        verdict = "within" if self.agrees else "OUTSIDE"
+        worst = max(range(len(self.ratios)), key=lambda i: self.ratios[i])
+        best = self.best_reference[worst]
+        return (
+            f"{self.candidate} is {verdict} {self.factor:g}x the best reference field: "
+            f"worst {self.ratios[worst]:.2f}x at r = {self.radii_a[worst]:.4g} A "
+            f"({self.errors[self.candidate][worst]:.3%} against {best}'s "
+            f"{self.errors[best][worst]:.3%})"
+        )
+
+
+def check_field_comparable(runs: Sequence[BackendRun]) -> None:
+    """Refuse a field comparison across backends that were asked different questions.
+
+    Deliberately narrower than `check_comparable`. Surface model and equation
+    must match, because both change the field. **`EnergyTerm` is not checked**,
+    and that is the point rather than an oversight: it describes which *energy* a
+    backend reports, and DelPhi's differs from APBS's while their fields are
+    directly comparable. Requiring it here would refuse the one comparison this
+    exists for. That the two axes come apart is the finding M0 recorded — on the
+    energy DelPhi is four thousand times sharper than APBS, and on the field they
+    are near-peers.
+    """
+    if len(runs) < MIN_FIELD_BACKENDS:
+        raise Incomparable(
+            f"a field comparison needs at least {MIN_FIELD_BACKENDS} backends with a "
+            f"volumetric map, got {len(runs)}. Boundary-element backends return potentials "
+            "on the interface and analytic ones return no field at all."
+        )
+    for attribute, label in (("surface_model", "surface model"), ("equation", "equation")):
+        values = {getattr(run, attribute) for run in runs}
+        if len(values) > 1:
+            raise Incomparable(
+                f"cannot compare fields across differing {label}: {sorted(str(v) for v in values)}"
+            )
+    if len({run.ionic_strength for run in runs}) > 1:
+        raise Incomparable("cannot compare fields across differing ionic strength")
+    for attribute, label in (
+        ("solvent_dielectric", "solvent dielectric"),
+        ("temperature", "temperature"),
+    ):
+        values = {getattr(run, attribute) for run in runs}
+        if len(values) > 1:
+            raise Incomparable(
+                f"cannot compare fields across differing {label}: {sorted(values)}. The "
+                "closed form is evaluated once for every backend, so a mismatch here "
+                "moves the reference by a factor common to all of them — and a common "
+                "offset drives a ratio of errors towards 1.0, which reads as agreement."
+            )
+
+
+def grade_field(
+    runs: Sequence[BackendRun],
+    *,
+    candidate: str,
+    centre: FloatArray,
+    radius_a: float,
+    charge_e: float,
+    cells_out: tuple[int, ...] = (2, 4, 8),
+    factor: float = DEFAULT_FIELD_FACTOR,
+) -> FieldGrade:
+    """Grade `candidate`'s field against the best reference-tier solver present.
+
+    The sample radii come from the **coarsest** grid in the comparison, so every
+    backend's sample clears its own interface cell — a backend on a finer grid is
+    further from the boundary in its own cells, never closer.
+    """
+    from sashimi.analytic import born_potential  # noqa: PLC0415 — closed form, not a solver
+    from sashimi.field import errors_by_radius, sample_radii  # noqa: PLC0415
+
+    with_field = [run for run in runs if run.potential is not None]
+    check_field_comparable(with_field)
+
+    by_name = {run.name: run for run in with_field}
+    if candidate not in by_name:
+        raise Incomparable(
+            f"{candidate!r} produced no volumetric field to grade; present: {sorted(by_name)}"
+        )
+    references = [
+        run
+        for run in with_field
+        if run.name != candidate and run.accuracy_tier is AccuracyTier.REFERENCE
+    ]
+    if not references:
+        raise Incomparable(
+            f"nothing to grade {candidate!r} against: no other reference-tier backend "
+            "produced a field. An approximation is not a yardstick for a discretization."
+        )
+    if by_name[candidate].ionic_strength != 0.0:
+        raise Incomparable(
+            "the Born potential is unscreened, so a field cannot be graded against it at "
+            f"{by_name[candidate].ionic_strength} M"
+        )
+
+    spacing = max(float(np.max(run.potential.spacing)) for run in with_field)  # type: ignore[union-attr]
+    # Through `sashimi.field`, not inline: that module owns the rule that a
+    # sample must clear the interface cell, and an inline `a + k*h` here is the
+    # second copy its docstring says there must not be. It also rejects
+    # `cells_out=()`, which would otherwise produce no ratios at all — and
+    # `agrees` is an `all()`, so no ratios reads as agreement.
+    radii = sample_radii(radius_a, spacing, cells_out)
+
+    reference_solvent = with_field[0]
+
+    def exact_at(radius: float) -> float:
+        return born_potential(
+            radius,
+            charge_e,
+            reference_solvent.solvent_dielectric,
+            reference_solvent.temperature,
+        )
+
+    errors: dict[str, tuple[float, ...]] = {}
+    directions: dict[str, tuple[str, ...]] = {}
+    for run in with_field:
+        assert run.potential is not None
+        found, where = errors_by_radius(run.potential, centre, radii, exact_at)
+        errors[run.name] = tuple(found)
+        directions[run.name] = tuple(where)
+
+    best_names, ratios = [], []
+    for index in range(len(radii)):
+        best = min(references, key=lambda r, i=index: errors[r.name][i])  # type: ignore[misc]
+        best_names.append(best.name)
+        ratios.append(errors[candidate][index] / errors[best.name][index])
+
+    notes = tuple(
+        f"{run.name} solved on h = {float(np.max(run.potential.spacing)):.4f} A"  # type: ignore[union-attr]
+        for run in with_field
+    )
+    return FieldGrade(
+        radii_a=tuple(radii),
+        spacing_used_a=spacing,
+        errors=errors,
+        worst_directions=directions,
+        best_reference=tuple(best_names),
+        candidate=candidate,
+        ratios=tuple(ratios),
+        factor=factor,
+        notes=notes,
     )

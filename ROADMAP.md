@@ -1985,12 +1985,71 @@ rule assumed. And `sashimi corpus build --backend delphi` does **not** imply
 with DelPhi's numbers, which is what happened here and was caught only because
 the recordings were diffed key-by-key before being trusted.
 
+### M1b — grading debye against the incumbents, and what it found
+
+**The bar, decided 2026-08-14: debye within 2× the best reference-tier solver
+installed, at each sample.** Not a round number, and the reason is the one §7
+keeps rediscovering. debye reproduces DelPhi C++'s discretization to three
+decimal places, so any bar of the form "no worse than the *worst* incumbent" is
+one it satisfies by construction rather than by merit — on the fine case it
+would pass by 0.002 percentage points. Against the *best* incumbent it is a real
+measurement: agreeing with DelPhi does not put a solver within a factor of APBS.
+
+**A precondition nobody had noticed: cross-backend field numbers were not
+comparable at all.** The corpus samples `a + k·h` on each backend's *own*
+achieved spacing, which is correct there — every sample must clear *its*
+interface cell — and means a coarser grid is sampled further from the boundary,
+where the error is smaller. On `born-ion-vdw` that put DelPhi's samples at
+r = 4.0 Å and APBS's at r = 3.81 Å. Comparing those reads a sampling difference
+as an accuracy difference. `sashimi.validate.grade_field` therefore takes its
+radii from the **coarsest** grid in the comparison, so every backend clears its
+own interface cell and none is handed an easier question.
+
+**The result, and it is not what the k-resolved view suggested.** Ratio of
+debye's worst-direction error to the best reference solver's, at the three
+common radii:
+
+| case | a/h | ratios | best reference | verdict |
+|---|---|---|---|---|
+| `born-ion-vdw-r6` | 12 | 1.01 / 1.02 / 1.03× | APBS, APBS, DelPhi | **parity** |
+| `born-ion-vdw-fine` | 12 | 1.77 / 1.00 / 1.01× | APBS, DelPhi, DelPhi | **parity** |
+| `born-ion-vdw` | 6 | 5.24 / 4.81 / 3.74× | DelPhi C++ | outside |
+| `born-ion-vdw-r1` | 2 | 8.64 / 3.61 / 1.55× | APBS | outside |
+
+**What predicts the verdict is a/h — how many cells span the sphere's radius —
+and not resolution or radius.** `born-ion-vdw-r6` and `born-ion-vdw` are at the
+*same* spacing, h = 0.5 Å, and one is at parity while the other is 5.2× off; the
+difference is twelve cells across the radius against six. So debye's near field
+degrades faster than the incumbents' as the sphere stops being resolved, and
+DelPhi C++ holds up where debye does not — 0.789% at a/h = 6 on a grid no finer
+than debye's.
+
+That is the shape of an **interface-handling** gap rather than a discretization
+error, and it is worth being precise about why: at APBS's exact spacing debye
+reads 3.212% against APBS's 3.186%, so debye and APBS are the same method. It is
+DelPhi that is doing something better near an under-resolved boundary, and
+§10's referee tier — MIBPB, built on the Matched Interface and Boundary method —
+is the literature this points at. Third time this document has arrived at
+interface methods from a different direction.
+
+**Two cases were added to make the gate mean anything.** M1b rested on the two
+van der Waals field cases, both at a = 3 Å, so `born-ion-vdw-r1` and
+`born-ion-vdw-r6` now carry the extremes of the radius arm onto the surface debye
+can build. They are what turned "coarse grids are worse" into "a/h predicts it" —
+`r6` is coarse and at parity. The corpus is 81 cases.
+
+*Landed:* the grading machinery, the two cases, and the verdict — as two passing
+tests and two **strict** xfails, so closing the gap turns them red and says so.
+*Not landed:* the gap. The strict xfail already earned itself once: `r6` was
+written as a failing case from the coarse-grid theory and XPASSed on the first
+run, which is how the a/h reading was found.
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
 | M1 ✅ | LPBE on a Cartesian grid, vdW surface | **met**: 0.853% at 0.25 Å against a 1% per-backend tolerance, falling monotonically 3.836 → 1.576 → 0.853 → 0.479% under refinement |
 | M1a ✅ | **The field check has to see more than one ray** | done — the section below: eight directions across the three cubic symmetry classes, all sixteen field recordings re-measured, and the tolerances that moved moved because the diagonal is worse than the axis |
-| M1b | **The field, not just the energy** | Born φ within **1% at k ≥ 4**, in every sampled direction, with **k = 2 recorded and not gated**. Restated from "1% everywhere" on M1a's measurements: at k = 2 no solver clears 1% — APBS 1.050%, DelPhi C++ 1.891% — so gating there gates the grid rather than debye, and the old justification for 1% was an axis-only reading of DelPhi's 0.736%. At k ≥ 4 all three clear it: APBS 0.987%, DelPhi 0.803%, debye 0.800%. **Needs Charlie's call**, and note it makes M1b a bar debye already meets rather than work outstanding — M5 is what records it |
+| M1b | **The field, graded against the incumbents** | debye within **2× the best reference-tier solver installed**, at radii common to every backend in the comparison. Decided 2026-08-14 by Charlie, over a round number: debye reproduces DelPhi C++'s discretization to three decimals, so "no worse than the worst incumbent" is a bar it meets by construction — a check that cannot fail. **Met on two of four cases; the machinery and the verdict are landed, the gap is not closed.** See below |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
