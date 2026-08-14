@@ -2210,17 +2210,90 @@ incumbents equally, so debye is not disadvantaged by it. It is the one place
 debye could be *better* than APBS and DelPhi rather than at parity — every other
 rung, M2 through M4, is debye catching up to what they already do.
 
+### M1c — the spike ran, and the answer is no
+
+**Result, 2026-08-14. A smoothed dielectric is not worth it, M4a is dropped, and
+the face-centre sample stays.** The exit criterion was a number either way; this
+is the "either way", and it saves the two to three days M4a was scoped at.
+
+The spike put a smoothed Heaviside on a signed-distance field —
+`min_i(|x - c_i| - r_i)`, saturated outside a band of `w` cells — behind a
+default-off option, and measured both axes M1c required.
+
+**Axis 1, the phase oscillation it was aimed at. It improves, but far less than
+the summary statistic says.** Worst-direction error at a fixed physical radius
+over a spacing sweep, `born-ion-vdw`:
+
+| w (cells) | best h | worst h | swing |
+|---|---|---|---|
+| 0 (shipped) | 0.773% | **4.138%** | 5.35× |
+| 0.5 | 1.681% | 3.221% | 1.92× |
+| 1.0 (harmonic) | 1.975% | **3.085%** | 1.56× |
+
+**The swing ratio falls mostly because the floor rises.** The quantity a consumer
+actually sees is the worst case, and that moves 4.138% → 3.085% — 25%, against a
+metric that reads as a 3.4× improvement. *A summary statistic that improves while
+the thing it summarises does not* is §7's class wearing yet another costume, and
+it nearly bought a three-day build on its own.
+
+**Axis 2, the energy — where the arithmetic blend dies and the harmonic one
+looked like a triumph.** Arithmetically blended, `0.853% → 3.545%` at 0.25 Å,
+through M1's 1% bar at every width tried. Harmonically blended — the textbook
+mean for flux normal to a layered interface — signed error against Born:
+
+| h | hard (w=0) | harmonic w=1 |
+|---|---|---|
+| 1.000 | −3.836% | −1.209% |
+| 0.500 | −1.576% | −0.352% |
+| 0.250 | −0.853% | **−0.107%** |
+| 0.200 | −0.820% | **−0.064%** |
+
+Eight times better at M1's gate, monotonic, no sign flips, consistent across the
+whole ladder. On the strength of that it should ship.
+
+**It should not, and the reason is the one this repo keeps relearning.** On real
+unions of spheres it reverses, against APBS:
+
+| | hard (shipped) | harmonic w=0.5 | harmonic w=1.0 |
+|---|---|---|---|
+| ALA-GLY, 20 atoms | **−0.409%** | +3.849% | +3.565% |
+| barnase, 1,730 atoms | **−1.102%** | +7.202% | +5.153% |
+
+That is outside the ~2.3% band the reference-tier codes occupy among themselves,
+and refining does not close it: on ALA-GLY the two schemes flatten toward
+different values (≈ −220.1 against ≈ −216.5 kJ/mol), so it is not a constant that
+a finer grid buys back. A single convex sphere centred on a node is the *best
+case* for a band smoother; a real surface has concave junctions where
+`min_i(|x - c_i| - r_i)` is not the distance to the union, and thin solvent
+channels that a band fills in.
+
+**§7's rule, third phase running, and this time it caught a change that every
+fixture endorsed.** The Born ion is the fixture M1 was built on and it said
+8× better. The first real structure said 5–9× worse. Nothing about the sphere
+result was wrong — it was answering a question about a geometry debye does not
+ship for. *Grade a dielectric change on a real structure before the closed form,
+not after.*
+
+**What this does to M4a: dropped.** The band tested at `w = 0.5` has one cell of
+total support, which is the same support a true area-fraction average has, and it
+already fails on real geometry. That is not proof — area-fraction weights within
+the cell by exact geometry where this weights by a smooth function of the centre
+distance — but it removes the reason to spend two to three days finding out, and
+the measurement above is what a future attempt should have to beat. **The knob is
+not landed.** A default-off parameter that a measurement rejected is the same
+shape as the `relaxation` knob `debye/options.py` refuses to carry.
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
 | M1 ✅ | LPBE on a Cartesian grid, vdW surface | **met**: 0.853% at 0.25 Å against a 1% per-backend tolerance, falling monotonically 3.836 → 1.576 → 0.853 → 0.479% under refinement |
 | M1a ✅ | **The field check has to see more than one ray** | done — the section below: eight directions across the three cubic symmetry classes, all sixteen field recordings re-measured, and the tolerances that moved moved because the diagonal is worse than the axis |
 | M1b ✅ | **The field, graded against the incumbents** | debye within **2× the best reference-tier solver installed**, at radii common to every backend **and on one shared lattice**. Decided 2026-08-14 by Charlie, over a round number: debye reproduces DelPhi C++'s discretization to three decimals, so "no worse than the worst incumbent" is a bar it meets by construction — a check that cannot fail. **Met on all four cases: 1.01 / 1.01 / 1.05 / 1.69× worst at a/h = 12, 12, 6, 2.** The first measurement reported 5.24× and 8.64× on the two under-resolved cases; that was grid phase, not interface handling, and the section above is the correction |
-| M1c | **The dielectric spike** — half a day, next | a *number*, either way: does a dielectric that varies continuously with h damp the 5.3× phase oscillation, and what does it do to M1's energy? Approved 2026-08-14; the section above carries the design and the risk |
+| M1c ✅ | **The dielectric spike** | **ran, and the answer is no.** A smoothed dielectric moves the *worst* near-field error only 4.138% → 3.085% (the swing ratio flatters it), and harmonic blending's 8× energy win on the Born ion **reverses on real structures** — barnase −1.102% → +5.153% against APBS. The knob is not landed; the section above has the numbers |
 | M2 | Off-centre charge | Kirkwood d/a ∈ {0.3, 0.5, 0.7} within their measured per-case tolerances. **Not d/a = 0.9**, which no shipped solver reproduces |
 | M3 | Salt screening | energies move with ionic strength the way the corpus records |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
-| M4a | **Fractional-volume dielectric**, if and only if M1c says it is worth it | the phase oscillation measurably smaller than the incumbents', with M1's energy still inside 1%. Deliberately *after* M4 so the averaging is built once, against the surface debye actually ships |
+| ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c.** The band tested at w = 0.5 has the same one-cell support a true area-fraction average would, and it already fails on real geometry. Not proof — area-fraction weights within the cell by exact geometry — but it removes the reason to spend two to three days finding out, and M1c's numbers are what a future attempt has to beat |
 | M5 | Registry integration | `sashimi corpus verify --backend debye --tier fast` passes |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone** |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here |

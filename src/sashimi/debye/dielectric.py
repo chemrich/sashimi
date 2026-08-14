@@ -12,11 +12,31 @@ discovered at M3.
 
 The dielectric is sampled at face centres rather than averaged over the face.
 That is the same first-order choice APBS makes with `srfm mol`, and it is worth
-naming as a choice: a volume-fraction average would put the boundary error at
-second order and is the obvious place to look if M1's 1% turns out to be out of
-reach. It is not free — the fraction of a face lying inside a union of spheres
-has no closed form — so it is not paid for before the measurement says it is
-needed.
+naming as a choice — but it is no longer an *open* one. From M1 until M1c this
+docstring said a volume-fraction average was "the obvious place to look"; M1c
+looked, and the answer is no. ROADMAP.md section 12 M1c has the numbers; the
+short version, because it is the kind of thing that gets retried:
+
+- A dielectric smoothed over a band of `w` cells does damp the grid-phase
+  oscillation M1b measured, but far less than the summary statistic suggests.
+  The *swing ratio* falls from 5.35x to 1.56x mostly because the best
+  configurations get worse (0.773% -> 1.975%); the **worst** near-field error,
+  which is what a consumer sees, only moves 4.138% -> 3.085%.
+- Blended arithmetically it wrecks the energy: 0.853% -> 3.545% at 0.25 A,
+  through M1's 1% bar at every width tried.
+- Blended **harmonically** — the textbook mean for flux normal to a layered
+  interface — it looked like a large win, 0.853% -> 0.107% on the Born ion and
+  still monotonic under refinement at w = 1.
+- **And that was a fixture artifact.** On real unions of spheres it goes the
+  other way: ALA-GLY -0.409% -> +3.565% against APBS, barnase (1,730 atoms)
+  -1.102% -> +5.153%, which is outside the ~2.3% band the reference-tier codes
+  occupy among themselves. A single convex sphere centred on a node is the best
+  case for a band smoother; a real surface has concave junctions where
+  `min_i(|x - c_i| - r_i)` is not the distance to the union, and thin solvent
+  channels a band fills in.
+
+So the face-centre sample stays. Anything that revisits it has to be graded on a
+real structure before the Born ion, not after.
 """
 
 from __future__ import annotations
