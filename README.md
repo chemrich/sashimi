@@ -220,7 +220,7 @@ reports which models the installed backends actually share, because a spread
 computed across mismatched surface definitions is a modelling difference
 misreported as a solver disagreement. All five shipped backends share
 `molecular`, which is why it is the default; `smoothed-molecular` is APBS-only,
-so a solve that asks for it refuses on the other three rather than silently
+so a solve that asks for it refuses on the other four rather than silently
 substituting, and `van-der-waals` is APBS, DelPhi and debye only. On the models
 they share, APBS and DelPhi agree to 2.4% on hen lysozyme.
 

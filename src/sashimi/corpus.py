@@ -2318,10 +2318,19 @@ def build_manifest(
     solver: Solver[FiniteDifferenceRequest],
     cases: tuple[Case, ...] = MANIFEST,
     directory: Path | None = None,
+    backend: str = ROOT_BACKEND,
 ) -> list[Path]:
+    """Record every case against one solver, into that backend's directory.
+
+    `backend` exists for the same reason `summary_path` grew it at M5: without
+    it this defaulted to the corpus root whatever solver it was handed, so a
+    library caller passing `DelphiSolver()` filed DelPhi's answers as APBS's.
+    That is the footgun `corpus_dir_for` removed from the CLI, and this is a
+    public entry point that still carried it.
+    """
     written = []
     for case in cases:
-        path = summary_path(case, directory)
+        path = summary_path(case, directory, backend)
         write_summary(build_case(solver, case), path)
         written.append(path)
     return written

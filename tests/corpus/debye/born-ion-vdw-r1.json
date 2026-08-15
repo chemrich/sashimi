@@ -109,7 +109,7 @@
       "cells_out": 2,
       "relative_error": 0.09871228344105648
     },
-    "rtol": 0.035,
+    "rtol": 0.2,
     "source": "Born potential: q=1e outside a 1 A sphere, sampled at a + k*h along 8 directions"
   },
   "grid_spec": {

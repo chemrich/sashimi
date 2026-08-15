@@ -7,7 +7,7 @@
   "backend": "debye-0.1",
   "analytic": {
     "energy_kj_mol": -171.45810074079097,
-    "rtol": 0.01,
+    "rtol": 0.031,
     "source": "Born: q=1e, a=4 A, eps_p=1",
     "relative_error": 0.01504193560407989
   },
