@@ -454,9 +454,14 @@ def test_a_field_grade_refuses_a_closed_form_describing_different_physics():
 
     Both shift the Born potential by a factor common to every backend, and the
     verdict is a *ratio* of errors — so a common offset drives every ratio
-    towards 1.0 and the grade passes. `corpus.AnalyticField.exact_at` refuses
-    exactly this on ionic strength; these are the other two axes, and they were
-    caller arguments nothing cross-checked until a review asked.
+    towards 1.0 and the grade passes. These were caller arguments nothing
+    cross-checked until a review asked.
+
+    Ionic strength is the third axis and `grade_field` still refuses it outright
+    rather than carrying it, because `FieldRun` has no `ion_radius` and so cannot
+    say where the screening starts. `corpus.AnalyticField.exact_at` *does* carry
+    it, as of M3 — the two are no longer the same treatment, and the difference
+    is the Stern radius rather than the closed form.
     """
     case = case_named("born-ion-vdw")
     request = case.request()

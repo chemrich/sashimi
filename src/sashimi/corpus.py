@@ -223,7 +223,8 @@ class AnalyticField:
     **Under salt there are two branches and the sampling rule survives both.**
     `screened_born_potential` is Poisson between the dielectric boundary and the
     Stern radius `a + ion_radius`, screened beyond it. A sample may land on the
-    Stern radius — `born-ion-vdw-salt` puts DelPhi's third one exactly there —
+    Stern radius — `born-ion-vdw-salt` puts DelPhi's **second** one exactly
+    there, at r = 5.0 A on its h = 0.5 lattice with `cells_out=(2, 4, 8)` —
     and that is fine where a sample on the *dielectric* boundary is not: eps is
     the same on both sides of the Stern radius, so phi and its first derivative
     are continuous and only the second jumps. The interpolation error there is
@@ -265,8 +266,10 @@ class AnalyticField:
         `solvent_dielectric` — as this did — meant a case could be paired with a
         field reference describing different physics and nothing would say so.
         The concrete instance was salt: `born_potential` is unscreened, and
-        attaching it to a 0.15 M case would report ~29% two cells out and ~51%
-        eight cells out as a solver defect.
+        attaching it to a 0.15 M case would report about 30% two cells out and
+        about half eight cells out as a solver defect — 29.7% and 47.9% on
+        APBS's achieved spacing, 31.1% and 52.6% on DelPhi C++'s, since the
+        samples are at `a + k*h`.
 
         M3 closes that by making the reference salt-aware instead of refusing:
         `screened_born_potential` reduces to `born_potential` exactly at zero
@@ -454,6 +457,25 @@ SYNTHETIC: dict[str, str] = {
 }
 
 
+def _per_backend_rtol(
+    delphi_rtol: float | None, debye_rtol: float | None
+) -> tuple[tuple[str, float], ...]:
+    """The tight-tolerance pairs, built in one place because the keys matter.
+
+    `rtol_for` matches these as a *prefix* of the recorded backend identity, so a
+    mistyped key does not fail — it falls through to the shared tolerance, which
+    is set by the least accurate backend on the case. A tight tolerance that
+    quietly stops applying is the `per_backend_rtol` instance in the guards file,
+    and two copies of these strings is two chances at it.
+    """
+    pairs: list[tuple[str, float]] = []
+    if delphi_rtol is not None:
+        pairs.append(("delphicpp", delphi_rtol))
+    if debye_rtol is not None:
+        pairs.append(("debye", debye_rtol))
+    return tuple(pairs)
+
+
 def _kirkwood(
     offset_fraction: float,
     *,
@@ -471,16 +493,11 @@ def _kirkwood(
     debye meets by construction — it reproduces APBS's discretization, and APBS
     is what sets it — which is section 7's check that cannot fail.
     """
-    per_backend: list[tuple[str, float]] = []
-    if delphi_rtol is not None:
-        per_backend.append(("delphicpp", delphi_rtol))
-    if debye_rtol is not None:
-        per_backend.append(("debye", debye_rtol))
     return AnalyticReference(
         energy_kj_mol=kirkwood_solvation_energy(3.0, 3.0 * offset_fraction, 1.0, 1.0, 78.54),
         rtol=rtol,
         source=f"Kirkwood: q=1e at d/a={offset_fraction:g} in a 3 A sphere, eps_p=1",
-        per_backend_rtol=tuple(per_backend),
+        per_backend_rtol=_per_backend_rtol(delphi_rtol, debye_rtol),
         gated=gated,
     )
 
@@ -513,16 +530,11 @@ def _born(
     that cannot be failed — which is the shape section 7 keeps finding, and it
     is worth one comment to say the difference is intended.
     """
-    per_backend: list[tuple[str, float]] = []
-    if delphi_rtol is not None:
-        per_backend.append(("delphicpp", delphi_rtol))
-    if debye_rtol is not None:
-        per_backend.append(("debye", debye_rtol))
     return AnalyticReference(
         energy_kj_mol=born_solvation_energy(radius, charge, solute_dielectric, 78.54),
         rtol=rtol,
         source=f"Born: q={charge:g}e, a={radius:g} A, eps_p={solute_dielectric:g}",
-        per_backend_rtol=tuple(per_backend),
+        per_backend_rtol=_per_backend_rtol(delphi_rtol, debye_rtol),
     )
 
 

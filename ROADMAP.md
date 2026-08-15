@@ -2592,9 +2592,10 @@ Two things fell out of building it:
   temperature was the mirror image of that trap.
 - **A sample may land on the Stern radius**, where one on the dielectric boundary
   is O(1) wrong for every solver — ε is equal on both sides, so φ and φ′ are
-  continuous and only φ″ jumps. `born-ion-vdw-salt` puts DelPhi's third sample
-  exactly there. Measured, for scale: matching φ alone and dropping the flux
-  condition puts a **63.6%** step at that radius.
+  continuous and only φ″ jumps. `born-ion-vdw-salt` puts DelPhi's **second**
+  sample exactly there (r = 5.0 Å on its h = 0.5 lattice). Measured, for scale:
+  matching φ alone and dropping the flux condition puts a **63.6%** step at that
+  radius.
 
 **The field, and the finding that the relative numbers hide.** debye's worst
 error two cells out reads 4.47% at zero salt and 7.61% at 0.5 M, which looks like

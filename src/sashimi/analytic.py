@@ -230,8 +230,11 @@ def born_potential(
     charge is singular.
 
     Unscreened, so it describes a case only at zero ionic strength — at 0.15 M
-    it overstates the potential two cells outside a 3 A sphere by 29% and eight
-    cells out by 51%. `screened_born_potential` is the salted expression, and
+    it overstates the potential two cells outside a 3 A sphere by about 30% and
+    eight cells out by about half. Sampling is at `a + k*h`, so the exact figure
+    depends on the backend's achieved spacing: 29.7% and 47.9% on APBS's
+    0.40625 A, 31.1% and 52.6% on DelPhi C++'s 0.5 A.
+    `screened_born_potential` is the salted expression, and
     `sashimi.corpus.AnalyticField` picks between them from the case's solvent
     rather than leaving the choice to a caller.
     """
@@ -273,9 +276,12 @@ def screened_born_potential(
     The inner branch is the unscreened Born potential shifted by a constant, and
     that constant is exactly twice the ionic term of
     `screened_born_solvation_energy` — the reaction potential at the charge is
-    the same quantity read at a point rather than integrated. `tests/
-    test_analytic.py` asserts that identity, which is the check that both
-    expressions were transcribed from the same matching conditions.
+    the same quantity read at a point rather than integrated.
+    `tests/test_analytic_closed_forms.py` asserts that identity, which is the
+    check that both expressions were transcribed from the same matching
+    conditions. Not `tests/test_analytic.py`, which is marked `apbs` and grades
+    this module against a solver: an identity between two expressions here is
+    exactly what a solver cannot arbitrate.
 
     Measured against the solvers on the 3 A van der Waals sphere at 0.15 M,
     worst over the eight sampled directions, two cells out: debye 6.38%, APBS
@@ -289,10 +295,14 @@ def screened_born_potential(
     where the discretization error lives, the Boltzmann term adds none of its
     own.
     """
-    if ionic_strength <= 0:
-        return born_potential(r_a, charge_e, solvent_dielectric, temperature)
+    # Before the zero-salt shortcut, not after: a guard that only runs on one
+    # branch means the same invalid radius raises `ValueError` at 0.15 M and
+    # `ZeroDivisionError` at zero, which is two failure modes chosen by a
+    # parameter unrelated to what is wrong.
     if r_a <= 0:
         raise ValueError(f"radius must be positive, got {r_a}")
+    if ionic_strength <= 0:
+        return born_potential(r_a, charge_e, solvent_dielectric, temperature)
 
     kappa = 1.0 / debye_length_a(ionic_strength, solvent_dielectric, temperature)  # 1/A
     exclusion = radius_a + ion_radius

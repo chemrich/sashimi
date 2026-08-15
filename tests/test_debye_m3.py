@@ -86,14 +86,21 @@ def ionic_contribution(name: str, **solvent_overrides) -> float:
     return salted - unsalted
 
 
-def exact_ionic_contribution(case: Case, *, ion_radius: float | None = None) -> float:
-    """The same difference from the closed form, taking the case's own solvent."""
+def exact_ionic_contribution(case: Case) -> float:
+    """The same difference from the closed form, taking the case's own solvent.
+
+    Deliberately has **no** `ion_radius` override, though the mutation test below
+    wants one on the solver side. A helper that let the reference be moved to
+    match a mutated solver is a ready-made way to grade a mutation against its
+    own physics, which is the thing that test exists to avoid — so the two sides
+    are asymmetric on purpose.
+    """
     solvent = case.solvent
     kwargs = {
         "solute_dielectric": solvent.solute_dielectric,
         "solvent_dielectric": solvent.solvent_dielectric,
         "temperature": solvent.temperature,
-        "ion_radius": solvent.ion_radius if ion_radius is None else ion_radius,
+        "ion_radius": solvent.ion_radius,
     }
     radius = float(case.structure().radii[0])
     charge = float(case.structure().charges[0])

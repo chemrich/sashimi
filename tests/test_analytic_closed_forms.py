@@ -5,6 +5,11 @@ accordingly, so until M3 nothing exercised these expressions where they can be
 checked *internally* — and internal checks are what catch a transcription error,
 because a solver that disagrees by 2% could be either party's fault.
 
+It also holds the one pin nothing had: `debye_length_a` feeds both salted
+expressions *and* debye's Boltzmann term *and* its boundary data, so every check
+that grades the solver against the closed form shares it and cannot see it being
+wrong.
+
 The identity that matters is between the two salted expressions.
 `screened_born_solvation_energy` and `screened_born_potential` are two
 consequences of one pair of matching conditions at the Stern radius, derived
@@ -32,6 +37,8 @@ from sashimi.analytic import (
     screened_born_solvation_energy,
 )
 from sashimi.constants import AVOGADRO, BOLTZMANN, JOULES_PER_KJ
+from sashimi.gb.energy import debye_kappa
+from sashimi.protocol import SolventModel
 
 RADIUS = 3.0
 CHARGE = 1.0
@@ -46,6 +53,42 @@ SALTS = (0.05, 0.15, 0.5, 1.0)
 def kt_per_mol_kj(temperature: float) -> float:
     """kJ/mol per kT, for turning a potential in kT/e into an energy."""
     return BOLTZMANN * temperature * AVOGADRO / JOULES_PER_KJ
+
+
+def test_the_debye_length_is_the_textbook_value():
+    """7.86 A at 0.15 M, the number `debye_length_a`'s own docstring names.
+
+    **Nothing asserted this until M3's review asked, and by then everything
+    depended on it.** kappa flows from this one function into both salted closed
+    forms, `debye/dielectric.py`'s Boltzmann coefficient and `debye/sources.py`'s
+    Dirichlet data — so a wrong kappa moves the solver and its reference by the
+    same factor and every no-binary check in this file stays green. That is the
+    common-mode failure the guards file keeps finding: a verdict computed as a
+    ratio or a difference hides an error in the term both sides share.
+
+    Only `test_the_ionic_term_agrees_with_a_backend_that_computes_kappa_itself`
+    would have caught it, and that one needs APBS. Two pins here, both cheap:
+    the textbook value, and agreement with `sashimi.gb`'s independent
+    implementation of the same formula — which existed, and was pinned, the
+    whole time.
+    """
+    assert debye_length_a(0.15, EPS_S, TEMPERATURE) == pytest.approx(7.86, abs=0.02)
+    assert debye_length_a(0.0) == math.inf
+
+    # A second implementation of kappa^2 = 2 N_A e^2 I / (eps0 eps_s k T) has
+    # shipped in `sashimi.gb` since phase 7. Two copies is a duplication worth
+    # noting; until one goes, their agreement is a free cross-check.
+    for ionic_strength in SALTS:
+        gb_kappa = debye_kappa(
+            SolventModel(
+                ionic_strength=ionic_strength,
+                solvent_dielectric=EPS_S,
+                temperature=TEMPERATURE,
+            )
+        )
+        assert 1.0 / gb_kappa == pytest.approx(
+            debye_length_a(ionic_strength, EPS_S, TEMPERATURE), rel=1e-12
+        )
 
 
 @pytest.mark.parametrize("ionic_strength", SALTS)
@@ -162,10 +205,12 @@ def test_zero_salt_is_the_unscreened_expression_exactly():
 def test_the_far_field_decays_as_a_screened_coulomb_tail():
     """Beyond the Stern radius the log of r*phi is linear in r with slope -kappa.
 
-    The one property of the outer branch that a wrong kappa cannot fake while
-    still matching at the boundary, and the reason it is here rather than only
-    in the solver tests: debye's Debye-Huckel boundary data uses the same tail,
-    so a check of debye against this expression alone would share it.
+    What this establishes is that the outer branch uses kappa *consistently* —
+    the decay constant is the same quantity the matching condition's
+    `1 + kappa b` is built from. It says nothing about whether kappa is right,
+    because the expected slope here comes from `debye_length_a` too;
+    `test_the_debye_length_is_the_textbook_value` is what pins that, and it has
+    to be a separate test for exactly that reason.
     """
     ionic_strength = 0.15
     kappa = 1.0 / debye_length_a(ionic_strength, EPS_S, TEMPERATURE)
