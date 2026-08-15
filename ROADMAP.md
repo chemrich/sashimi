@@ -8,7 +8,7 @@
 Status: phases 0–4 shipped, 5 bar the PyPI release; 6 (distribution) not
 started; 7 (multi-backend) in progress — DelPhi, `sashimi validate` and the
 TABI-PB boundary-element backend have landed.
-Last updated: 2026-08-11
+Last updated: 2026-08-15 (phase 8: M0–M3 met; §12 carries the ladder)
 
 This is the single planning document. It supersedes the earlier split between
 ROADMAP.md (intent) and PLAN.md (APBS implementation), which had two
@@ -411,13 +411,29 @@ only contains cases the solver handles well does not record where it stops
 working.
 
 **Where a closed form is declined.** The salted Born ion has no analytic
-reference, deliberately. The Debye-Hückel screening term depends on an
-ion-exclusion convention the backends do not share: APBS's ionic contribution is
-−0.688 kJ/mol and DelPhi's is −0.496, both reporting `polar-solvation`, and
-DelPhi's is resolution-independent where APBS's carries grid noise. That is a
-different convention beneath the same declared quantity — not the `EnergyTerm`
-gap of §12 — and pinning either as "the" closed form would encode one code's
-choice as physics.
+reference on its **energy**, deliberately, and M3 sharpened the reason into two
+that are worth keeping apart.
+
+The first is the one this paragraph originally gave: the Debye-Hückel screening
+term depends on an ion-exclusion convention the backends do not share. APBS's
+ionic contribution is −0.688 kJ/mol and DelPhi's is −0.496, both reporting
+`polar-solvation`, and DelPhi's is resolution-independent where APBS's carries
+grid noise. That is a different convention beneath the same declared quantity —
+not the `EnergyTerm` gap of §12. **M3 narrowed it: the disagreement is DelPhi's
+alone.** APBS and debye, sharing no source, both land within 0.2% of the
+linearized expression, so this is not a coin flip between two conventions. And
+APBS's "grid noise" turned out to belong to the *probe-based surfaces* — on
+`van-der-waals` it reproduces the closed form to 0.03% at every spacing, against
+9-13% on the other two, which is why `born-ion-salt` being `smoothed-molecular`
+is load-bearing rather than incidental.
+
+The second reason survives all of that and is now the operative one: **the ionic
+term is 0.3% of the total where discretization is 1.6%**, so an energy check
+against a closed form cannot see the salt whatever the convention. Every
+mutation of debye's screening tried at M3 — including deleting the Boltzmann
+term outright — leaves the total inside the band APBS itself needs. What a
+salted case *can* carry is an `AnalyticField`, added at M3, and a gate on
+`G(I) − G(0)` across a pair of recordings.
 
 ### Charge placement, and the axis nothing covered
 
@@ -1933,7 +1949,9 @@ backend is exactly the argument that guard exists to force.
 the right kind of reuse — one place for the physics — but it means a corpus check
 of debye's screening against that closed form would share a definition and be
 partly circular. Cross-backend agreement with APBS, whose κ is computed inside
-its own C, is the check that is not.
+its own C, is the check that is not. *Acted on: M3's gate has both halves, at the
+same bar, for exactly this reason — and the caveat was worth writing down, since
+the closed-form half alone reads 0.10% and would have looked like enough.*
 
 ### M1a — the field check sees more than one ray ✅
 
@@ -2476,6 +2494,162 @@ it reads −1.893% at 0.2 Å. The control that made "record, do not gate" the ri
 call rather than the convenient one is the two incumbent rows above — running
 them is what turned "debye has a problem here" into "this geometry does".
 
+### M3 — salt screening, and the gate that had to be a difference
+
+**Met 2026-08-15. debye's ionic contribution reads +0.10% and +0.14% against the
+screened Born closed form at 0.15 M and 0.5 M, and 0.13% and 0.22% against APBS,
+against a 2% bar decided by Charlie.**
+
+**Salt was already running and had never been graded.** `peptide-vdw` takes
+`SolventModel`'s 0.150 M default, so M1's "0.409% from APBS on ALA-GLY" was a
+salted solve — the Boltzmann term has been exercised since M1 and no case
+measured it. `screening_nodes` was written at M1 rather than at M3 precisely so
+this milestone would not be a rewrite, and it was not: **M3 changed no solver
+code at all.** What it added is cases, a closed form, and a gate.
+
+**The arm, on the van der Waals sphere (a = 3 Å, q = +1e, ε_p = 1), as
+G(I) − G(0) in kJ/mol:**
+
+| I (M) | closed form | debye | APBS | DelPhi C++ |
+|---|---|---|---|---|
+| 0.05 | −0.4753 | −0.4756 | −0.4761 | −0.2479 |
+| 0.15 | −0.6880 | **−0.6887** | −0.6878 | −0.4958 |
+| 0.50 | −0.9507 | **−0.9521** | −0.9501 | −0.8428 |
+| 1.00 | −1.0997 | −1.1015 | −1.0990 | −1.0412 |
+
+Identical to four digits at 0.25 Å. So §7's "two codes disagree 39% and pinning
+either would encode a convention as physics" needs one refinement, and only one:
+**the disagreement is DelPhi's alone.** Two codes sharing no source land on the
+linearized Debye–Hückel expression to better than 0.2%, which is evidence about
+which convention the analytic model describes rather than a preference between
+two. The decision for `born-ion-salt` is unchanged — it is `smoothed-molecular`,
+where see below.
+
+**Why the gate is a difference between two recordings and not a number.** The
+ionic contribution is 0.3% of the solvation energy where discretization is 1.6%.
+Four mutations of debye's screening, each judged against the shipped
+convention's closed form:
+
+| mutation | ΔΔG error | **total** vs closed form |
+|---|---|---|
+| pristine | +0.10% | −1.571% |
+| Boltzmann term deleted outright | −28.8% | −1.484% |
+| Stern layer at the probe (1.4 Å) | +4.86% | −1.586% |
+| no Stern layer at all | +18.2% | −1.626% |
+| κ where κ² belongs | +63.4% | −1.761% |
+
+**Every mutation leaves the total inside a band APBS alone needs 2.4% for.** An
+`AnalyticReference` on a salted case would therefore pass a solver with no
+mobile-ion term at all — the purest check that cannot fail the corpus could have
+acquired, caught before being built rather than after. The salted cases carry an
+`analytic_field` and no `analytic`, and `test_a_total_energy_check_could_not_see_the_salt`
+holds that reasoning where a comment would rot.
+
+**The bar is 2% on both halves, and the second half is why there are two.**
+debye takes κ from `sashimi.analytic.debye_length_a`, which is also what the
+closed form uses — the circularity M1 flagged in advance. APBS computes κ inside
+its own C, so the cross-backend half is the one that closes it. 2% is twenty
+times what debye reads and still sits below the *subtlest* mutation above, the
+probe-radius Stern layer at 4.86%; `test_the_bar_rejects_a_stern_layer_at_the_probe_radius`
+runs that mutation rather than citing it, which is the guards file's "land the
+mutation with the assertion" applied at last.
+
+**Two controls, because M1b's correction says to run them before believing a
+number.** Padding 5 → 30 Å moves ΔΔG by 0.13% in total, so the gate is not
+grading the box — worth checking, because deleting the interior Boltzmann term
+still leaves 89.5% of the answer at padding 5 and 33.7% at padding 30, the
+Debye–Hückel Dirichlet data on the box face supplying the rest. The two paths
+sum correctly at every padding. And no shared lattice is pinned, unlike M1b:
+ΔΔG moves under 1% across 0.5 / 0.35 / 0.25 / 0.2 Å, where the near field moves
+5–21× on grid phase alone. The ionic term is simply not that quantity.
+
+**Four cases, and it is the third milestone to pay for the same class.** The
+corpus's salt arm was `born-ion-molecular-salt` and `-high-salt`, on a surface
+debye refuses by name — exactly as M0 found for the closed forms and M2 for
+Kirkwood. `born-ion-vdw-salt` and `born-ion-vdw-high-salt` are their siblings,
+and `peptide-vdw-no-salt` / `-high-salt` complete a real-structure arm around the
+`peptide-vdw` that was already salted. The corpus is **89 cases**; APBS records
+all 89, DelPhi C++ 46.
+
+**The closed form is new, and it is the third in the project.**
+`screened_born_potential` is the salted sphere's *potential*: Poisson between the
+dielectric boundary and the Stern radius `a + r_ion`, linearized PB beyond it,
+matched in φ and ε ∂φ/∂n. `AnalyticField.exact_at` previously refused a salted
+case by name; it now describes one, and reduces to `born_potential` exactly at
+zero salt, so all ten pre-existing field recordings are byte-identical. Making
+the reference salt-aware rather than guarding against salt is the guards file's
+first lesson — an illegal state made unrepresentable — and it removes a refusal
+that was reachable only by writing a case the manifest then had to remember not
+to write.
+
+Two things fell out of building it:
+
+- **`exact_at` was defaulting the temperature rather than reading it**, the same
+  defect as the `solvent_dielectric` one it was written to fix, one parameter
+  along. Invisible: all ten field cases sit at 298.15 K, so the recordings do not
+  move. It is worth naming because `peptide-cold` exists precisely to catch a
+  *solver* reading a temperature in the wrong unit, and a reference that ignored
+  temperature was the mirror image of that trap.
+- **A sample may land on the Stern radius**, where one on the dielectric boundary
+  is O(1) wrong for every solver — ε is equal on both sides, so φ and φ′ are
+  continuous and only φ″ jumps. `born-ion-vdw-salt` puts DelPhi's third sample
+  exactly there. Measured, for scale: matching φ alone and dropping the flux
+  condition puts a **63.6%** step at that radius.
+
+**The field, and the finding that the relative numbers hide.** debye's worst
+error two cells out reads 4.47% at zero salt and 7.61% at 0.5 M, which looks like
+screening being harder to resolve. It is not. In **absolute** terms, on one
+lattice at one radius, it is 0.0812, 0.0805 and 0.0798 kT/e — the same
+discretization error, and the screening adds none of its own. What changed is
+the potential being divided by. The agreement loosens with distance (−6.6% and
+−14.3% eight cells out, on errors a tenth the size), so the claim is gated only
+where the error lives. *Watch for this shape: it is M1c's "a summary statistic
+improving while the quantity it summarises does not", running the other way.*
+
+**A docstring claim that was surface-specific and read as general.**
+`screened_born_solvation_energy` said the ionic term "carries grid noise of order
+10% even where the energies themselves have converged", from APBS reading
+−0.688 / −0.777 / −0.694 across 0.5 / 0.25 / 0.125 Å. Measured on all three
+surfaces at 0.15 M against an exact −0.6880:
+
+| surface | 0.5 Å | 0.25 Å | 0.125 Å | swing |
+|---|---|---|---|---|
+| `molecular` | −0.6878 | −0.7766 | −0.7155 | 12.9% |
+| `smoothed-molecular` | −0.6880 | −0.7087 | −0.7520 | 9.3% |
+| `van-der-waals` | −0.6878 | −0.6878 | −0.6879 | **0.015%** |
+
+The noise is a property of the **probe-based surfaces**, not of the quantity —
+and the surface debye builds is the clean one. Offered as a suggestion rather
+than a measurement: with a probe the dielectric boundary and the ion-exclusion
+boundary are two differently-constructed surfaces whose discretizations move
+apart with h, where at `srad 0` both are bare staircases that scale together.
+This is also the honest reading of why the corpus declined a closed form for
+`born-ion-salt`: that case is `smoothed-molecular`, where APBS swings 9%.
+
+**Recorded and deliberately not gated: the ionic term stops being a monopole.**
+Walking from the sphere to ALA-GLY one variable at a time, debye against APBS at
+0.15 M:
+
+| system | debye/APBS |
+|---|---|
+| 1 sphere (ε_p = 1, ε_p = 2, r = 0.6 Å) | 1.001 / 1.001 / 1.000 |
+| 2 spheres +1/+1, 20 Å apart, then 4 Å apart | 1.014 / 1.004 |
+| acetate, net −1 | 1.002 |
+| **2 spheres +1/−1, net zero** | **0.900** |
+| **ALA-GLY, net zero** | **0.922** |
+
+**Every net-charged solute agrees to 1.4%; both net-neutral ones disagree by
+8–10%**, stable across 0.5 / 0.35 / 0.25 / 0.2 Å, so it is a convention
+difference and not grid noise. Once the monopole vanishes the ionic term is
+dipole screening, an order of magnitude smaller (−0.196 against acetate's
+−0.742), and the three reference codes spread over 22% — DelPhi −0.174, debye
+−0.196, APBS −0.212 — with no closed form in reach. So M3 gates the monopole and
+records this, the same call M2 made for its non-monotonic rungs, and the control
+that made it the honest option rather than the convenient one is the sphere row:
+debye is not adrift, the geometry class is. Barnase, net +2 across 1,730 atoms,
+sits between at 0.966 — which is what "monopole dominance" rather than "sign of
+the charge" predicts.
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
@@ -2484,7 +2658,7 @@ them is what turned "debye has a problem here" into "this geometry does".
 | M1b ✅ | **The field, graded against the incumbents** | debye within **2× the best reference-tier solver installed**, at radii common to every backend **and on one shared lattice**. Decided 2026-08-14 by Charlie, over a round number: debye reproduces DelPhi C++'s discretization to three decimals, so "no worse than the worst incumbent" is a bar it meets by construction — a check that cannot fail. **Met on all four cases: 1.01 / 1.01 / 1.05 / 1.69× worst at a/h = 12, 12, 6, 2.** The first measurement reported 5.24× and 8.64× on the two under-resolved cases; that was grid phase, not interface handling, and the section above is the correction |
 | M1c ✅ | **The dielectric spike** | **ran; M4a is dropped.** A smoothed dielectric moves the *worst* near-field error only 4.138% → 3.085% — the swing ratio flatters it — which does not justify M4a's two to three days on an axis where debye is already at parity. Separately it made the Born energy **8× better**, left open rather than acted on: the real-structure check that appeared to contradict it used APBS, which shares the hard assignment under test, and a reference-free convergence study since points the other way. The knob is not landed |
 | M2 ✅ | Off-centre charge | **met**: 1.047 / 1.254 / 1.328% against the Kirkwood series at d/a = 0.3 / 0.5 / 0.7, against a **1.5%** bar set independently of debye and stricter than APBS manages at the hardest rung. Needed four new `van-der-waals` Kirkwood cases first — every existing rung was on a surface debye refuses. **Not d/a = 0.9**, which no shipped solver reproduces; and at d/a ≥ 0.5 *nothing* converges monotonically, so M2 gates accuracy and records convergence |
-| M3 | Salt screening | energies move with ionic strength the way the corpus records |
+| M3 ✅ | Salt screening | **met**: debye's ionic contribution `G(I) − G(0)` is +0.10% / +0.14% from the screened Born closed form at 0.15 / 0.5 M and 0.13% / 0.22% from APBS, against a **2%** bar on both halves — two halves because debye shares κ with the closed form and APBS does not. Gated as a *difference* rather than a total, because measurement showed a total-energy check cannot see the salt at all: four mutations of the screening, including deleting the Boltzmann term, all leave the total inside the 2.4% band APBS needs. Needed two new `van-der-waals` salt cases first — the third milestone to find its criterion named cases debye refuses by name. **Not the net-neutral solute**, where the monopole vanishes and the three reference codes spread 22% with no closed form: recorded, as M2 did for its non-monotonic rungs |
 | M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 | Registry integration | `sashimi corpus verify --backend debye --tier fast` passes |

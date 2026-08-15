@@ -18,7 +18,11 @@ same expression either way.
 
 These are cheap to evaluate and expensive to get wrong, so each is derived in a
 comment rather than quoted, and `tests/test_analytic.py` checks them against the
-solvers rather than the other way round.
+solvers rather than the other way round. That file needs APBS, so it says nothing
+on a bare checkout and nothing about whether two expressions here agree with
+*each other*; `tests/test_analytic_closed_forms.py` is the internal half, and it
+exists because M3 added a second salted expression that has to be the same
+matching condition as the first.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ __all__ = [
     "born_solvation_energy",
     "debye_length_a",
     "kirkwood_solvation_energy",
+    "screened_born_potential",
     "screened_born_solvation_energy",
 ]
 
@@ -110,24 +115,42 @@ def screened_born_solvation_energy(
     kappa is zero. This is the *linearized* result, so it is only a reference for
     the linearized equation — which is the only one sashimi solves.
 
-    **Not a tight reference, and the reason is a real disagreement between the
-    solvers rather than a defect in this expression.** On the 3 A, +1e ion at
-    0.15 M, the measured ionic contribution is:
+    **How tight a reference this is depends on the surface model, which is not
+    what it looked like until M3 measured it.** On the 3 A, +1e ion at 0.15 M
+    the ionic contribution -- G(I) - G(0), the only part of the total this
+    expression's screening term describes -- reads, against an exact -0.6880:
 
-        this expression   -0.688 kJ/mol
-        APBS              -0.688 / -0.777 / -0.694 at 0.5 / 0.25 / 0.125 A
-        DelPhi C++        -0.496 at all three resolutions
+        APBS `molecular`            -0.6878 / -0.7766 / -0.7155  at 0.5/0.25/0.125 A
+        APBS `smoothed-molecular`   -0.6880 / -0.7087 / -0.7520
+        APBS `van-der-waals`        -0.6878 / -0.6878 / -0.6879
+        DelPhi C++ `van-der-waals`  -0.4958 at every resolution
+        debye                       -0.6887 / -0.6882
 
-    APBS straddles it — the shift is a small difference of two large numbers, so
-    it carries grid noise of order 10% even where the energies themselves have
-    converged. DelPhi's is resolution-independent to four decimal places, which
-    says it computes the ionic term semi-analytically rather than from the grid,
-    and lands 39% away. Both codes report `polar-solvation`, so this is not the
-    `EnergyTerm` gap of section 12; it is a different ion-exclusion convention
-    underneath the same declared quantity.
+    So the ~10% scatter this docstring used to attribute to the *quantity* --
+    "a small difference of two large numbers, so it carries grid noise" -- is a
+    property of the **probe-based surfaces**. Where the probe is zero, APBS
+    reproduces the closed form to 0.03% at every spacing, and debye to 0.14%.
+    The likely mechanism, offered as a suggestion rather than a measurement: with
+    a probe the dielectric boundary and the ion-exclusion boundary are two
+    differently-constructed surfaces whose discretizations move apart with h,
+    where at `srad 0` both are bare staircases that scale together.
 
-    Use it as a ~10% sanity anchor for the APBS convention, not as a corpus
-    reference. Zero-salt cases are exact and are what the corpus checks against.
+    DelPhi's stays resolution-independent to four decimals and lands 39% away,
+    which says it computes the ionic term semi-analytically rather than from the
+    grid. Both codes report `polar-solvation`, so this is not the `EnergyTerm`
+    gap of section 12; it is a different ion-exclusion convention underneath the
+    same declared quantity. That disagreement is real and is why the corpus
+    declines a closed form for `born-ion-salt` -- but it is DelPhi's alone, not
+    a coin flip between two conventions: two codes sharing no source land on this
+    expression to better than 0.2%.
+
+    **What it is still not a reference for is the total.** The ionic term is
+    0.3% of the solvation energy where discretization is 1.6%, so a check of the
+    *total* against this expression cannot see the salt at all: every mutation of
+    debye's screening tried at M3 -- including deleting the Boltzmann term
+    outright -- leaves the total within -1.40% to -1.76% of it, inside a band
+    APBS itself needs 2.4% for. A salted case is graded on the difference between
+    two recordings, and section 12's M3 records why.
     """
     unscreened = born_solvation_energy(radius_a, charge_e, solute_dielectric, solvent_dielectric)
     if ionic_strength <= 0:
@@ -205,9 +228,80 @@ def born_potential(
     Valid only for r > a: at the dielectric boundary itself the smoothed surface
     makes the grid value diverge from this by ~70%, and at r = 0 the point
     charge is singular.
+
+    Unscreened, so it describes a case only at zero ionic strength — at 0.15 M
+    it overstates the potential two cells outside a 3 A sphere by 29% and eight
+    cells out by 51%. `screened_born_potential` is the salted expression, and
+    `sashimi.corpus.AnalyticField` picks between them from the case's solvent
+    rather than leaving the choice to a caller.
     """
     q = charge_e * ELEMENTARY_CHARGE
     r = r_a * ANGSTROM
     volts = q / (4 * math.pi * VACUUM_PERMITTIVITY * solvent_dielectric * r)
+    kt_over_e = BOLTZMANN * temperature / ELEMENTARY_CHARGE
+    return volts / kt_over_e
+
+
+def screened_born_potential(
+    r_a: float,
+    charge_e: float = 1.0,
+    solvent_dielectric: float = 78.54,
+    temperature: float = 298.15,
+    *,
+    radius_a: float,
+    ionic_strength: float = 0.0,
+    ion_radius: float = 2.0,
+) -> float:
+    """Potential outside a charged sphere in salt, with a Stern layer, in kT/e.
+
+    The third closed form in this project, and the first on the *field* under
+    salt. Mobile ions are excluded inside `b = radius_a + ion_radius`, so there
+    are two regions and they are not the same expression. Solving Poisson
+    between the dielectric boundary and the Stern radius, the linearized PB
+    equation beyond it, and matching phi and eps dphi/dr at b:
+
+        a < r <= b:   phi(r) = q / (4 pi eps0 eps_s) * [1/r - kappa/(1 + kappa b)]
+            r >= b:   phi(r) = q / (4 pi eps0 eps_s) * exp(-kappa (r - b))
+                                                      / ((1 + kappa b) r)
+
+    Both branches agree at r = b, and so do their derivatives: eps does not jump
+    there — only the Boltzmann coefficient does — so the kink is in the second
+    derivative. That is why a sample near the Stern radius is a well-posed
+    question where a sample near the *dielectric* boundary is the O(1)-wrong one
+    `sashimi.corpus.AnalyticField` documents.
+
+    The inner branch is the unscreened Born potential shifted by a constant, and
+    that constant is exactly twice the ionic term of
+    `screened_born_solvation_energy` — the reaction potential at the charge is
+    the same quantity read at a point rather than integrated. `tests/
+    test_analytic.py` asserts that identity, which is the check that both
+    expressions were transcribed from the same matching conditions.
+
+    Measured against the solvers on the 3 A van der Waals sphere at 0.15 M,
+    worst over the eight sampled directions, two cells out: debye 6.38%, APBS
+    4.51%, DelPhi C++ 1.72%. Those relative numbers are larger than the
+    zero-salt ones mostly because the screened potential they divide by is
+    smaller: in **absolute** terms, at the sample nearest the boundary, debye
+    reads 0.0812 kT/e at zero salt, 0.0805 at 0.15 M and 0.0798 at 0.5 M — the
+    same discretization error, on the same lattice, at the same radius. The
+    agreement loosens with distance (-6.6% and -14.3% at eight cells out, on
+    errors of 0.006 kT/e), so the statement to carry is the near-boundary one:
+    where the discretization error lives, the Boltzmann term adds none of its
+    own.
+    """
+    if ionic_strength <= 0:
+        return born_potential(r_a, charge_e, solvent_dielectric, temperature)
+    if r_a <= 0:
+        raise ValueError(f"radius must be positive, got {r_a}")
+
+    kappa = 1.0 / debye_length_a(ionic_strength, solvent_dielectric, temperature)  # 1/A
+    exclusion = radius_a + ion_radius
+    q = charge_e * ELEMENTARY_CHARGE
+    # Everything below is in angstroms, so the SI prefactor carries one 1/ANGSTROM.
+    prefactor = q / (4 * math.pi * VACUUM_PERMITTIVITY * solvent_dielectric * ANGSTROM)
+    if r_a <= exclusion:
+        volts = prefactor * (1.0 / r_a - kappa / (1.0 + kappa * exclusion))
+    else:
+        volts = prefactor * math.exp(-kappa * (r_a - exclusion)) / ((1.0 + kappa * exclusion) * r_a)
     kt_over_e = BOLTZMANN * temperature / ELEMENTARY_CHARGE
     return volts / kt_over_e

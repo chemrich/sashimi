@@ -27,9 +27,9 @@ from typing import Any, Protocol
 import numpy as np
 
 from sashimi.analytic import (
-    born_potential,
     born_solvation_energy,
     kirkwood_solvation_energy,
+    screened_born_potential,
 )
 from sashimi.field import (
     FIELD_DIRECTION_NAMES,
@@ -220,6 +220,15 @@ class AnalyticField:
     is ~100% wrong there and that is not a defect any of them can fix; it is an
     ill-posed question about a grid.
 
+    **Under salt there are two branches and the sampling rule survives both.**
+    `screened_born_potential` is Poisson between the dielectric boundary and the
+    Stern radius `a + ion_radius`, screened beyond it. A sample may land on the
+    Stern radius — `born-ion-vdw-salt` puts DelPhi's third one exactly there —
+    and that is fine where a sample on the *dielectric* boundary is not: eps is
+    the same on both sides of the Stern radius, so phi and its first derivative
+    are continuous and only the second jumps. The interpolation error there is
+    O(h^2), not the O(1) that makes the dielectric interface ill-posed.
+
     **The sample is a sphere's worth of directions, not one ray**, and that was
     the second parameter this rule turned out to be conditioned on. It shipped
     sampling `centre + r*x_hat` alone, which reads as arbitrary-but-harmless for
@@ -249,25 +258,51 @@ class AnalyticField:
         return sample_radii(self.radius_a, spacing, self.cells_out)
 
     def exact_at(self, radii: Sequence[float], solvent: SolventModel) -> list[float]:
-        """The closed form, taking the solvent from the case rather than restating it.
+        """The closed form, taking every parameter from the case's own solvent.
 
-        `born_potential` is the *unscreened* expression, so it describes the case
-        only at zero ionic strength. Carrying a private `solvent_dielectric`
-        here — as this did — meant a case could be paired with a field reference
-        describing different physics and nothing would say so: attaching one to
-        `born-ion-molecular-salt`, which already exists and is the natural M3
-        follow-up, would have compared a screened field against an unscreened
-        closed form and reported tens of percent as a solver defect. Refusing is
-        the same discipline the backends apply to a surface model they cannot
-        honour.
+        **Reading the solvent rather than restating it is the whole point of this
+        method**, and it is what makes salt safe to add. Carrying a private
+        `solvent_dielectric` — as this did — meant a case could be paired with a
+        field reference describing different physics and nothing would say so.
+        The concrete instance was salt: `born_potential` is unscreened, and
+        attaching it to a 0.15 M case would report ~29% two cells out and ~51%
+        eight cells out as a solver defect.
+
+        M3 closes that by making the reference salt-aware instead of refusing:
+        `screened_born_potential` reduces to `born_potential` exactly at zero
+        ionic strength, so every pre-existing case is byte-identical and a salted
+        one is described correctly. That is lesson 1 of the guards file — an
+        illegal state made unrepresentable rather than guarded against — and the
+        refusal it replaces was reachable only by writing a case the manifest
+        would then have to remember not to write.
+
+        `ion_radius` reaches the expression the same way, which matters more than
+        it looks: it is the Stern radius, and debye's `screening_nodes` switches
+        its Boltzmann term on at exactly `radius + ion_radius` for the same
+        reason. A case that set one and not the other would compare two different
+        exclusion conventions.
+
+        **`temperature` was being defaulted rather than read, which is the
+        `solvent_dielectric` defect one parameter along**, and no test could have
+        seen it: all ten field cases sit at 298.15 K, so the ten recordings are
+        byte-identical across this change. It is fixed here because the fix is
+        the same one — take every parameter from the case — and because
+        `peptide-cold` exists precisely to catch a solver reading a temperature
+        in the wrong unit, so a *reference* that ignores temperature would have
+        been the mirror image of that trap.
         """
-        if solvent.ionic_strength != 0.0:
-            raise ValueError(
-                "the Born potential is unscreened, so a field reference cannot describe "
-                f"a case at {solvent.ionic_strength} M; sashimi.analytic has the screened "
-                "expression when a case needs one"
+        return [
+            screened_born_potential(
+                r,
+                self.charge_e,
+                solvent.solvent_dielectric,
+                solvent.temperature,
+                radius_a=self.radius_a,
+                ionic_strength=solvent.ionic_strength,
+                ion_radius=solvent.ion_radius,
             )
-        return [born_potential(r, self.charge_e, solvent.solvent_dielectric) for r in radii]
+            for r in radii
+        ]
 
 
 @dataclass(frozen=True)
@@ -1311,6 +1346,76 @@ MANIFEST: tuple[Case, ...] = (
             solute_dielectric=1.0, ionic_strength=0.5, surface_model=SurfaceModel.MOLECULAR
         ),
     ),
+    # --- the salt arm on the surface debye builds ---------------------------
+    #
+    # ROADMAP.md section 12, M3, and the third occurrence of one class. The two
+    # cases above are `molecular`; debye's `SUPPORTED_SURFACES` is
+    # `van-der-waals` alone, so M3's arm named cases debye refuses *by name* —
+    # exactly as M0 found for the closed forms and M2 for Kirkwood. **A case
+    # added for coverage of the incumbents is not automatically coverage of the
+    # candidate**, and this is the third milestone to have paid for it.
+    #
+    # **Deliberately no `analytic` energy reference, and the reason is
+    # measured.** The ionic contribution is 0.3% of the total where
+    # discretization is 1.6%, so a closed-form check on the *total* cannot see
+    # the salt: every mutation of debye's screening tried at M3 — dropping the
+    # Boltzmann term outright, moving the Stern layer to the probe radius,
+    # removing it, using kappa for kappa^2 — leaves the total within -1.40% to
+    # -1.76% of `screened_born_solvation_energy`, and APBS alone needs 2.4%. An
+    # `AnalyticReference` here would be the purest check that cannot fail in the
+    # corpus. What *does* discriminate is G(I) - G(0) across this pair and its
+    # zero-salt sibling `born-ion-vdw`, where the same four mutations read
+    # -28.8%, +4.9%, +18.2% and +63.4% against debye's +0.10%.
+    #
+    # The **field** is a different matter and does carry a closed form: under
+    # salt `AnalyticField` describes the Stern layer and the screened bulk,
+    # which is a 29-51% correction to the unscreened expression over the sampled
+    # radii, so these are the cases that would catch a solver ignoring salt in
+    # the quantity protean displays.
+    Case(
+        name="born-ion-vdw-salt",
+        description=(
+            "Physiological salt on the boundary a sharp-boundary solver builds. "
+            "The `molecular` pair above cannot be answered by one, and M3 needed "
+            "an arm that could. On this surface the ionic term is also clean "
+            "where the probe-based ones are not: APBS reproduces it to 0.03% at "
+            "0.5, 0.25 and 0.125 A, against a 9-13% swing on `molecular` and "
+            "`smoothed-molecular`."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.15, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        analytic_field=AnalyticField(
+            radius_a=3.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.091,  # measured, all eight directions: APBS 4.506%
+            per_backend_rtol=(("delphicpp", 0.037),),  # 1.807%
+        ),
+    ),
+    Case(
+        name="born-ion-vdw-high-salt",
+        description=(
+            "0.5 M on the same sphere, a Debye length of 4.30 A against the "
+            "sphere's own 3 A. With the case above and `born-ion-vdw` this is a "
+            "three-point arm, and M3 is gated on the relationship between the "
+            "points rather than on any one of them."
+        ),
+        source="born-ion",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.5, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        analytic_field=AnalyticField(
+            radius_a=3.0,
+            charge_e=1.0,
+            cells_out=(2, 4, 8),
+            rtol=0.109,  # measured: APBS 5.403%
+            per_backend_rtol=(("delphicpp", 0.033),),  # 1.620%
+        ),
+    ),
     Case(
         name="peptide-molecular",
         description="ALA-GLY on the molecular surface: the cross-backend workhorse.",
@@ -1320,10 +1425,42 @@ MANIFEST: tuple[Case, ...] = (
     ),
     Case(
         name="peptide-vdw",
-        description="ALA-GLY with no probe. Against `peptide-molecular` this is the 25.7%.",
+        description=(
+            "ALA-GLY with no probe. Against `peptide-molecular` this is the "
+            "25.7%; against the two cases below it, it is the 0.15 M rung of a "
+            "real-structure salt arm on the surface debye builds. It has carried "
+            "`SolventModel`'s 0.15 M default since it was written, which is why "
+            "debye's screening was exercised at M1 without being graded."
+        ),
         source="ala-gly.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
         solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+    ),
+    Case(
+        name="peptide-vdw-no-salt",
+        description=(
+            "The zero-salt end of the sharp-boundary salt arm; with `peptide-vdw` "
+            "it is what G(I) - G(0) is measured across on a real solute."
+        ),
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS),
+    ),
+    Case(
+        name="peptide-vdw-high-salt",
+        description=(
+            "500 mM, and the corpus's record of where the ionic term stops being "
+            "a monopole. ALA-GLY is net neutral, so its screening is of a dipole: "
+            "the three reference-tier codes spread over 22% here (debye -0.196, "
+            "APBS -0.212, DelPhi C++ -0.174 at 0.15 M) where on every net-charged "
+            "solute measured at M3 they agree to 1.4%. The spread is stable "
+            "across 0.5/0.35/0.25/0.2 A, so it is a convention difference and not "
+            "grid noise, and no closed form exists to say which is right — so M3 "
+            "records this and gates on the sphere."
+        ),
+        source="ala-gly.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(ionic_strength=0.5, surface_model=SurfaceModel.VAN_DER_WAALS),
     ),
     Case(
         name="methanol-molecular",
