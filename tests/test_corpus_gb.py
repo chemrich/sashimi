@@ -156,6 +156,7 @@ GB_DEVIATION: dict[str, float] = {
     "born-ion-molecular-salt": 0.0082,
     "born-ion-molecular-high-salt": 0.0095,
     # All-atom AMBER structures, where mbondi is the right radius set.
+    "barnase-molecular": 0.0165,
     "fkbp-apo-molecular": 0.0255,
     "acetate-molecular": 0.0256,
     "fas2-molecular": 0.0258,

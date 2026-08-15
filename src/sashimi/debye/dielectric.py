@@ -62,7 +62,8 @@ from sashimi.constants import (
     VACUUM_PERMITTIVITY,
 )
 from sashimi.debye.grid import DebyeGrid, axis_coordinates
-from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel
+from sashimi.debye.surface import ReducedSurface, dilate, inside_union_of_spheres
+from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel, SurfaceModel
 
 __all__ = [
     "bjerrum_length_a",
@@ -91,58 +92,58 @@ def bjerrum_length_a(temperature: float) -> float:
     return metres / ANGSTROM
 
 
-def inside_union_of_spheres(
-    axes: list[FloatArray],
-    coords: FloatArray,
-    radii: FloatArray,
-) -> np.ndarray:
-    """Boolean mask over the lattice spanned by `axes`: inside any sphere.
-
-    Marked atom by atom over each sphere's own index window rather than by
-    evaluating every atom against every point. The difference is not a
-    micro-optimisation: the whole-grid version took 64 s on a 1,960-atom
-    protein in `sashimi.analysis` before it was fixed (ROADMAP.md section 7),
-    because its cost is atoms x points where this one is the volume the
-    spheres actually occupy.
-    """
-    shape = tuple(len(axis) for axis in axes)
-    mask = np.zeros(shape, dtype=bool)
-    for center, radius in zip(coords, radii, strict=True):
-        if radius <= 0.0:
-            continue  # a zero-radius atom bounds no volume; Kirkwood's has one
-        window = []
-        for axis in range(DIMENSIONS):
-            lo = int(np.searchsorted(axes[axis], center[axis] - radius, side="left"))
-            hi = int(np.searchsorted(axes[axis], center[axis] + radius, side="right"))
-            window.append(slice(lo, hi))
-        if any(w.start >= w.stop for w in window):
-            continue  # the sphere falls between nodes, or outside the box
-        offsets = [(axes[axis][window[axis]] - center[axis]) ** 2 for axis in range(DIMENSIONS)]
-        squared = offsets[0][:, None, None] + offsets[1][None, :, None] + offsets[2][None, None, :]
-        mask[tuple(window)] |= squared <= radius * radius
-    return mask
-
-
 def dielectric_faces(
-    grid: DebyeGrid, structure: PQRData, solvent: SolventModel
+    grid: DebyeGrid,
+    structure: PQRData,
+    solvent: SolventModel,
+    surface: ReducedSurface | None = None,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
     """Dielectric at the face centres, one array per axis.
 
     `faces[axis]` has the grid's shape with `axis` one shorter: entry (i, j, k)
     of `faces[0]` is the dielectric halfway between nodes (i, j, k) and
     (i+1, j, k), which is the coefficient of the flux the operator sums there.
+
+    Which boundary is asked for is `surface.inside_solute`'s business as of M4.
+    This function knew it was a union of spheres from M1 until then, and the
+    swap is one call because ROADMAP.md section 12 said to build the seam early.
+
+    **The uniform-dielectric state never asks where the solute is.** Every
+    energy is two solves differenced, and the reference one sets
+    `solvent_dielectric = solute_dielectric` — so `np.where` below would pick
+    between two equal numbers at every face. Returning the constant directly is
+    an identity rather than an approximation, and it matters because the
+    geometry is no longer free: at M4 the solvent-excluded surface was being
+    built and thrown away on three staggered lattices at every multigrid level
+    of a state whose answer cannot depend on it.
     """
+    if solvent.solute_dielectric == solvent.solvent_dielectric:
+        return tuple(  # type: ignore[return-value]
+            np.full(
+                tuple(n - 1 if axis == staggered else n for axis, n in enumerate(grid.shape)),
+                solvent.solute_dielectric,
+                dtype=np.float64,
+            )
+            for staggered in range(DIMENSIONS)
+        )
+
+    # One surface for the three staggered lattices: they differ in where the
+    # nodes are, not in where the solute is.
+    surface = surface or ReducedSurface(structure, solvent)
     faces = []
     for axis in range(DIMENSIONS):
         axes = axis_coordinates(grid, staggered=axis)
-        inside = inside_union_of_spheres(axes, structure.coords, structure.radii)
+        inside = surface.inside(axes)
         eps = np.where(inside, solvent.solute_dielectric, solvent.solvent_dielectric)
         faces.append(np.ascontiguousarray(eps, dtype=np.float64))
     return faces[0], faces[1], faces[2]
 
 
 def screening_nodes(
-    grid: DebyeGrid, structure: PQRData, solvent: SolventModel
+    grid: DebyeGrid,
+    structure: PQRData,
+    solvent: SolventModel,
+    surface: ReducedSurface | None = None,
 ) -> tuple[FloatArray, float]:
     """The Boltzmann term's coefficient at each node, and the bulk value it takes.
 
@@ -154,7 +155,19 @@ def screening_nodes(
     The exclusion radius is the atomic radius plus `ion_radius`, not plus the
     solvent probe: the ion is the thing being excluded. `sashimi.analytic`'s
     screened Born expression evaluates its screening term at `a + ion_radius`
-    for the same reason, so the two agree about what the Stern layer is.
+    for the same reason, so the two agree about what the Stern layer is. M3
+    graded that: on the van der Waals sphere debye's ionic contribution is
+    within 0.14% of the closed form and 0.22% of APBS.
+
+    **M4 changes what the Stern layer sits around.** It is the region within
+    `ion_radius` of the *solute*, and on a molecular surface the solute is no
+    longer the union of spheres — so the exclusion is the solvent-excluded
+    volume dilated by `ion_radius`, not a union inflated by it. The two
+    coincide exactly on `van-der-waals`, which is what keeps M3's measurements
+    describing the same quantity, and `tests/test_debye_m4.py` asserts the
+    coincidence rather than assuming it. The union path stays for that surface
+    because it is exact and needs no dilation, where the general one quantises
+    the offset to the lattice.
     """
     if solvent.ionic_strength <= 0.0:
         return np.zeros(grid.shape, dtype=np.float64), 0.0
@@ -165,5 +178,11 @@ def screening_nodes(
     bulk = solvent.solvent_dielectric * kappa * kappa  # 1/A^2
 
     axes = axis_coordinates(grid)
-    excluded = inside_union_of_spheres(axes, structure.coords, structure.radii + solvent.ion_radius)
+    if solvent.surface_model is SurfaceModel.MOLECULAR:
+        solute = (surface or ReducedSurface(structure, solvent)).inside(axes)
+        excluded = dilate(solute, grid.spacing, solvent.ion_radius)
+    else:
+        excluded = inside_union_of_spheres(
+            axes, structure.coords, structure.radii + solvent.ion_radius
+        )
     return np.where(excluded, 0.0, bulk), bulk
