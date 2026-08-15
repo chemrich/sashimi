@@ -424,14 +424,28 @@ def _kirkwood(
     *,
     rtol: float,
     delphi_rtol: float | None = None,
+    debye_rtol: float | None = None,
     gated: bool = True,
 ) -> AnalyticReference:
-    """The off-centre closed form for a 3 A sphere, computed not quoted."""
+    """The off-centre closed form for a 3 A sphere, computed not quoted.
+
+    `debye_rtol` follows `_born`'s convention rather than this function's other
+    two: it carries ROADMAP.md section 12's **milestone bar**, not twice a
+    measurement. M2 holds debye to 1.5% at every gated rung, decided 2026-08-14
+    by Charlie over the shared tolerance. The shared one would have been a bar
+    debye meets by construction — it reproduces APBS's discretization, and APBS
+    is what sets it — which is section 7's check that cannot fail.
+    """
+    per_backend: list[tuple[str, float]] = []
+    if delphi_rtol is not None:
+        per_backend.append(("delphicpp", delphi_rtol))
+    if debye_rtol is not None:
+        per_backend.append(("debye", debye_rtol))
     return AnalyticReference(
         energy_kj_mol=kirkwood_solvation_energy(3.0, 3.0 * offset_fraction, 1.0, 1.0, 78.54),
         rtol=rtol,
         source=f"Kirkwood: q=1e at d/a={offset_fraction:g} in a 3 A sphere, eps_p=1",
-        per_backend_rtol=() if delphi_rtol is None else (("delphicpp", delphi_rtol),),
+        per_backend_rtol=tuple(per_backend),
         gated=gated,
     )
 
@@ -1188,6 +1202,85 @@ MANIFEST: tuple[Case, ...] = (
         # says "nobody should judge this" while quietly judging it green is the
         # vacuous check this case exists to avoid.
         analytic=_kirkwood(0.9, rtol=0.01, gated=False),  # measured 9.848% / 4.288%
+        tier=CaseTier.STANDARD,
+    ),
+    # M2's rungs, on the one boundary debye builds.
+    #
+    # **These exist because M0 dropped them and the reason it gave does not hold
+    # for the solver M2 grades.** M0 budgeted "one fewer case than the first
+    # draft, which also spent a case on a `van-der-waals` Kirkwood", reasoning
+    # that another sphere geometry re-measures what the existing rungs already
+    # measure. True of APBS and DelPhi, which build both surfaces — and false of
+    # debye, whose `SUPPORTED_SURFACES` is `van-der-waals` alone, so every
+    # Kirkwood rung in the corpus was on a surface it refuses by name. M2's exit
+    # criterion was unreachable by construction, which is the same shape as the
+    # `smoothed-molecular` gap M0 itself was created to close, one surface along.
+    #
+    # **The relabel is not an identity, which is worth knowing before assuming
+    # it.** For the *Born* geometry it is: `born-ion-molecular` and
+    # `born-ion-vdw` record -233.9996297277 to the last digit, because the
+    # solvent-excluded surface of an isolated convex sphere is the sphere. Add
+    # Kirkwood's zero-radius charge atom and APBS's two surfaces separate by
+    # ~0.24% (d/a = 0.3: -253.191 against -253.792), while DelPhi's stay
+    # bit-identical. So these carry their own measured tolerances rather than
+    # inheriting the molecular twins'.
+    Case(
+        name="kirkwood-vdw-03",
+        description="Charge placement on a van der Waals boundary: d/a = 0.3, M2's gentlest rung.",
+        source="kirkwood-03",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        # measured 1.083% / 0.097% / 1.047%; debye's 1.5% is M2's bar, not 2x its own
+        analytic=_kirkwood(0.3, rtol=0.022, delphi_rtol=0.003, debye_rtol=0.015),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-vdw-05",
+        description="d/a = 0.5 on a van der Waals boundary; the middle rung of M2's ladder.",
+        source="kirkwood-05",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        # measured 1.239% / 0.205% / 1.254%
+        analytic=_kirkwood(0.5, rtol=0.025, delphi_rtol=0.005, debye_rtol=0.015),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-vdw-07",
+        description=(
+            "d/a = 0.7 on a van der Waals boundary, M2's hardest gated rung. The "
+            "charge sits 0.9 A inside the interface, and this is where the "
+            "shared tolerance stops describing the solvers: APBS reads 3.896% "
+            "where DelPhi reads 0.416% and debye 1.328%."
+        ),
+        source="kirkwood-07",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        # measured 3.896% / 0.416% / 1.328%. debye's 1.5% is *stricter than APBS
+        # manages here*, which is what makes M2 a claim rather than a formality.
+        analytic=_kirkwood(0.7, rtol=0.08, delphi_rtol=0.01, debye_rtol=0.015),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="kirkwood-vdw-09",
+        description=(
+            "d/a = 0.9 on a van der Waals boundary: recorded, deliberately not "
+            "gated, for the same reason as its molecular twin — no shipped "
+            "solver reproduces it. APBS 9.854%, DelPhi 4.288%, debye 8.280%."
+        ),
+        source="kirkwood-09",
+        grid=GridSpec(resolution=0.25, padding=10.0),
+        solvent=SolventModel(
+            solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
+        ),
+        # Set below what any code achieves, so ungating fails loudly rather than
+        # passing vacuously — the trap the molecular twin's comment records.
+        analytic=_kirkwood(0.9, rtol=0.01, gated=False),  # measured 9.854% / 4.288% / 8.280%
         tier=CaseTier.STANDARD,
     ),
     Case(
