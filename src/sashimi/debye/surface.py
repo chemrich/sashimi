@@ -82,12 +82,19 @@ rather than trusting it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 
 from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel, SurfaceModel
 
-__all__ = ["ball_offsets", "dilate", "inside_solute", "inside_union_of_spheres"]
+__all__ = [
+    "ReducedSurface",
+    "ball_offsets",
+    "dilate",
+    "inside_solute",
+    "inside_union_of_spheres",
+]
 
 # Below this a length is a rounding rather than a direction, so the geometry it
 # would define — an axis between two coincident atoms, a radial direction from a
@@ -95,6 +102,10 @@ __all__ = ["ball_offsets", "dilate", "inside_solute", "inside_union_of_spheres"]
 # structures carry duplicate atoms, and a node on the axis is a measure-zero
 # coincidence that a symmetric fixture hits every time.
 DEGENERATE = 1e-12
+
+# A seat is a probe against three atoms, so the atom raising the triple needs two
+# higher-numbered neighbours before it can raise one at all.
+PAIRS_PER_SEAT = 2
 
 
 def inside_union_of_spheres(
@@ -232,11 +243,20 @@ class _Spheres:
     inflated: FloatArray  # r_i + probe
     neighbours: list[list[int]]
     probe: float
+    # The same lists as `neighbours` with the zero-radius atoms dropped, as
+    # arrays: this is what every legality test is taken against, and rebuilding
+    # it per feature was a Python loop inside the innermost loop of all three
+    # families.
+    testable: list[np.ndarray]
 
     @classmethod
     def around(cls, structure: PQRData, probe: float) -> _Spheres:
         inflated = structure.radii + probe
-        return cls(structure.coords, inflated, _neighbours(structure.coords, inflated), probe)
+        neighbours = _neighbours(structure.coords, inflated)
+        testable = [
+            np.array([j for j in near if inflated[j] > 0.0], dtype=np.int64) for near in neighbours
+        ]
+        return cls(structure.coords, inflated, neighbours, probe, testable)
 
 
 def _neighbours(coords: FloatArray, inflated: FloatArray) -> list[list[int]]:
@@ -281,25 +301,121 @@ def _legal(
     points: FloatArray,
     coords: FloatArray,
     inflated: FloatArray,
-    against: list[int],
-    skip: tuple[int, ...],
+    against: np.ndarray,
+    exempt: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Which candidate probe centres overlap no atom.
+    """Which candidate probe centres overlap none of the `against` atoms.
 
     A candidate sits at exactly `R_i` from the atoms it was constructed from, so
-    those are excluded by name rather than tested — a floating-point comparison
-    against the very sphere a point lies on rejects it about half the time, and
-    the surface would come out with holes in it wherever a feature was built.
+    those are excluded rather than tested — a floating-point comparison against
+    the very sphere a point lies on rejects it about half the time, and the
+    surface would come out with holes in it wherever a feature was built. Two
+    of the three families construct from a fixed atom set and drop it from
+    `against`; the third varies per candidate and passes `exempt`, a
+    candidate-by-atom mask of the pairs to let through.
+
+    One broadcast over the atoms rather than a loop over them. The loop was the
+    innermost thing in the module and it ran a numpy call per neighbour per
+    feature — about fifteen times more calls than there was arithmetic to do.
     """
-    keep = np.ones(len(points), dtype=bool)
-    for other in against:
-        if other in skip or inflated[other] <= 0.0:
-            continue
-        limit = inflated[other]
-        keep &= ((points - coords[other]) ** 2).sum(axis=1) >= limit * limit
-        if not keep.any():
-            break
-    return keep
+    if not len(points):
+        return np.zeros(0, dtype=bool)
+    if not len(against):
+        return np.ones(len(points), dtype=bool)
+    gap = points[:, None, :] - coords[against][None, :, :]
+    limits = inflated[against] * inflated[against]
+    outside = (gap * gap).sum(axis=2) >= limits[None, :]
+    if exempt is not None:
+        outside |= exempt
+    return np.asarray(outside.all(axis=1))
+
+
+@dataclass(frozen=True)
+class _Nodes:
+    """Undecided lattice nodes as a point cloud, with the indices to mark back.
+
+    Families two and three ask "which of these nodes is near this feature"
+    thousands of times over one set, so the coordinates are built once here.
+    Rebuilding them from an index window per feature — and copying a sub-box in
+    and out to mark — is where M4's first implementation spent its time.
+    """
+
+    index: tuple[np.ndarray, np.ndarray, np.ndarray]
+    points: FloatArray
+
+    @classmethod
+    def of(cls, axes: list[FloatArray], mask: np.ndarray) -> _Nodes:
+        index = np.nonzero(mask)
+        points = np.column_stack([axes[axis][index[axis]] for axis in range(DIMENSIONS)])
+        return cls((index[0], index[1], index[2]), points)
+
+    def __len__(self) -> int:
+        return len(self.points)
+
+    def mark(self, reachable: np.ndarray, chosen: np.ndarray) -> None:
+        reachable[self.index[0][chosen], self.index[1][chosen], self.index[2][chosen]] = True
+
+
+class _Bins:
+    """Points on a uniform bin grid, for repeated ball queries of bounded radius.
+
+    Cell size is a scale rather than a bound: `near` walks the bins its query
+    box actually covers, so a query wider than a cell is handled and a query
+    narrower than one does not pay for the twenty-six bins around it. Sizing
+    the cell near the typical query is therefore a speed choice and not a
+    correctness one, which is worth having in a module where a constant that
+    changes the answer is the thing to be afraid of.
+    """
+
+    def __init__(self, points: FloatArray, cell: float) -> None:
+        self.points = points
+        self._cell = cell
+        self._origin = points.min(axis=0)
+        keys = self.keys_of(points)
+        self._order = np.lexsort((keys[:, 2], keys[:, 1], keys[:, 0]))
+        ordered = keys[self._order]
+        starts = np.flatnonzero(np.r_[True, (ordered[1:] != ordered[:-1]).any(axis=1)])
+        stops = np.r_[starts[1:], len(ordered)]
+        self._ranges = {
+            (int(key[0]), int(key[1]), int(key[2])): (int(start), int(stop))
+            for key, start, stop in zip(ordered[starts], starts, stops, strict=True)
+        }
+
+    def keys_of(self, points: FloatArray) -> np.ndarray:
+        return np.floor((points - self._origin) / self._cell).astype(np.int64)
+
+    def _block(self, low: np.ndarray, high: np.ndarray) -> np.ndarray:
+        """Every point in the inclusive range of bins from `low` to `high`."""
+        blocks = []
+        for i in range(int(low[0]), int(high[0]) + 1):
+            for j in range(int(low[1]), int(high[1]) + 1):
+                for k in range(int(low[2]), int(high[2]) + 1):
+                    found = self._ranges.get((i, j, k))
+                    if found is not None:
+                        blocks.append(self._order[found[0] : found[1]])
+        if not blocks:
+            return np.zeros(0, dtype=np.int64)
+        return np.concatenate(blocks)
+
+    def gather(self, key: np.ndarray) -> np.ndarray:
+        """Every point in the bin `key` and the twenty-six around it."""
+        return self._block(key - 1, key + 1)
+
+    def near(self, centre: FloatArray, radius: float) -> np.ndarray:
+        """Indices of the points within `radius` of `centre`.
+
+        Bounded by the query box rather than by the bin the centre falls in:
+        with the cell at the typical query radius that is two bins on an axis
+        instead of three, and it is what lets a query wider than a cell work at
+        all.
+        """
+        corner = np.array([centre - radius, centre + radius])
+        low, high = self.keys_of(corner)
+        found = self._block(low, high)
+        if not len(found):
+            return found
+        gap = self.points[found] - centre
+        return np.asarray(found[(gap * gap).sum(axis=1) <= radius * radius])
 
 
 def _nodes_in(
@@ -345,7 +461,7 @@ def _radially_reachable(
     the solvent-excluded surface comes back as the van der Waals sphere to the
     node, with no dependence on the lattice and no sample count.
     """
-    coords, inflated, neighbours = spheres.coords, spheres.inflated, spheres.neighbours
+    coords, inflated = spheres.coords, spheres.inflated
     reachable = np.zeros_like(undecided)
     for index, (centre, radius) in enumerate(zip(coords, inflated, strict=True)):
         if radius <= 0.0:
@@ -368,7 +484,7 @@ def _radially_reachable(
         pushed[usable] = centre + radius * offset[usable] / distance[usable, None]
 
         allowed = np.zeros(len(points), dtype=bool)
-        allowed[usable] = _legal(pushed[usable], coords, inflated, neighbours[index], skip=(index,))
+        allowed[usable] = _legal(pushed[usable], coords, inflated, spheres.testable[index])
         if allowed.any():
             _mark(reachable, box, local, allowed)
     return reachable
@@ -376,7 +492,7 @@ def _radially_reachable(
 
 def _toroidally_reachable(
     axes: list[FloatArray],
-    spheres: _Spheres,
+    surface: ReducedSurface,
     still: np.ndarray,
 ) -> np.ndarray:
     """Family two: a probe wedged against two atoms at once.
@@ -391,12 +507,72 @@ def _toroidally_reachable(
     This is the toroidal patch of the classical reduced surface, and it is what
     a groove is made of — the re-entrant surface between two atoms close enough
     that a probe bridges them.
+
+    The rims are geometry and the nodes are one cloud, so both are built before
+    the loop. What is left inside it is the part that genuinely depends on both:
+    projecting a node onto a circle.
     """
-    coords, inflated, neighbours = spheres.coords, spheres.inflated, spheres.neighbours
+    spheres = surface.spheres
+    coords, inflated = spheres.coords, spheres.inflated
     probe = spheres.probe
     reachable = np.zeros_like(still)
     squared_probe = probe * probe
 
+    rims = surface.rims
+    nodes = _Nodes.of(axes, still)
+    if not rims or not len(nodes):
+        return reachable
+
+    # Every node a rim can decide is within `ring_radius + probe` of its centre,
+    # so the typical such distance is the scale to bin on. Swept on fas2 across
+    # a quarter to one times the median: the query cost is flat from 0.5x to 1x
+    # and only degrades below that, so this is a knob that does not need one.
+    reach = np.array([ring_radius for _, _, ring_radius, _ in rims]) + probe
+    bins = _Bins(nodes.points, float(np.median(reach)))
+    decided = np.zeros(len(nodes), dtype=bool)
+
+    for origin, normal, ring_radius, blockers in rims:
+        found = bins.near(origin, ring_radius + probe)
+        found = found[~decided[found]]
+        if not len(found):
+            continue
+
+        offset = nodes.points[found] - origin
+        axial = offset @ normal
+        radial = offset - axial[:, None] * normal
+        length = np.sqrt((radial**2).sum(axis=1))
+        usable = length > DEGENERATE
+        close = usable & (((length - ring_radius) ** 2 + axial**2) <= squared_probe)
+        if not close.any():
+            continue
+        projected = origin + ring_radius * radial[close] / length[close, None]
+
+        allowed = _legal(projected, coords, inflated, blockers)
+        if allowed.any():
+            decided[found[close][allowed]] = True
+
+    nodes.mark(reachable, decided)
+    return reachable
+
+
+def _rims(spheres: _Spheres) -> list[tuple[FloatArray, FloatArray, float, np.ndarray]]:
+    """Every reachable circle where two accessible spheres meet, and what blocks it.
+
+    Lattice-independent, like the seats in `_probe_seats` — this is the reduced
+    surface itself rather than its discretization.
+
+    **A rim swallowed whole by a third atom is dropped**, and that is most of
+    them: 59% on fas2, because an atom overlaps about sixty others once the
+    radii carry the probe, and the pair rims buried in the interior vastly
+    outnumber the ones on the surface. The test is exact rather than a
+    heuristic — a circle's farthest point from a sphere centre has a closed
+    form, so a rim is discarded only when *no* point of it is a legal probe
+    centre, and a rim with no legal point can decide no node. Without this the
+    loop below pairs every buried rim against the nodes near it and then throws
+    all of them away in `_legal`.
+    """
+    coords, inflated, neighbours = spheres.coords, spheres.inflated, spheres.neighbours
+    rims = []
     for i in range(len(coords)):
         if inflated[i] <= 0.0:
             continue
@@ -406,32 +582,49 @@ def _toroidally_reachable(
             ring = _rim(coords, inflated, i, j)
             if ring is None:
                 continue
-            origin, normal, ring_radius = ring
+            blockers = _blockers(spheres, (i, j), ring)
+            if blockers is not None:
+                rims.append((*ring, blockers))
+    return rims
 
-            window = _window(axes, origin, ring_radius + probe)
-            if window is None:
-                continue
-            box = tuple(window)
-            candidates = still[box] & ~reachable[box]
-            if not candidates.any():
-                continue
 
-            local, points = _nodes_in(axes, window, candidates)
-            offset = points - origin
-            axial = offset @ normal
-            radial = offset - axial[:, None] * normal
-            length = np.sqrt((radial**2).sum(axis=1))
-            usable = length > DEGENERATE
-            close = usable & (((length - ring_radius) ** 2 + axial**2) <= squared_probe)
-            if not close.any():
-                continue
-            projected = origin + ring_radius * radial[close] / length[close, None]
+def _blockers(
+    spheres: _Spheres, pair: tuple[int, int], ring: tuple[FloatArray, FloatArray, float]
+) -> np.ndarray | None:
+    """Which third atoms can cover part of this rim; None if one covers all of it.
 
-            allowed = np.zeros(len(points), dtype=bool)
-            allowed[close] = _legal(projected, coords, inflated, neighbours[i], skip=(i, j))
-            if allowed.any():
-                _mark(reachable, box, local, allowed)
-    return reachable
+    Split `c_m - origin` into its axial and radial parts about the circle's own
+    axis. The circle's farthest point from `c_m` is then at
+    `hypot(axial, radial + ring_radius)` and its nearest at
+    `hypot(axial, radial - ring_radius)`, so one closed form answers both
+    questions: inside `R_m` at the far point and the rim is gone entirely,
+    outside `R_m` at the near point and this atom can never reject a probe
+    centre on the rim.
+
+    Both prunings are exact, and the second is why this returns a set rather
+    than a verdict. An atom overlaps about sixty others once the radii carry
+    the probe, but only a handful of those reach any given rim — and the
+    survivors are the entire argument to `_legal`, which is otherwise the most
+    expensive thing in this module.
+
+    Only `i`'s neighbours are tested, and that is exhaustive: a sphere holding
+    any point of the rim holds a point at `R_i` from `c_i`, so its centre is
+    within `R_m + R_i` of `c_i`.
+    """
+    i, j = pair
+    origin, normal, ring_radius = ring
+    against = spheres.testable[i]
+    against = against[against != j]
+    if not len(against):
+        return np.asarray(against)
+    gap = spheres.coords[against] - origin
+    axial = gap @ normal
+    radial = np.sqrt(((gap - axial[:, None] * normal) ** 2).sum(axis=1))
+    limits = spheres.inflated[against] * spheres.inflated[against]
+    axial_squared = axial * axial
+    if np.any(axial_squared + (radial + ring_radius) ** 2 <= limits):
+        return None
+    return np.asarray(against[axial_squared + (radial - ring_radius) ** 2 < limits])
 
 
 def _rim(
@@ -454,7 +647,7 @@ def _rim(
 
 def _vertex_reachable(
     axes: list[FloatArray],
-    spheres: _Spheres,
+    surface: ReducedSurface,
     still: np.ndarray,
 ) -> np.ndarray:
     """Family three: a probe jammed against three atoms, which cannot move at all.
@@ -468,87 +661,251 @@ def _vertex_reachable(
     Small in volume and not optional: without it the construction stays
     conservative exactly at the junctions where three atoms meet, which on a
     real solute is most of the deep surface.
+
+    **The seats do not depend on the lattice**, so they are built as one batch
+    and the nodes are asked about once. That split is the whole performance
+    story of this family: the per-triple version trilaterated, windowed the
+    grid, and copied a sub-box in and out about a hundred thousand times on a
+    906-atom protein, at roughly half a millisecond of numpy call overhead each
+    for a few dozen floating-point operations of actual geometry.
     """
-    coords, inflated, neighbours = spheres.coords, spheres.inflated, spheres.neighbours
-    probe = spheres.probe
     reachable = np.zeros_like(still)
-    squared_probe = probe * probe
-    seen: set[tuple[int, int, int]] = set()
-
-    for i in range(len(coords)):
-        if inflated[i] <= 0.0:
-            continue
-        near = [j for j in neighbours[i] if inflated[j] > 0.0]
-        for a in range(len(near)):
-            for b in range(a + 1, len(near)):
-                j, k = near[a], near[b]
-                triple = tuple(sorted((i, j, k)))
-                if triple in seen:
-                    continue
-                seen.add(triple)  # type: ignore[arg-type]
-                if k not in neighbours[j]:
-                    continue  # the third pair does not overlap, so no seat
-                corners = _tangency_points(coords, inflated, i, j, k)
-                if corners is None:
-                    continue
-                keep = _legal(corners, coords, inflated, neighbours[i], skip=(i, j, k))
-                corners = corners[keep]
-                if not len(corners):
-                    continue
-
-                window = _window(
-                    axes,
-                    corners.mean(axis=0),
-                    probe + float(np.linalg.norm(corners - corners.mean(axis=0), axis=1).max()),
-                )
-                if window is None:
-                    continue
-                box = tuple(window)
-                candidates = still[box] & ~reachable[box]
-                if not candidates.any():
-                    continue
-                local, points = _nodes_in(axes, window, candidates)
-                separation = ((points[:, None, :] - corners[None, :, :]) ** 2).sum(axis=2)
-                touched = (separation <= squared_probe).any(axis=1)
-                if touched.any():
-                    _mark(reachable, box, local, touched)
+    seats = surface.seats
+    if not len(seats):
+        return reachable
+    nodes = _Nodes.of(axes, still)
+    if not len(nodes):
+        return reachable
+    nodes.mark(reachable, _within(nodes.points, seats, surface.probe))
     return reachable
 
 
-def _tangency_points(
-    coords: FloatArray, inflated: FloatArray, i: int, j: int, k: int
-) -> FloatArray | None:
-    """The (at most two) points at `R_i`, `R_j`, `R_k` from three atom centres.
+def _probe_seats(spheres: _Spheres) -> FloatArray:
+    """Every legal seat: a probe centre touching three atoms and overlapping none.
 
-    Trilateration in the frame of the three centres. Returns None when the
-    spheres do not meet — which is the common case, since three atoms
-    overlapping pairwise need not leave a seat for the probe.
+    The vertex set of the reduced surface. Enumerated once per atom rather than
+    once per triple — an atom's triples share both the trilateration frame's
+    first centre and the list of atoms their seats must clear, so both become
+    single array operations over the whole batch.
+
+    Each triple is raised under its *smallest* member, which is what makes
+    "once" true. Legality is still exhaustive under that choice: a seat lies at
+    exactly `R_i` from atom `i`, so any sphere `m` containing it has
+    `|c_m - c_i| < R_m + R_i` and is therefore already one of `i`'s neighbours.
+    The same holds for `j` and `k`, so which of the three raises the triple
+    cannot change the answer.
     """
-    p1, p2, p3 = coords[i], coords[j], coords[k]
-    r1, r2, r3 = float(inflated[i]), float(inflated[j]), float(inflated[k])
+    coords, inflated, neighbours = spheres.coords, spheres.inflated, spheres.neighbours
+    count = len(coords)
+    overlapping = _overlapping_pairs(neighbours, inflated, count)
+    seats = []
 
-    ex = p2 - p1
-    span = float(np.linalg.norm(ex))
-    if span <= DEGENERATE:
-        return None
-    ex = ex / span
-    third = p3 - p1
-    along = float(ex @ third)
-    ey = third - along * ex
-    height = float(np.linalg.norm(ey))
-    if height <= DEGENERATE:
-        return None  # collinear centres leave a circle, not a pair of points
-    ey = ey / height
+    for i in range(count):
+        if inflated[i] <= 0.0:
+            continue
+        near = np.sort(spheres.testable[i])
+        near = near[near > i]
+        if len(near) < PAIRS_PER_SEAT:
+            continue
+        first, second = np.triu_indices(len(near), k=1)
+        j, k = near[first], near[second]
+        # The third pair has to overlap too, or the three spheres leave no seat.
+        overlaps = _holds(overlapping, j * count + k)
+        j, k = j[overlaps], k[overlaps]
+        if not len(j):
+            continue
+
+        points, owner = _tangency_points(coords, inflated, i, j, k)
+        if not len(points):
+            continue
+        against = spheres.testable[i]
+        exempt = (against[None, :] == j[owner][:, None]) | (against[None, :] == k[owner][:, None])
+        legal = _legal(points, coords, inflated, against, exempt)
+        if legal.any():
+            seats.append(points[legal])
+
+    if not seats:
+        return np.zeros((0, DIMENSIONS), dtype=np.float64)
+    return np.concatenate(seats)
+
+
+def _overlapping_pairs(neighbours: list[list[int]], inflated: FloatArray, count: int) -> np.ndarray:
+    """Sorted `i * count + j` keys for every overlapping pair with `i < j`."""
+    keys = [
+        i * count + j
+        for i, near in enumerate(neighbours)
+        if inflated[i] > 0.0
+        for j in near
+        if j > i and inflated[j] > 0.0
+    ]
+    return np.sort(np.array(keys, dtype=np.int64))
+
+
+def _holds(sorted_keys: np.ndarray, wanted: np.ndarray) -> np.ndarray:
+    """Membership in a sorted key array, without building a set per query."""
+    if not len(sorted_keys):
+        return np.zeros(len(wanted), dtype=bool)
+    at = np.searchsorted(sorted_keys, wanted)
+    at = np.minimum(at, len(sorted_keys) - 1)
+    return np.asarray(sorted_keys[at] == wanted)
+
+
+def _tangency_points(
+    coords: FloatArray, inflated: FloatArray, i: int, j: np.ndarray, k: np.ndarray
+) -> tuple[FloatArray, np.ndarray]:
+    """Points at `R_i`, `R_j`, `R_k` from three atom centres, for a batch of triples.
+
+    Trilateration in the frame of the three centres, done for every triple that
+    shares the atom `i` at once. Returns the surviving points — at most two per
+    triple, mirror images through the plane of the centres — together with the
+    index of the triple each came from, since the triples that produce none are
+    dropped along the way and the caller needs `j` and `k` back to know which
+    spheres a point is allowed to touch.
+
+    Triples drop out at three places, and all three are ordinary rather than
+    exceptional: coincident centres have no axis, collinear centres leave a
+    circle rather than a pair of points, and three spheres overlapping pairwise
+    need not meet at all — which is the common case.
+    """
+    alive = np.arange(len(j))
+    p1 = coords[i]
+    r1 = float(inflated[i])
+
+    ex = coords[j] - p1
+    span = np.sqrt((ex * ex).sum(axis=1))
+    keep = span > DEGENERATE
+    alive, ex, span = alive[keep], ex[keep], span[keep]
+    ex = ex / span[:, None]
+
+    third = coords[k[alive]] - p1
+    along = (ex * third).sum(axis=1)
+    ey = third - along[:, None] * ex
+    height = np.sqrt((ey * ey).sum(axis=1))
+    keep = height > DEGENERATE
+    alive, ex, span, along, ey, height = (
+        alive[keep],
+        ex[keep],
+        span[keep],
+        along[keep],
+        ey[keep],
+        height[keep],
+    )
+    ey = ey / height[:, None]
     ez = np.cross(ex, ey)
 
+    r2, r3 = inflated[j[alive]], inflated[k[alive]]
     x = (r1 * r1 - r2 * r2 + span * span) / (2.0 * span)
     y = (r1 * r1 - r3 * r3 + along * along + height * height - 2.0 * along * x) / (2.0 * height)
     squared = r1 * r1 - x * x - y * y
-    if squared <= 0.0:
-        return None
-    z = float(np.sqrt(squared))
-    base = p1 + x * ex + y * ey
-    return np.array([base + z * ez, base - z * ez], dtype=np.float64)
+    keep = squared > 0.0
+    alive, ex, ey, ez, x, y = alive[keep], ex[keep], ey[keep], ez[keep], x[keep], y[keep]
+    z = np.sqrt(squared[keep])
+
+    base = p1 + x[:, None] * ex + y[:, None] * ey
+    points = np.concatenate([base + z[:, None] * ez, base - z[:, None] * ez])
+    return points, np.concatenate([alive, alive])
+
+
+def _within(points: FloatArray, centres: FloatArray, radius: float) -> np.ndarray:
+    """Which of `points` lie within `radius` of any of `centres`.
+
+    Grouped by bin rather than asked point by point: the bin a point falls in
+    decides which centres can reach it, so points sharing a bin share one
+    gather. On a protein that is a few thousand iterations over an undecided
+    shell against a hundred thousand seats, where the pairing is quadratic.
+    """
+    bins = _Bins(centres, radius)
+    keys = bins.keys_of(points)
+    order = np.lexsort((keys[:, 2], keys[:, 1], keys[:, 0]))
+    ordered = keys[order]
+    starts = np.flatnonzero(np.r_[True, (ordered[1:] != ordered[:-1]).any(axis=1)])
+    stops = np.r_[starts[1:], len(ordered)]
+
+    hit = np.zeros(len(points), dtype=bool)
+    squared = radius * radius
+    for start, stop in zip(starts, stops, strict=True):
+        found = bins.gather(ordered[start])
+        if not len(found):
+            continue
+        members = order[start:stop]
+        gap = points[members][:, None, :] - centres[found][None, :, :]
+        hit[members] = ((gap * gap).sum(axis=2) <= squared).any(axis=1)
+    return hit
+
+
+class ReducedSurface:
+    """The probe's reduced surface for one structure, asked about by many lattices.
+
+    **What is geometry and what is discretization**, which is the whole reason
+    this is an object rather than a function. Which atoms overlap, where their
+    accessible spheres meet, and where a probe can seat against three of them
+    are facts about the solute; only *which nodes those features decide* is a
+    fact about the lattice. A solve asks the same question of a great many
+    lattices — `dielectric_faces` samples three staggered ones, and
+    `build_levels` re-discretizes at every multigrid level — so the features are
+    built on first use and kept, and each lattice pays only for its own nodes.
+
+    Built lazily, because the lone-sphere case never needs them: a convex
+    sphere's solvent-excluded surface is the sphere, `undecided` comes back
+    empty, and neither the rims nor the seats are ever touched.
+    """
+
+    def __init__(self, structure: PQRData, solvent: SolventModel) -> None:
+        self.structure = structure
+        self.solvent = solvent
+        self.probe = solvent.surface_radius
+
+    @cached_property
+    def spheres(self) -> _Spheres:
+        return _Spheres.around(self.structure, self.probe)
+
+    @cached_property
+    def rims(self) -> list[tuple[FloatArray, FloatArray, float, np.ndarray]]:
+        return _rims(self.spheres)
+
+    @cached_property
+    def seats(self) -> FloatArray:
+        return _probe_seats(self.spheres)
+
+    def inside(self, axes: list[FloatArray]) -> np.ndarray:
+        """Boolean mask over the lattice spanned by `axes`: inside the solute.
+
+        The one oracle both boundaries go through. `VAN_DER_WAALS` is the union
+        of spheres; `MOLECULAR` rolls a probe over it. Anything else is refused
+        before reaching here, by `debye.options.check_surface`.
+        """
+        structure = self.structure
+        inside_vdw = inside_union_of_spheres(axes, structure.coords, structure.radii)
+        if self.solvent.surface_model is not SurfaceModel.MOLECULAR or self.probe <= 0.0:
+            return inside_vdw  # a zero probe is the van der Waals surface, exactly
+
+        inflated_mask = inside_union_of_spheres(
+            axes, structure.coords, structure.radii + self.probe
+        )
+        undecided = inflated_mask & ~inside_vdw
+        if not undecided.any():
+            # Every accessible point is already a van der Waals point, so the
+            # probe has nowhere to roll into. Not an optimisation: it is the
+            # lone-sphere case, and the families below would be work to confirm
+            # a mask that cannot change.
+            return inside_vdw
+
+        # The three reduced-surface families, cheapest and most productive
+        # first. Each witness produces an *actual* legal probe centre, so each
+        # can only say "solvent" correctly and the union can only shrink the
+        # solute towards the truth. Together they are exhaustive rather than
+        # dense: the nearest point of the accessible set to any node lies on the
+        # open part of one sphere, on a rim where two meet, or at a seat where
+        # three do.
+        reachable = _radially_reachable(axes, self.spheres, undecided)
+        still = undecided & ~reachable
+        if still.any():
+            reachable |= _toroidally_reachable(axes, self, still)
+            still = undecided & ~reachable
+        if still.any():
+            reachable |= _vertex_reachable(axes, self, still)
+
+        return np.asarray(inside_vdw | (inflated_mask & ~reachable), dtype=bool)
 
 
 def inside_solute(
@@ -556,43 +913,10 @@ def inside_solute(
     structure: PQRData,
     solvent: SolventModel,
 ) -> np.ndarray:
-    """Boolean mask over the lattice spanned by `axes`: inside the solute.
+    """Inside the solute, for a caller with one lattice to ask about.
 
-    The one oracle both boundaries go through. `VAN_DER_WAALS` is the union of
-    spheres; `MOLECULAR` rolls a probe over it. Anything else is refused before
-    reaching here, by `debye.options.check_surface`.
+    Anything asking about several — which is every real solve — should hold a
+    `ReducedSurface` instead, so the geometry is built once rather than once
+    per lattice.
     """
-    inside_vdw = inside_union_of_spheres(axes, structure.coords, structure.radii)
-    if solvent.surface_model is not SurfaceModel.MOLECULAR:
-        return inside_vdw
-
-    probe = solvent.surface_radius
-    if probe <= 0.0:
-        return inside_vdw  # a zero probe is the van der Waals surface, exactly
-
-    inflated_mask = inside_union_of_spheres(axes, structure.coords, structure.radii + probe)
-    undecided = inflated_mask & ~inside_vdw
-    if not undecided.any():
-        # Every accessible point is already a van der Waals point, so the probe
-        # has nowhere to roll into. Not an optimisation: it is the lone-sphere
-        # case, and the families below would be work to confirm a mask that
-        # cannot change.
-        return inside_vdw
-
-    spheres = _Spheres.around(structure, probe)
-
-    # The three reduced-surface families, cheapest and most productive first.
-    # Each witness produces an *actual* legal probe centre, so each can only
-    # say "solvent" correctly and the union can only shrink the solute towards
-    # the truth. Together they are exhaustive rather than dense: the nearest
-    # point of the accessible set to any node lies on the open part of one
-    # sphere, on a rim where two meet, or at a seat where three do.
-    reachable = _radially_reachable(axes, spheres, undecided)
-    still = undecided & ~reachable
-    if still.any():
-        reachable |= _toroidally_reachable(axes, spheres, still)
-        still = undecided & ~reachable
-    if still.any():
-        reachable |= _vertex_reachable(axes, spheres, still)
-
-    return np.asarray(inside_vdw | (inflated_mask & ~reachable), dtype=bool)
+    return ReducedSurface(structure, solvent).inside(axes)

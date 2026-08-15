@@ -62,7 +62,7 @@ from sashimi.constants import (
     VACUUM_PERMITTIVITY,
 )
 from sashimi.debye.grid import DebyeGrid, axis_coordinates
-from sashimi.debye.surface import dilate, inside_solute, inside_union_of_spheres
+from sashimi.debye.surface import ReducedSurface, dilate, inside_union_of_spheres
 from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel, SurfaceModel
 
 __all__ = [
@@ -93,7 +93,10 @@ def bjerrum_length_a(temperature: float) -> float:
 
 
 def dielectric_faces(
-    grid: DebyeGrid, structure: PQRData, solvent: SolventModel
+    grid: DebyeGrid,
+    structure: PQRData,
+    solvent: SolventModel,
+    surface: ReducedSurface | None = None,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
     """Dielectric at the face centres, one array per axis.
 
@@ -104,18 +107,43 @@ def dielectric_faces(
     Which boundary is asked for is `surface.inside_solute`'s business as of M4.
     This function knew it was a union of spheres from M1 until then, and the
     swap is one call because ROADMAP.md section 12 said to build the seam early.
+
+    **The uniform-dielectric state never asks where the solute is.** Every
+    energy is two solves differenced, and the reference one sets
+    `solvent_dielectric = solute_dielectric` — so `np.where` below would pick
+    between two equal numbers at every face. Returning the constant directly is
+    an identity rather than an approximation, and it matters because the
+    geometry is no longer free: at M4 the solvent-excluded surface was being
+    built and thrown away on three staggered lattices at every multigrid level
+    of a state whose answer cannot depend on it.
     """
+    if solvent.solute_dielectric == solvent.solvent_dielectric:
+        return tuple(  # type: ignore[return-value]
+            np.full(
+                tuple(n - 1 if axis == staggered else n for axis, n in enumerate(grid.shape)),
+                solvent.solute_dielectric,
+                dtype=np.float64,
+            )
+            for staggered in range(DIMENSIONS)
+        )
+
+    # One surface for the three staggered lattices: they differ in where the
+    # nodes are, not in where the solute is.
+    surface = surface or ReducedSurface(structure, solvent)
     faces = []
     for axis in range(DIMENSIONS):
         axes = axis_coordinates(grid, staggered=axis)
-        inside = inside_solute(axes, structure, solvent)
+        inside = surface.inside(axes)
         eps = np.where(inside, solvent.solute_dielectric, solvent.solvent_dielectric)
         faces.append(np.ascontiguousarray(eps, dtype=np.float64))
     return faces[0], faces[1], faces[2]
 
 
 def screening_nodes(
-    grid: DebyeGrid, structure: PQRData, solvent: SolventModel
+    grid: DebyeGrid,
+    structure: PQRData,
+    solvent: SolventModel,
+    surface: ReducedSurface | None = None,
 ) -> tuple[FloatArray, float]:
     """The Boltzmann term's coefficient at each node, and the bulk value it takes.
 
@@ -151,7 +179,7 @@ def screening_nodes(
 
     axes = axis_coordinates(grid)
     if solvent.surface_model is SurfaceModel.MOLECULAR:
-        solute = inside_solute(axes, structure, solvent)
+        solute = (surface or ReducedSurface(structure, solvent)).inside(axes)
         excluded = dilate(solute, grid.spacing, solvent.ion_radius)
     else:
         excluded = inside_union_of_spheres(

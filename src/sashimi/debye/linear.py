@@ -37,6 +37,7 @@ import numpy as np
 
 from sashimi.debye.dielectric import dielectric_faces, screening_nodes
 from sashimi.debye.grid import DebyeGrid, grid_hierarchy
+from sashimi.debye.surface import ReducedSurface
 from sashimi.errors import ConvergenceFailure
 from sashimi.protocol import Diagnostics, FloatArray, PQRData, SolventModel
 
@@ -221,11 +222,18 @@ def build_levels(grid: DebyeGrid, structure: PQRData, solvent: SolventModel) -> 
     whose spacing exceeds an atomic radius stops seeing that atom at all, which
     is a known weakness of re-discretization and is why the outer iteration is
     CG rather than plain V-cycles.
+
+    Re-discretizing is not rebuilding: the levels share one `ReducedSurface`,
+    because the solvent-excluded surface is a fact about the solute and only
+    which nodes it decides is a fact about the level. Sharing it is what keeps
+    "far cheaper than a Galerkin product" true at M4, where the geometry stopped
+    being a union of spheres costing milliseconds.
     """
+    surface = ReducedSurface(structure, solvent)
     levels = []
     for level_grid in grid_hierarchy(grid):
-        eps_x, eps_y, eps_z = dielectric_faces(level_grid, structure, solvent)
-        screening, _ = screening_nodes(level_grid, structure, solvent)
+        eps_x, eps_y, eps_z = dielectric_faces(level_grid, structure, solvent, surface)
+        screening, _ = screening_nodes(level_grid, structure, solvent, surface)
         hx, hy, hz = level_grid.spacing
         levels.append(
             Level(
