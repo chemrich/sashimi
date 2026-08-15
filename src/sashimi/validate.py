@@ -158,8 +158,10 @@ class BackendRun:
     # dielectric or temperature than the solver used shifts the reference by a
     # factor common to every backend, and because `grade_field`'s verdict is a
     # *ratio* of errors, a large common offset drives every ratio towards 1.0
-    # and the grade passes. `corpus.AnalyticField.exact_at` refuses the same
-    # class of mismatch on ionic strength; these are the other two axes.
+    # and the grade passes. `corpus.AnalyticField.exact_at` used to refuse the
+    # same class of mismatch on ionic strength and now *describes* it, since M3
+    # added the screened closed form; these are the other two axes, and they are
+    # carried rather than refused because a closed form exists for both.
     solvent_dielectric: float = 78.54
     temperature: float = 298.15
     wall_seconds: float | None = None
@@ -875,9 +877,20 @@ def grade_field(
             "produced a field. An approximation is not a yardstick for a discretization."
         )
     if by_name[candidate].ionic_strength != 0.0:
+        # The stated reason is no longer that no closed form exists — M3 added
+        # `analytic.screened_born_potential`, and the corpus grades salted fields
+        # against it. What is missing here is the Stern radius: `FieldRun` carries
+        # no `ion_radius`, so this function cannot say where the screening starts,
+        # and a field graded at the wrong exclusion radius is the mismatched
+        # reference the comment on `FieldRun` describes. Lifting this means adding
+        # that field and cross-checking it against each run, which is a change to
+        # a gate that has been wrong twice and was not worth folding into M3.
         raise Incomparable(
-            "the Born potential is unscreened, so a field cannot be graded against it at "
-            f"{by_name[candidate].ionic_strength} M"
+            "a field grade needs the ion-exclusion radius the run used, and `FieldRun` "
+            f"does not carry one, so {candidate!r} cannot be graded at "
+            f"{by_name[candidate].ionic_strength} M. The screened closed form exists "
+            "(`sashimi.analytic.screened_born_potential`); the missing piece is the "
+            "Stern radius, not the physics."
         )
 
     # One lattice for every backend, or no comparison. See `check_same_lattice`:

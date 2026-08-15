@@ -331,6 +331,38 @@ def test_the_tight_delphi_tolerances_are_actually_reaching_delphi():
     assert checked >= 15, "the tight tolerances are asserted on too little to mean anything"
 
 
+def test_the_debye_tolerances_are_actually_reaching_debye():
+    """The same guard for the other tight key, which had no equivalent.
+
+    The DelPhi version above reads its identity out of the recordings. debye has
+    none — it is not registered until M5 — so this reads the identity off the
+    solver instead, which is the same coupling from the other end: if
+    `DebyeSolver.label` stops starting with `debye`, every milestone bar in the
+    manifest reverts to the shared tolerance that exists to accommodate APBS, and
+    M1's and M2's gates go green by falling back. Nothing asserted that for the
+    `_born` cases at all; M2's own tests happened to cover its three rungs.
+
+    Derived from the manifest rather than from a list, per the guards file's
+    second lesson: a case that gains a `debye_rtol` joins this automatically.
+    """
+    label = DebyeSolver().label
+    checked = 0
+    for case in MANIFEST:
+        reference = case.analytic
+        if reference is None or "debye" not in dict(reference.per_backend_rtol):
+            continue
+        assert reference.rtol_for(label) < reference.rtol, (
+            f"{case.name}: {label!r} did not match the 'debye' prefix, so its milestone "
+            f"bar fell back to the shared {reference.rtol}"
+        )
+        checked += 1
+
+    assert checked >= 5, (
+        f"only {checked} case(s) carry a debye bar; M1's Born pair and M2's three "
+        "Kirkwood rungs should all be here"
+    )
+
+
 def test_every_recording_describes_the_case_it_answers():
     """The one field in a summary that nothing else can check.
 
