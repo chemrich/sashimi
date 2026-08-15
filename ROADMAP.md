@@ -2568,7 +2568,7 @@ corpus's salt arm was `born-ion-molecular-salt` and `-high-salt`, on a surface
 debye refuses by name — exactly as M0 found for the closed forms and M2 for
 Kirkwood. `born-ion-vdw-salt` and `born-ion-vdw-high-salt` are their siblings,
 and `peptide-vdw-no-salt` / `-high-salt` complete a real-structure arm around the
-`peptide-vdw` that was already salted. The corpus is **89 cases**; APBS records
+`peptide-vdw` that was already salted. The corpus is **89 cases** at M3 — M4 takes it to 98; APBS records
 all 89, DelPhi C++ 46.
 
 **The closed form is new, and it is the third in the project.**
@@ -2651,6 +2651,107 @@ debye is not adrift, the geometry class is. Barnase, net +2 across 1,730 atoms,
 sits between at 0.966 — which is what "monopole dominance" rather than "sign of
 the charge" predicts.
 
+### M4 — the solvent-excluded surface, and the criterion that was wrong
+
+**Met 2026-08-15.** `sashimi/debye/surface.py` builds the classical reduced
+surface analytically: a probe resting on one atom (radial projection), wedged
+between two (the rim where their accessible spheres meet), or seated against
+three (trilateration). Each family produces an *actual* legal probe centre
+checked against the neighbours, so each can only say "solvent" correctly, and
+together they are exhaustive — the nearest point of the accessible set to any
+node is on one of the three. **No sample count and no tuning constant.** Two
+wrong constructions came first and both are recorded in the module docstring,
+because both look reasonable: dilating the set of legal *grid nodes* inflates
+the 3 Å Born ion's effective radius 3.0097 → 3.0717 and doubles ALA-GLY's probe
+worth, and sampling candidate centres over each accessible sphere makes the
+sample count the answer (+3.19% → −1.40% across 32 → 1024 samples, no plateau,
+crossing the reference at 256).
+
+**The stated criterion was wrong, and this is the retraction.** "Inside the 2.3%
+band APBS and DelPhi already occupy" traced to a passing remark about pyDelPhi
+in §7 rather than to a measurement; measured across the 33 shared `molecular`
+cases the band is **0.41% to 5.74%**. Charlie's replacement, 2026-08-15: gate
+**the probe's worth**, `(E_molecular − E_vdw)/|E_vdw|` — the one quantity the
+surface alone decides — with debye **no further from APBS than DelPhi C++ is**.
+Relational, so it carries no constant and cannot be met by drifting toward
+either incumbent. That shape matters here more than usual: on the Kirkwood
+geometry, where the exact answer is that the two surfaces coincide, **APBS
+separates them by 0.09–0.33% while DelPhi C++ stays bit-identical** — APBS
+over-fills its own SES, so "closer to APBS" is not "more correct" and a bar of
+the form "within x% of APBS" would grade debye against a known bias.
+
+**Nine cases had to exist first — the fourth milestone in a row to find its
+criterion unstateable.** Every closed-form case in the corpus is blind to this
+by construction (a lone convex sphere's SES *is* that sphere), so a solver
+answering `molecular` by returning its van der Waals number passes all eighteen
+exactly. ALA-GLY was the only multi-atom structure carrying both surfaces, and
+the probe is worth 4% there against 17–36% on a protein — so the peptide was not
+standing in for protein scale, it was a different question. Corpus 89 → 98.
+
+**Measured on every structure to hand, one grid spec, all three reference-tier
+backends:**
+
+| structure | atoms | DelPhi C++ | debye | APBS | dby−APBS | dlp−APBS |
+|---|---|---|---|---|---|---|
+| fas2 | 906 | +16.331 | +17.647 | +18.502 | **0.855** | 2.171 |
+| barstar | 1,403 | +18.096 | +19.693 | +20.500 | **0.807** | 2.404 |
+| fkbp-apo | 1,663 | +24.731 | +26.942 | +27.479 | **0.537** | 2.748 |
+| fkbp-dmso | 1,673 | +25.149 | +27.388 | +27.874 | **0.486** | 2.725 |
+| barnase | 1,730 | +26.567 | +28.037 | +29.458 | **1.421** | 2.891 |
+| lysozyme-asp66 | 1,960 | +33.211 | +35.323 | +35.761 | **0.438** | 2.550 |
+| lysozyme-ash66 | 1,961 | +31.668 | +33.819 | +34.117 | **0.298** | 2.449 |
+| protein-rna-1a63 | 2,065 | +16.977 | +17.784 | +18.430 | **0.646** | 1.453 |
+| hca | 2,482 | +24.611 | +26.082 | +26.787 | **0.705** | 2.176 |
+| hca-complex | 2,500 | +25.502 | +27.077 | +27.859 | **0.782** | 2.357 |
+| actin-monomer | 5,877 | +27.425 | +29.330 | +30.345 | **1.015** | 2.920 |
+| mache | 8,279 | +27.583 | +30.243 | +31.124 | **0.881** | 3.541 |
+
+**12 of 12, and debye is strictly between the incumbents every time**, 2–8×
+closer to APBS than DelPhi is — across an apo/holo pair, a ligand complex, a
+protonation-state pair and protein-RNA, so it is not a globular-protein
+coincidence. Above ~5,000 atoms `max_points` relaxes the lattice and the three
+codes relax differently, so those two rows compare across lattices.
+
+**The probe's worth climbs 4–8× from peptide to protein in all three codes** —
+buried volume grows faster than surface — so debye's +17.65% on fas2 is physics
+rather than a defect. It was nearly filed as one.
+
+**And it is converged at protein scale, which is the control the small molecules
+fail.** fas2 down 0.7 / 0.6 / 0.5 / 0.4 / 0.35 Å with `max_points` raised so no
+rung is silently relaxed: APBS 19.075 → 18.159 (swing 0.916), DelPhi 16.046 →
+16.697 (0.651), **debye 17.925 → 17.439 (0.486, the tightest of the three)**, and
+debye sits between the incumbents at *every* rung. The 2.2-point APBS/DelPhi gap
+is a real disagreement between the incumbents, not lattice noise.
+
+**Not below ~900 atoms, and that is measured.** At 0.5 Å the same comparison
+*fails* on acetic-acid, acetate and `ion-protein-complex`. It is a resolution
+artifact and the incumbent rows are what prove it: APBS reads **identically at
+0.7 and 0.5 Å** (its `dime` steps in 32s, so both relax to one lattice) and then
+moves acetic-acid by 2 points at 0.35; debye's 0.5 Å row is an outlier against
+its own 0.35 and 0.25 values; by 0.25 Å all three agree. The probe's worth is a
+*difference* of two energies, so where the difference is ~0.5% —
+`ion-protein-complex`, 260 atoms and almost no re-entrant volume — it sits under
+the 0.5–0.9 point lattice swing rather than one to two orders above it. Gating
+that grades the lattice. Recorded, as M2 did for Kirkwood's ninth rung and M3
+for the net-neutral solute.
+
+**The construction was unusable and is not any more.** As first written, fas2
+spent 71 s per lattice and barnase never finished. It is now **34.00 s for a fas2
+molecular solve against 1160.23 s**, and barnase completes in 79.80 s — with
+every dielectric mask bit-identical and every energy identical to the last digit,
+verified by hashing the mask on all three staggered lattices before any change.
+Five exact changes, none a tolerance: the seats are geometry rather than
+discretization and are built once for all lattices (52.2 → 1.2 s); 59% of rims
+are swallowed whole by a third atom and a circle's farthest point from a sphere
+centre is a closed form, so the prune is exact; the same closed form read at the
+*nearest* point gives each rim the only atoms that can reject a centre on it;
+`_legal` became one broadcast instead of a numpy call per neighbour per feature;
+and the homogeneous reference state, whose dielectric map is constant by
+construction, no longer builds a surface it throws away. `ReducedSurface` is what
+carries the geometry across the three staggered lattices and every multigrid
+level. **This is not M7** — it is making a construction usable at all, where M7
+is the benchmark claim against the incumbents.
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
@@ -2660,7 +2761,7 @@ the charge" predicts.
 | M1c ✅ | **The dielectric spike** | **ran; M4a is dropped.** A smoothed dielectric moves the *worst* near-field error only 4.138% → 3.085% — the swing ratio flatters it — which does not justify M4a's two to three days on an axis where debye is already at parity. Separately it made the Born energy **8× better**, left open rather than acted on: the real-structure check that appeared to contradict it used APBS, which shares the hard assignment under test, and a reference-free convergence study since points the other way. The knob is not landed |
 | M2 ✅ | Off-centre charge | **met**: 1.047 / 1.254 / 1.328% against the Kirkwood series at d/a = 0.3 / 0.5 / 0.7, against a **1.5%** bar set independently of debye and stricter than APBS manages at the hardest rung. Needed four new `van-der-waals` Kirkwood cases first — every existing rung was on a surface debye refuses. **Not d/a = 0.9**, which no shipped solver reproduces; and at d/a ≥ 0.5 *nothing* converges monotonically, so M2 gates accuracy and records convergence |
 | M3 ✅ | Salt screening | **met**: debye's ionic contribution `G(I) − G(0)` is +0.10% / +0.14% from the screened Born closed form at 0.15 / 0.5 M and 0.13% / 0.22% from APBS, against a **2%** bar on both halves — two halves because debye shares κ with the closed form and APBS does not. Gated as a *difference* rather than a total, because measurement showed a total-energy check cannot see the salt at all: four mutations of the screening, including deleting the Boltzmann term, all leave the total inside the 2.4% band APBS needs. Needed two new `van-der-waals` salt cases first — the third milestone to find its criterion named cases debye refuses by name. **Not the net-neutral solute**, where the monopole vanishes and the three reference codes spread 22% with no closed form: recorded, as M2 did for its non-monotonic rungs |
-| M4 | Solvent-excluded surface | `molecular` answers inside the 2.3% band APBS and DelPhi already occupy |
+| M4 ✅ | Solvent-excluded surface | **met**: the probe's worth, `(E_molecular − E_vdw)/\|E_vdw\|`, with debye **no further from APBS than DelPhi C++ is** — relational, so it carries no constant and cannot be met by drifting toward either incumbent. **Passes on all twelve real structures measured, 906 → 8,279 atoms**, and debye lands *strictly between* the two incumbents on every one, 2–8× closer to APBS. The original criterion here — "inside the 2.3% band APBS and DelPhi already occupy" — was **wrong and is retracted**: that 2.3% traced to a passing remark about pyDelPhi in §7, not to a measurement, and across the 33 shared `molecular` cases the band is 0.41%–5.74%. Needed nine new cases first, the fourth milestone in a row to find its criterion unstateable by the corpus it had — every closed-form case is blind to the probe, because a lone convex sphere's SES *is* that sphere. **Not below ~900 atoms**, where the probe is worth less than the lattice swing around it: recorded, as M2 and M3 each did |
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 | Registry integration | `sashimi corpus verify --backend debye --tier fast` passes |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone** |

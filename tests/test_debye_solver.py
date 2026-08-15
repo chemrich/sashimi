@@ -23,6 +23,7 @@ from sashimi.analytic import born_potential, born_solvation_energy
 from sashimi.corpus import MANIFEST, Case
 from sashimi.debye import BACKEND_VERSION, DebyeOptions, DebyeSolver
 from sashimi.debye.grid import size_grid
+from sashimi.debye.options import SUPPORTED_SURFACES
 from sashimi.errors import ConvergenceFailure, UnsupportedRequest
 from sashimi.protocol import (
     AccuracyTier,
@@ -208,13 +209,27 @@ def test_a_lone_sphere_is_the_same_boundary_whether_or_not_a_probe_rolls_over_it
 
 
 def test_it_refuses_a_boundary_it_cannot_build():
-    """Every surface but van der Waals, by name, with the milestone that adds it."""
-    for model in (
-        SurfaceModel.MOLECULAR,
-        SurfaceModel.SMOOTHED_MOLECULAR,
-        SurfaceModel.GAUSSIAN,
-    ):
-        with pytest.raises(UnsupportedRequest, match="van-der-waals"):
+    """The two smoothed surfaces, by name, with whose discretization each is.
+
+    M4 moved `molecular` from this list into `SUPPORTED_SURFACES`, and the two
+    left are not waiting on a milestone — they are refusals on purpose.
+    Harmonic averaging over a band of cells is APBS's discretization and a
+    Gaussian dielectric is DelPhi's, so a debye that offered them would be
+    claiming to reproduce another code's *choices* rather than the equation.
+    ROADMAP.md section 12 records the decision; `test_debye_m1c` records the
+    spike that measured what smoothing is actually worth.
+
+    Derived from the enum rather than listed, so a surface model added to
+    `SurfaceModel` without a decision about debye fails here instead of
+    silently becoming supported or silently becoming a refusal nobody chose.
+    """
+    unsupported = [model for model in SurfaceModel if model not in SUPPORTED_SURFACES]
+    assert set(unsupported) == {SurfaceModel.SMOOTHED_MOLECULAR, SurfaceModel.GAUSSIAN}, (
+        f"debye's supported surfaces changed to {sorted(m.value for m in SUPPORTED_SURFACES)}; "
+        "M4 added 'molecular' and nothing else was meant to move"
+    )
+    for model in unsupported:
+        with pytest.raises(UnsupportedRequest, match=model.value):
             DebyeSolver().solve(
                 FiniteDifferenceRequest(
                     structure=born_ion(),
@@ -222,6 +237,26 @@ def test_it_refuses_a_boundary_it_cannot_build():
                     grid=GridSpec(resolution=1.0),
                 )
             )
+
+
+def test_it_builds_the_molecular_boundary_that_m4_added():
+    """The other half: the surface M4 added is accepted, not merely un-refused.
+
+    Paired with the refusal above because the two can drift apart — dropping a
+    model from `SUPPORTED_SURFACES` would leave that test green while making
+    this one red, and adding one carelessly does the reverse.
+    """
+    assert SurfaceModel.MOLECULAR in SUPPORTED_SURFACES
+    result = DebyeSolver().solve(
+        FiniteDifferenceRequest(
+            structure=born_ion(),
+            solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR, ionic_strength=0.0),
+            grid=GridSpec(resolution=1.0),
+            want_potential=False,
+        )
+    )
+    assert result.energy_kj_mol is not None
+    assert result.provenance.resolved_parameters["surface_model"] == "molecular"
 
 
 def test_it_refuses_the_nonlinear_equation():

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -1854,6 +1854,140 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
         tier=CaseTier.FULL,
     ),
+    # --- the probe's worth, at protein scale (M4) ----------------------------
+    #
+    # M4 is gated on `(E_molecular - E_vdw)/|E_vdw|` — the quantity the
+    # solvent-excluded surface *alone* decides — and until these cases existed
+    # the corpus could not state it above twenty atoms. Every closed-form case
+    # is blind to it by construction: a lone convex sphere's solvent-excluded
+    # surface is that sphere, so a solver implementing `molecular` as "return
+    # the van der Waals answer" passed all eighteen of them exactly. ALA-GLY
+    # was the only multi-atom structure carrying both surfaces, and the probe is
+    # worth 4% there against 17-35% on a protein — so the peptide was not
+    # standing in for this, it was a different question.
+    #
+    # Each case below is the missing half of a pair whose other half the corpus
+    # already had. No new structures and no new machinery: the point is only
+    # that both surfaces are now recorded for the same solute, which is what
+    # makes the difference between them a thing `verify` can regress on.
+    #
+    # Measured across all three reference-tier backends when these were added
+    # (2026-08-15): debye lands strictly between DelPhi C++ and APBS on every
+    # one, two to eight times closer to APBS than DelPhi is, and the ordering
+    # holds down a 0.7-0.35 A refinement ladder on fas2. ROADMAP.md section 12's
+    # M4 carries the table.
+    Case(
+        name="barnase-molecular",
+        description=(
+            "The molecular half of `barnase-vdw`. Their difference is the "
+            "probe's worth on a 1,730-atom protein: +29.5% for APBS, where the "
+            "same quantity on ALA-GLY is +5.6%."
+        ),
+        source="apbs-examples/barnase.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="fas2-vdw",
+        description=(
+            "The van der Waals half of `fas2-molecular`, and the cheapest "
+            "protein-scale pair in the corpus — which is why it is `standard` "
+            "where the rest of this section is `full`."
+        ),
+        source="apbs-examples/fas2.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.STANDARD,
+    ),
+    Case(
+        name="lysozyme-vdw",
+        description=(
+            "The van der Waals half of `lysozyme-molecular`. Hen lysozyme "
+            "carries the largest probe worth in the set (+35.8% for APBS), so "
+            "it is where a construction that under-fills re-entrant volume "
+            "would show first."
+        ),
+        source="apbs-examples/2LZT-ASP66.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="barstar-vdw",
+        description="The van der Waals half of `barstar-molecular`; barnase's binding partner.",
+        source="apbs-examples/barstar.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="protein-rna-vdw",
+        description=(
+            "The van der Waals half of `protein-rna-molecular`. The one pair "
+            "here that is not all protein: a nucleic acid packs differently, and "
+            "its probe worth (+18.4%) sits with fas2's rather than with the "
+            "similarly sized proteins' +27% to +36%."
+        ),
+        source="apbs-examples/1a63.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="hca-vdw",
+        description=(
+            "The van der Waals half of `hca-molecular`, and the largest solute "
+            "in this section at 2,482 atoms."
+        ),
+        source="apbs-examples/hca.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="fkbp-apo-vdw",
+        description=(
+            "The van der Waals half of `fkbp-apo-molecular`. With the hca pair "
+            "this is the second ligand-binding site in the section, and the "
+            "probe's worth is where a bound ligand changes the surface most."
+        ),
+        source="apbs-examples/fkbp-apo.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="fkbp-dmso-vdw",
+        description=(
+            "The van der Waals half of `fkbp-dmso-molecular`, so the apo/holo "
+            "pair is complete on both surfaces. Binding DMSO moves the probe's "
+            "worth by less than half a point (+27.5% to +27.9% for APBS), which "
+            "is the point: a ligand in a pocket changes the surface far less "
+            "than folding does."
+        ),
+        source="apbs-examples/fkbp-dmso.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="ion-protein-complex-vdw",
+        description=(
+            "The van der Waals half of `ion-protein-complex-molecular`, and the "
+            "case that says where the probe's worth stops being gateable. At "
+            "260 atoms dominated by explicit ions there is almost no re-entrant "
+            "volume, so the probe is worth about 0.5% — comparable to each "
+            "code's own discretization error rather than far above it, where "
+            "the protein pairs sit. Recorded and not judged, for the same "
+            "reason M2 records Kirkwood's ninth rung: a quantity smaller than "
+            "the lattice noise around it grades the lattice."
+        ),
+        source="apbs-examples/ion-protein-complex.pqr",
+        grid=GridSpec(resolution=0.5, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
 )
 
 
@@ -1861,6 +1995,61 @@ def cases_for_tier(tier: CaseTier, cases: tuple[Case, ...] = MANIFEST) -> tuple[
     """Every case at or below `tier`, in manifest order."""
     allowed = set(TIER_ORDER[: TIER_ORDER.index(tier) + 1])
     return tuple(case for case in cases if case.tier in allowed)
+
+
+SURFACES_IN_A_PAIR = (SurfaceModel.VAN_DER_WAALS, SurfaceModel.MOLECULAR)
+
+
+def surface_pairs(cases: tuple[Case, ...] = MANIFEST) -> tuple[tuple[Case, Case], ...]:
+    """Every (van der Waals, molecular) pair asking one question but for the probe.
+
+    Two cases pair when their solute, grid and solvent are identical except for
+    `surface_model`, so the difference between their energies is attributable to
+    the solvent-excluded surface and to nothing else. That is the quantity M4 is
+    gated on — see `probe_worth`.
+
+    **Derived rather than listed.** A case added with a sibling joins the M4
+    gate without anyone remembering to update a constant, which is the second
+    lesson in this project's guards file: a check keyed on a hand-maintained
+    list stops covering the thing it was written for the first time someone
+    extends the manifest and forgets.
+    """
+    keyed: dict[tuple[str, GridSpec, SolventModel], dict[SurfaceModel, Case]] = {}
+    for case in cases:
+        model = case.solvent.surface_model
+        if model not in SURFACES_IN_A_PAIR:
+            continue
+        # Normalising the surface model is what makes the rest of the solvent
+        # the key: two cases collide here exactly when the probe is the only
+        # thing between them.
+        key = (case.source, case.grid, replace(case.solvent, surface_model=SurfaceModel.MOLECULAR))
+        keyed.setdefault(key, {})[model] = case
+    return tuple(
+        (found[SurfaceModel.VAN_DER_WAALS], found[SurfaceModel.MOLECULAR])
+        for found in keyed.values()
+        if len(found) == len(SURFACES_IN_A_PAIR)
+    )
+
+
+def probe_worth(vdw: dict[str, Any], molecular: dict[str, Any]) -> float:
+    """`(E_molecular - E_vdw)/|E_vdw|` as a percentage, from two recorded summaries.
+
+    What rolling the probe is worth, and the one quantity the solvent-excluded
+    surface alone decides. Every closed-form case in the corpus is blind to it
+    — a lone convex sphere's solvent-excluded surface *is* that sphere — so this
+    is the only thing that distinguishes a real reduced-surface construction
+    from a solver that answers `molecular` by returning the van der Waals
+    number.
+
+    Reads recordings rather than solving, so the M4 gate needs no binary
+    installed: the incumbents' halves are files in the repository and only the
+    candidate has to run.
+    """
+    before = vdw["energy_kj_mol"]
+    after = molecular["energy_kj_mol"]
+    if before is None or after is None:
+        raise ValueError("both halves of a surface pair must record an energy")
+    return float(100.0 * (after - before) / abs(before))
 
 
 def probe_points(origin: FloatArray, spacing: FloatArray, shape: tuple[int, ...]) -> FloatArray:

@@ -239,11 +239,11 @@ The golden corpus is a first-class feature:
 
 ```sh
 sashimi corpus verify              # the standard tier, diffed against record
-sashimi corpus verify --tier full  # all 79 cases
+sashimi corpus verify --tier full  # all 98 cases
 sashimi corpus build --force       # re-record, deliberately
 ```
 
-Seventy-nine cases, summaries in `tests/corpus/`, split by measured wall time
+Ninety-eight cases, summaries in `tests/corpus/`, split by measured wall time
 into `fast` (what `pytest` runs), `standard` (a CI step per push) and `full` (on
 demand). It is the regression net for the unpinned APBS today, and the
 acceptance gate for a second backend later — `sashimi corpus verify --backend
@@ -251,7 +251,7 @@ debye` needs no APBS installed.
 
 Many of those cases are on a surface model more than one solver supports, so
 they carry answers from more than one backend: `tests/corpus/delphi/` holds
-thirty-five, `tests/corpus/gb/` twenty-nine from the in-process Generalized Born
+fifty-six, `tests/corpus/gb/` thirty from the in-process Generalized Born
 tier, and `tests/corpus/tabipb/` six from the boundary-element one. Comparing
 those files against `tests/corpus/` needs no binary at all, which is where the corpus says something
 neither recording could alone — the two reference-tier families agree to
