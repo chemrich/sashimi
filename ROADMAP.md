@@ -1937,12 +1937,14 @@ differ by. Speed at the gate case is **1.8 s against APBS's 3.5 s** on a 105³
 grid, which is not a performance claim — that is M7 — but does say the pure-Python
 solver is not in a different class.
 
-**Not registered in `sashimi.backends`, deliberately.** Registry integration is
-M5, and `test_every_backend_can_answer_the_default_surface_model` is what enforces
-the wait: every registered backend must answer `molecular`, which debye cannot
-until M4. Registering it earlier would make a defaulted `sashimi_solve` fail on
+**Not registered in `sashimi.backends`, deliberately — until M5.** Registry
+integration waited on `test_every_backend_can_answer_the_default_surface_model`:
+every registered backend must answer `molecular`, which debye could not until
+M4. Registering it earlier would have made a defaulted `sashimi_solve` fail on
 an unremarkable request, and narrowing the default to accommodate a half-built
-backend is exactly the argument that guard exists to force.
+backend is exactly the argument that guard exists to force. *M4 gave debye the
+molecular surface and M5 registered it the same day; the guard released it
+rather than being edited around, which is the outcome it was written for.*
 
 **One caveat to carry into M3.** debye takes κ from `sashimi.analytic`'s
 `debye_length_a`, which is also what the screened Born closed form uses. That is
@@ -2752,6 +2754,63 @@ carries the geometry across the three staggered lattices and every multigrid
 level. **This is not M7** — it is making a construction usable at all, where M7
 is the benchmark claim against the incumbents.
 
+### M5 — the registry, and what a partial-coverage backend needed from it
+
+**Met 2026-08-15.** Registering debye was two lines — a `BackendEntry` and a
+report — and `--backend`, `sashimi_solve` and `sashimi_capabilities` all reached
+it with no edit, which is §2's claim about the registry cashed rather than
+asserted. What took the work was that **debye is the first backend that refuses
+part of the corpus on principle rather than through absence**, and the tooling
+had no vocabulary for that.
+
+**Three supporting changes, each fixing something that was already wrong.**
+
+- **`corpus build --backend delphi` was filing DelPhi's answers as APBS's.**
+  `summary_path` ignored `--backend` entirely and defaulted to the corpus root,
+  so the per-backend layout lived only in the heads of the people typing
+  `--directory`. It failed safe by accident — printing `skip (exists)` wherever
+  APBS had already recorded — and would have written a wrong file on any case
+  APBS had not. `corpus_dir_for` derives it now, which is why adding a fifth
+  backend needed no new incantation.
+- **A refusal crashed the build.** The loop had no `except`, so recording a
+  partial-coverage backend meant naming its cases by hand and the first refusal
+  killed the run. That is why the GB and TABI-PB tiers were recorded case by
+  case. A refusal is a result: it is reported as `n/a` and counted.
+- **A refusal counted as a discrepancy.** `verify` reported every missing
+  recording as a MISS, so a backend that declines two surface models by design
+  was permanently red and the stated exit criterion was unreachable. It now
+  asks the backend's own published `BackendReport` — the same `surface_models`
+  every caller sees, not a second copy — and falls through to MISS when the
+  backend is unavailable, since an undiscoverable DelPhi reports no models at
+  all and calling those refusals would turn "not installed" into "supports
+  nothing".
+
+**One measured tolerance, and it is the first that *widens*.**
+`born-ion-molecular-r4`: APBS relaxes the request to 0.4375 Å where debye solves
+the 0.5 Å it was asked for, and 1.504% at a/h = 8 sits exactly on M1's ladder
+(1.576% at a/h = 6). DelPhi's 0.007% is not a third opinion — it reports a
+*corrected reaction field*, and on the same 0.5 Å lattice its field error is
+1.239% against debye's 1.236%. **The discretizations agree; the energy
+definitions do not.** The `born-ion-*-r1` field bars widen for the other
+recorded reason: at a/h = 2 the three codes land on three lattices (0.344 /
+0.500 / 0.458 Å) and near-field error swings 5–21× with phase, which §12 already
+flags as inherited by every corpus field tolerance. The phase-fair measurement
+is M1b's, on one shared lattice, and it is unchanged.
+
+That widening broke `test_the_debye_tolerances_are_actually_reaching_debye`,
+which asserted `rtol_for(label) < rtol` — and the assertion was subtly wrong all
+along. The property being guarded is that the key *matches*, not that it
+tightens; it only looked like the latter because every per-backend tolerance so
+far happened to tighten. It now compares against the declared value, and asserts
+separately that the milestone bars are tight.
+
+**What it buys immediately.** With nothing installed at all, `gb` and debye now
+share `molecular`, so `comparable_surface_models()` is no longer empty on a bare
+machine: cross-validation works with no APBS, no DelPhi and no TABI-PB. They are
+not two of a kind — debye discretizes the equation and `gb` approximates it — so
+`validate` reports a reference answer with a deviation beside it rather than a
+spread, which is exactly what `AccuracyTier` was built to keep separate.
+
 | | milestone | exit criterion |
 |---|---|---|
 | M0 ✅ | **The closed-form gap closed** | the section above — sharp-boundary Born and Kirkwood cases exist to be graded against, the field is checked against a closed form, and the GB-exclusion and record-only changes are made rather than described |
@@ -2763,7 +2822,7 @@ is the benchmark claim against the incumbents.
 | M3 ✅ | Salt screening | **met**: debye's ionic contribution `G(I) − G(0)` is +0.10% / +0.14% from the screened Born closed form at 0.15 / 0.5 M and 0.13% / 0.22% from APBS, against a **2%** bar on both halves — two halves because debye shares κ with the closed form and APBS does not. Gated as a *difference* rather than a total, because measurement showed a total-energy check cannot see the salt at all: four mutations of the screening, including deleting the Boltzmann term, all leave the total inside the 2.4% band APBS needs. Needed two new `van-der-waals` salt cases first — the third milestone to find its criterion named cases debye refuses by name. **Not the net-neutral solute**, where the monopole vanishes and the three reference codes spread 22% with no closed form: recorded, as M2 did for its non-monotonic rungs |
 | M4 ✅ | Solvent-excluded surface | **met**: the probe's worth, `(E_molecular − E_vdw)/\|E_vdw\|`, with debye **no further from APBS than DelPhi C++ is** — relational, so it carries no constant and cannot be met by drifting toward either incumbent. **Passes on all twelve real structures measured, 906 → 8,279 atoms**, and debye lands *strictly between* the two incumbents on every one, 2–8× closer to APBS. The original criterion here — "inside the 2.3% band APBS and DelPhi already occupy" — was **wrong and is retracted**: that 2.3% traced to a passing remark about pyDelPhi in §7, not to a measurement, and across the 33 shared `molecular` cases the band is 0.41%–5.74%. Needed nine new cases first, the fourth milestone in a row to find its criterion unstateable by the corpus it had — every closed-form case is blind to the probe, because a lone convex sphere's SES *is* that sphere. **Not below ~900 atoms**, where the probe is worth less than the lattice swing around it: recorded, as M2 and M3 each did |
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
-| M5 | Registry integration | `sashimi corpus verify --backend debye --tier fast` passes |
+| M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone** |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here |
 

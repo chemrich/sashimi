@@ -171,6 +171,29 @@ Two things about it are worth knowing before using it:
   costs 35% on a protein. The substitution is counted in the result's
   diagnostics, and `GbRadii.AS_GIVEN` turns it off.
 
+`sashimi.debye` is the clean-room solver, and the point of it is the
+combination: it needs **no binary** and it is in the **reference tier**. `gb`
+needs nothing installed but approximates the equation; every other backend that
+discretizes it needs a compiled program. So on a machine with no APBS you get
+real Poisson-Boltzmann rather than known-wrong physics — which is the gap that
+reordered this roadmap, since the consumer it exists for has no binary
+available.
+
+About 2,000 lines of numpy: finite-volume flux balance with the dielectric
+sampled at face centres, cloud-in-cell charge assignment, a Debye-Huckel
+boundary on the box face, and multigrid-preconditioned CG whose coefficients are
+re-discretized from the geometry at each level. It solves the linearized
+equation on the van der Waals and solvent-excluded boundaries, and **declines
+`smoothed-molecular` and `gaussian` on purpose** — those are APBS's harmonic
+averaging and DelPhi's Gaussian dielectric, and reproducing them would be
+claiming another code's discretization rather than the equation. `corpus verify`
+reports the cases it declines as refusals rather than as gaps.
+
+It is graded against the incumbents rather than against a round number: 0.85%
+from the Born closed form, within 1.5% of the Kirkwood series, and on the
+solvent-excluded surface it sits *between* DelPhi C++ and APBS on all twelve
+real structures measured from 906 to 8,279 atoms.
+
 ### Using DelPhi
 
 Neither DelPhi flavour has a package, so both are opt-in and neither is a
@@ -195,11 +218,11 @@ compiler and runs anywhere, including `linux-aarch64`, where no APBS exists.
 that is the most useful thing a second backend does. `sashimi_capabilities`
 reports which models the installed backends actually share, because a spread
 computed across mismatched surface definitions is a modelling difference
-misreported as a solver disagreement. All four shipped backends share
+misreported as a solver disagreement. All five shipped backends share
 `molecular`, which is why it is the default; `smoothed-molecular` is APBS-only,
 so a solve that asks for it refuses on the other three rather than silently
-substituting, and `van-der-waals` is APBS and DelPhi only. On the models they
-share, APBS and DelPhi agree to 2.4% on hen lysozyme.
+substituting, and `van-der-waals` is APBS, DelPhi and debye only. On the models
+they share, APBS and DelPhi agree to 2.4% on hen lysozyme.
 
 See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
@@ -209,10 +232,16 @@ Phases 0–4 and 7 are done, and phase 5 needs only its PyPI release. The core
 library is validated against the closed-form Born ion, converging monotonically
 as the grid refines (0.62% → 0.11% → 0.02% at 0.41 / 0.20 / 0.16 Å spacing).
 
-Four backends now span three solver families — finite difference, boundary
-element, analytic — and the protocol absorbed all four without changing shape:
+Five backends now span three solver families — finite difference, boundary
+element, analytic — and the protocol absorbed all five without changing shape:
 two enum members, no new types. They agree on ALA-GLY to 3.65% across families,
 and on hen lysozyme to 1.97%.
+
+**Two of the five need nothing installed**, and since they share a surface model
+you can cross-validate on a machine with no APBS, no DelPhi and no mesher.
+`sashimi.debye` is the newer one: a clean-room finite-difference solver in numpy
+that discretizes the linearized Poisson-Boltzmann equation rather than
+approximating it, on the van der Waals and solvent-excluded boundaries.
 
 The MCP server exposes nine tools over stdio:
 
@@ -245,14 +274,18 @@ sashimi corpus build --force       # re-record, deliberately
 
 Ninety-eight cases, summaries in `tests/corpus/`, split by measured wall time
 into `fast` (what `pytest` runs), `standard` (a CI step per push) and `full` (on
-demand). It is the regression net for the unpinned APBS today, and the
-acceptance gate for a second backend later — `sashimi corpus verify --backend
-debye` needs no APBS installed.
+demand). It is the regression net for the unpinned APBS, and it is the
+acceptance gate the clean-room solver was held to: `sashimi corpus verify
+--backend debye` needs no APBS installed, and passes.
 
 Many of those cases are on a surface model more than one solver supports, so
 they carry answers from more than one backend: `tests/corpus/delphi/` holds
-fifty-six, `tests/corpus/gb/` thirty from the in-process Generalized Born
-tier, and `tests/corpus/tabipb/` six from the boundary-element one. Comparing
+fifty-six, `tests/corpus/debye/` fifty-six from the clean-room solver,
+`tests/corpus/gb/` thirty from the in-process Generalized Born tier, and
+`tests/corpus/tabipb/` six from the boundary-element one. No backend answers
+the whole corpus — debye declines APBS's harmonic averaging and DelPhi's
+Gaussian dielectric by name, and `corpus verify` reports those as refusals
+rather than as gaps. Comparing
 those files against `tests/corpus/` needs no binary at all, which is where the corpus says something
 neither recording could alone — the two reference-tier families agree to
 1.0–1.6%, and the approximate tier ranges from 0.7% to 28%.

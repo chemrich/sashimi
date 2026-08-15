@@ -111,29 +111,34 @@ class TestCapabilities:
         """This tool must survive exactly the situation it exists to explain."""
         caps = describe_capabilities()
 
-        # Every backend that needs installing is absent; `gb` needs none, so
-        # "nothing installed" is no longer the same thing as "nothing usable".
-        assert caps["available_backends"] == ["gb"]
+        # Every backend that needs installing is absent; `gb` and `debye` need
+        # none, so "nothing installed" is no longer the same thing as "nothing
+        # usable" — and since M5 it is not even the same thing as "no reference
+        # tier", which is the whole point of a clean-room solver.
+        assert caps["available_backends"] == ["gb", "debye"]
         assert all(
-            backend["available"] is False for backend in caps["backends"] if backend["name"] != "gb"
+            backend["available"] is False
+            for backend in caps["backends"]
+            if backend["name"] not in ("gb", "debye")
         )
         assert "brew install apbs" in caps["backends"][0]["detail"]
         # Every backend must explain its own absence, not just the first one.
         assert "compbio.clemson.edu" in caps["backends"][1]["detail"]
         assert "Treecodes/TABI-PB" in caps["backends"][2]["detail"]
-        assert "1/4 backend" in caps["summary"]
+        assert "2/5 backend" in caps["summary"]
 
     def test_reports_every_backend_with_its_solver_family(self):
         """The family is what tells a caller why TABI-PB answers different
         questions: a boundary-element solve has no volume to interpolate."""
         backends = describe_capabilities()["backends"]
 
-        assert [b["name"] for b in backends] == ["apbs", "delphi", "tabipb", "gb"]
+        assert [b["name"] for b in backends] == ["apbs", "delphi", "tabipb", "gb", "debye"]
         assert [b["family"] for b in backends] == [
             "finite-difference",
             "finite-difference",
             "boundary-element",
             "analytic",
+            "finite-difference",
         ]
 
     def test_only_gb_reports_itself_as_an_approximation(self):
@@ -145,6 +150,7 @@ class TestCapabilities:
             "delphi": "reference",
             "tabipb": "reference",
             "gb": "approximate",
+            "debye": "reference",
         }
 
     def test_one_backend_is_comparable_with_nothing(self, monkeypatch):
@@ -171,6 +177,7 @@ class TestCapabilities:
         substitute(
             monkeypatch,
             gb=BackendReport("gb", False, "analytic", detail="hidden for this test"),
+            debye=BackendReport("debye", False, "finite-difference", detail="hidden for this test"),
         )
         try:
             assert comparable_surface_models() == []
@@ -199,6 +206,7 @@ class TestCapabilities:
             delphi=reports[1],
             tabipb=reports[2],
             gb=BackendReport("unused", False, "analytic"),
+            debye=BackendReport("unused", False, "finite-difference"),
         )
 
         assert comparable_surface_models() == ["molecular"]
@@ -211,20 +219,30 @@ class TestCapabilities:
             delphi=BackendReport("delphi", True, "fd", surface_models=("gaussian",)),
             tabipb=BackendReport("tabipb", False, "bem", surface_models=("molecular",)),
             gb=BackendReport("unused", False, "analytic"),
+            debye=BackendReport("unused", False, "finite-difference"),
         )
 
         assert comparable_surface_models() == []
 
     @pytest.mark.usefixtures("hide_backends")
-    def test_comparable_surface_models_are_reported(self):
+    def test_a_bare_machine_can_still_compare_two_backends(self):
         """Which models two backends share decides whether they can be compared.
 
-        With nothing installed the honest answer is an empty list, and an empty
-        list is a real answer here rather than a missing one — APBS and pyDelPhi
-        genuinely share no surface model.
+        **This answer changed at M5, and the change is the milestone.** With
+        nothing installed the list used to be empty — an honest answer, since
+        the only always-present backend was `gb` and one backend is comparable
+        with nothing. Registering debye puts a second binary-free solver in the
+        registry, and the two share `molecular`, so cross-validation now works
+        on a machine with no APBS, no DelPhi and no TABI-PB.
+
+        What they are *not* is two of a kind: debye discretizes the equation and
+        `gb` approximates it, so `sashimi validate` reports the pair as a
+        reference answer with a deviation beside it rather than as a spread.
+        That partition is `AccuracyTier`'s job and is why this is a real
+        comparison rather than an average of two guesses.
         """
         models = describe_capabilities()["surface_models"]
-        assert models["comparable_across_available_backends"] == []
+        assert models["comparable_across_available_backends"] == ["molecular"]
 
     def test_what_a_defaulted_request_will_actually_be_solved_on_is_discoverable(self):
         """The grid half of this was reported and the physics half was not.
@@ -338,7 +356,7 @@ class TestPerBackendCost:
         assert delphi["cost"]["grid"]["native"]["gsize"] == 61
         assert apbs["cost"]["grid"]["n_points"] != delphi["cost"]["grid"]["n_points"]
 
-    @pytest.mark.parametrize("backend", ["apbs", "delphi", "tabipb", "gb"])
+    @pytest.mark.parametrize("backend", ["apbs", "delphi", "tabipb", "gb", "debye"])
     def test_the_cost_is_always_under_the_same_key(self, backend: str):
         """A caller should not have to know the family to know which key exists.
 

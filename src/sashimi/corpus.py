@@ -79,6 +79,9 @@ __all__ = [
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "tests" / "data"
 CORPUS_DIR = Path(__file__).resolve().parent.parent.parent / "tests" / "corpus"
+# The backend whose recordings sit at the corpus root rather than in a
+# subdirectory, because the corpus was its before it was anyone else's.
+ROOT_BACKEND = "apbs"
 
 # A single charged sphere with a closed-form answer. Defined in code rather than
 # as a file so the canonical analytic case cannot drift on disk.
@@ -974,6 +977,18 @@ MANIFEST: tuple[Case, ...] = (
             charge_e=1.0,
             cells_out=(2, 4, 8),
             rtol=0.035,  # all directions: 1.165% APBS / 1.727% DelPhi (axes worst)
+            # debye reads 9.871% here, and it is grid phase rather than a
+            # worse near field. At a/h = 2 every FD backend's error swings
+            # 5-21x with where the lattice falls, and the three land on three
+            # lattices: APBS 0.344 A, DelPhi 0.500, debye 0.458. Section 12
+            # flags that every corpus field tolerance inherits its case's
+            # phase, which is why this is a per-backend number and not a
+            # widening of the shared one. The phase-fair measurement is M1b's,
+            # on one shared lattice, where debye is 1.69x the best incumbent
+            # against a 2x bar; `tests/test_debye_m1b.py` is what grades it.
+            # debye's *energy* on this same case is 1.228%, against APBS's
+            # 4.101% — it is not adrift on this geometry.
+            per_backend_rtol=(("debye", 0.200),),  # measured 9.871%
         ),
     ),
     Case(
@@ -1007,7 +1022,17 @@ MANIFEST: tuple[Case, ...] = (
         solvent=SolventModel(
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
         ),
-        analytic=_born(4.0, rtol=0.01, delphi_rtol=0.001),  # measured 0.421% / 0.007%
+        # The first per-backend tolerance that *widens* rather than tightens,
+        # and it is a lattice difference rather than a worse solver. APBS
+        # relaxes this request to 0.4375 A where debye sits at the 0.5 it was
+        # asked for, and 1.504% at a/h = 8 is exactly on M1's measured ladder
+        # (1.576% at a/h = 6). DelPhi's 0.007% is not a third data point: it
+        # reports a *corrected reaction field*, and on the same 0.5 A lattice
+        # its field error is 1.239% against debye's 1.236% — the discretizations
+        # agree, the energy definitions do not.
+        analytic=_born(
+            4.0, rtol=0.01, delphi_rtol=0.001, debye_rtol=0.031
+        ),  # measured 0.421% / 0.007% / 1.504%
         analytic_field=AnalyticField(
             radius_a=4.0,
             charge_e=1.0,
@@ -1077,6 +1102,18 @@ MANIFEST: tuple[Case, ...] = (
             # here — the worst it is anywhere on the corpus, and the case that
             # makes M1b's gate about the small-radius near field.
             rtol=0.035,
+            # debye reads 9.871% here, and it is grid phase rather than a
+            # worse near field. At a/h = 2 every FD backend's error swings
+            # 5-21x with where the lattice falls, and the three land on three
+            # lattices: APBS 0.344 A, DelPhi 0.500, debye 0.458. Section 12
+            # flags that every corpus field tolerance inherits its case's
+            # phase, which is why this is a per-backend number and not a
+            # widening of the shared one. The phase-fair measurement is M1b's,
+            # on one shared lattice, where debye is 1.69x the best incumbent
+            # against a 2x bar; `tests/test_debye_m1b.py` is what grades it.
+            # debye's *energy* on this same case is 1.228%, against APBS's
+            # 4.101% — it is not adrift on this geometry.
+            per_backend_rtol=(("debye", 0.200),),  # measured 9.871%
         ),
     ),
     Case(
@@ -2241,8 +2278,25 @@ def _solvent_dict(solvent: SolventModel) -> dict[str, Any]:
     }
 
 
-def summary_path(case: Case, directory: Path | None = None) -> Path:
-    return (directory or CORPUS_DIR) / f"{case.name}.json"
+def corpus_dir_for(backend: str) -> Path:
+    """Where a backend's recordings live.
+
+    APBS's sit at the root because they came first and the whole corpus was
+    APBS's; every other backend has a subdirectory named after it. That layout
+    was previously known only to the humans typing `--directory`, and
+    `summary_path` defaulted to the root whatever `--backend` said — so
+    `corpus build --backend delphi` filed DelPhi's answers as APBS's, silently,
+    on any case APBS had not already recorded. It failed safe only by accident,
+    printing `skip (exists)` where a recording happened to be there.
+
+    Deriving it here is what makes `--directory` an override rather than a
+    requirement, and it is why adding debye at M5 needed no new incantation.
+    """
+    return CORPUS_DIR if backend == ROOT_BACKEND else CORPUS_DIR / backend
+
+
+def summary_path(case: Case, directory: Path | None = None, backend: str = ROOT_BACKEND) -> Path:
+    return (directory or corpus_dir_for(backend)) / f"{case.name}.json"
 
 
 def write_summary(summary: dict[str, Any], path: Path) -> None:
@@ -2250,8 +2304,10 @@ def write_summary(summary: dict[str, Any], path: Path) -> None:
     path.write_text(json.dumps(summary, indent=2) + "\n")
 
 
-def load_summary(case: Case, directory: Path | None = None) -> dict[str, Any]:
-    path = summary_path(case, directory)
+def load_summary(
+    case: Case, directory: Path | None = None, backend: str = ROOT_BACKEND
+) -> dict[str, Any]:
+    path = summary_path(case, directory, backend)
     if not path.is_file():
         raise FileNotFoundError(f"no recorded summary for {case.name!r} at {path}")
     loaded: dict[str, Any] = json.loads(path.read_text())

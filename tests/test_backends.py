@@ -17,17 +17,24 @@ import pytest
 from sashimi import backends
 from sashimi.apbs.options import SURFACE_KEYWORD
 from sashimi.cli import BACKEND_NAMES
+from sashimi.debye.options import SUPPORTED_SURFACES as DEBYE_SURFACES
 from sashimi.delphi.options import SUPPORTED_SURFACES as DELPHI_SURFACES
 from sashimi.errors import InputError
 from sashimi.gb.options import SUPPORTED_SURFACES as GB_SURFACES
 from sashimi.protocol import AccuracyTier, SolventModel, SolverFamily
 from sashimi.tabipb.options import SUPPORTED_SURFACES as TABIPB_SURFACES
 
-EXPECTED = ("apbs", "delphi", "tabipb", "gb")
+EXPECTED = ("apbs", "delphi", "tabipb", "gb", "debye")
 
 
 def test_the_registry_holds_every_shipped_backend():
-    """A guard on the list itself; debye adds one entry here and nowhere else."""
+    """A guard on the list itself.
+
+    debye joined at M5 and this was one of the two lines it changed — the other
+    being the registry entry. `--backend`, `sashimi_solve` and
+    `sashimi_capabilities` all read from `backends.names()`, so none of them
+    needed an edit, which is the claim this module's docstring makes.
+    """
     assert backends.names() == EXPECTED
 
 
@@ -97,6 +104,7 @@ def test_every_backend_can_answer_the_default_surface_model():
         "apbs": frozenset(SURFACE_KEYWORD),
         "tabipb": TABIPB_SURFACES,
         "gb": GB_SURFACES,
+        "debye": DEBYE_SURFACES,
         **{f"delphi/{flavour.value}": models for flavour, models in DELPHI_SURFACES.items()},
     }
     # Every registered backend appears above, so a fifth one cannot arrive
@@ -113,7 +121,9 @@ def test_only_the_approximate_tier_says_it_approximates():
     tiers = {report.name: report.accuracy_tier for report in backends.reports()}
 
     assert tiers["gb"] == AccuracyTier.APPROXIMATE.value
-    assert {tiers[n] for n in ("apbs", "delphi", "tabipb")} == {AccuracyTier.REFERENCE.value}
+    assert {tiers[n] for n in ("apbs", "delphi", "tabipb", "debye")} == {
+        AccuracyTier.REFERENCE.value
+    }
 
 
 def test_the_registry_does_not_construct_a_solver_to_describe_one():

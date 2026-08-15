@@ -27,7 +27,7 @@ from sashimi.corpus import (
     verify_case,
     write_summary,
 )
-from sashimi.errors import SashimiError
+from sashimi.errors import SashimiError, UnsupportedRequest
 from sashimi.protocol import Solver, SurfaceModel
 from sashimi.validate import (
     DEFAULT_APPROXIMATION_TOLERANCE,
@@ -89,23 +89,67 @@ def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case,
     return tuple(known[n] for n in names)
 
 
+def _refuses(backend: str, case: Case) -> bool:
+    """Whether this backend declines the case by design rather than lacking a recording.
+
+    Read from the backend's own `BackendReport` — the same `surface_models` and
+    preconditions `sashimi_capabilities` publishes to callers — rather than from
+    a table here. That matters twice over: a second copy of "which backend
+    supports which surface" is the guards file's recurring failure mode, and
+    because this is the *published* field, a backend that misreports it
+    misreports it to every caller and not only to `verify`.
+
+    **Conservative when it cannot tell.** An undiscoverable DelPhi reports no
+    surface models at all, since which ones it has depends on the flavour found,
+    so an unavailable backend falls through to the ordinary missing-recording
+    path. Calling those refusals would turn "DelPhi is not installed" into
+    "DelPhi does not support anything", which is the failure
+    `test_every_backend_can_answer_the_default_surface_model` was written after.
+    """
+    entry = backends.get(backend)
+    report = entry.report()
+    if not report.available or not report.surface_models:
+        return False
+    if case.solvent.surface_model.value not in report.surface_models:
+        return True
+    return bool(entry.check(case.system(want_potential=False)))
+
+
 def _build(args: argparse.Namespace) -> int:
+    """Record a backend's answers, skipping the questions it refuses to be asked.
+
+    **A refusal is a result, not a crash.** No backend answers the whole corpus:
+    Generalized Born takes only the molecular surface, TABI-PB needs four atoms,
+    and debye builds the two sharp boundaries and declines APBS's harmonic
+    averaging and DelPhi's Gaussian by name. Before M5 this loop had no
+    `except`, so recording a partial-coverage backend meant naming its cases by
+    hand and the first refusal killed the run — which is also why the earlier
+    tiers were recorded case by case.
+    """
     solver, family = _corpus_solver(args.backend)
     directory = Path(args.directory) if args.directory else None
     cases = _select(cases_for_tier(CaseTier(args.tier)), args.case)
 
+    written = refused = 0
     for case in cases:
-        path = summary_path(case, directory)
+        path = summary_path(case, directory, args.backend)
         if path.exists() and not args.force:
             print(f"  skip  {case.name} (exists; pass --force to overwrite)")
             continue
-        summary = build_case(solver, case, family)
+        try:
+            summary = build_case(solver, case, family)
+        except UnsupportedRequest as exc:
+            print(f"  n/a   {case.name}: {exc}")
+            refused += 1
+            continue
         write_summary(summary, path)
         energy = summary["energy_kj_mol"]
         shown = f"{energy:.6f} kJ/mol" if energy is not None else "no energy"
         print(f"  wrote {case.name:<24} {shown}")
+        written += 1
 
-    print(f"\n{len(cases)} case(s) against {args.backend}.")
+    tail = f", {refused} refused by the backend" if refused else ""
+    print(f"\n{len(cases)} case(s) against {args.backend}: {written} written{tail}.")
     return 0
 
 
@@ -119,10 +163,21 @@ def _verify(args: argparse.Namespace) -> int:
     )
 
     failures: list[str] = []
+    checked = refused = 0
     for case in cases:
         try:
-            recorded = load_summary(case, directory)
+            recorded = load_summary(case, directory, args.backend)
         except FileNotFoundError as exc:
+            # A backend that *refuses* the case has nothing to reproduce, and
+            # calling that a discrepancy makes a partial-coverage backend
+            # permanently red — which is what made M5's stated exit criterion
+            # unreachable for a solver that declines two surface models on
+            # purpose. Asked rather than looked up, so this cannot drift from
+            # what the backend actually does.
+            if _refuses(args.backend, case):
+                print(f"  n/a   {case.name} (this backend does not build that surface)")
+                refused += 1
+                continue
             print(f"  MISS  {case.name}: {exc}")
             failures.append(f"{case.name}: no recorded summary")
             continue
@@ -135,6 +190,7 @@ def _verify(args: argparse.Namespace) -> int:
             failures.extend(str(item) for item in found)
         else:
             print(f"  ok    {case.name}")
+            checked += 1
 
     if failures:
         print(
@@ -143,7 +199,8 @@ def _verify(args: argparse.Namespace) -> int:
         )
         return 1
 
-    print(f"\nAll {len(cases)} case(s) reproduce against {args.backend}.")
+    tail = f" ({refused} refused by the backend)" if refused else ""
+    print(f"\nAll {checked} case(s) reproduce against {args.backend}{tail}.")
     return 0
 
 
