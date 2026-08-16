@@ -16,7 +16,7 @@ import pytest
 
 from sashimi import backends
 from sashimi.backends import BackendReport
-from sashimi.cli import _backends_supporting, _refuses, _select, _validate
+from sashimi.cli import _backends_supporting, _refuses, _select, _validate, build_parser
 from sashimi.corpus import (
     CORPUS_DIR,
     MANIFEST,
@@ -134,6 +134,25 @@ def test_a_case_outside_the_tier_is_not_reported_as_unknown():
     assert "not in the selected tier" in message
     assert "--tier full" in message
     assert "unknown case" not in message
+
+
+def test_validate_defaults_to_the_cheapest_tier():
+    """A default nobody can wait out is not a default.
+
+    `validate` gained `--tier` at M5 but kept defaulting to the whole manifest,
+    which was measured at over 40 minutes without finishing on a fully-installed
+    machine — and that predates debye, so it is not one backend's cost. Unlike
+    `corpus verify`, `validate` re-solves every case in every backend with no
+    recordings to fall back on, so its default has to be the cheapest tier the
+    corpus offers rather than merely a small one. Widening it again should mean
+    deleting this test on purpose.
+    """
+    parser = build_parser()
+    default = CaseTier(parser.parse_args(["validate"]).tier)
+
+    assert default is min(CaseTier, key=lambda tier: len(cases_for_tier(tier)))
+    assert len(cases_for_tier(default)) < len(MANIFEST)
+    assert CaseTier(parser.parse_args(["validate", "--tier", "full"]).tier) is CaseTier.FULL
 
 
 def test_a_misspelt_case_still_says_unknown():

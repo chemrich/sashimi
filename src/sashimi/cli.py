@@ -336,7 +336,15 @@ def _validate(args: argparse.Namespace) -> int:
     # while every installed backend was either a fast binary or `gb`; debye is a
     # reference-tier solver running in this process, so the giants cost minutes
     # apiece and a caller needs a way to say "not those" short of naming cases.
-    # The default is unchanged.
+    #
+    # The default is `fast` since 2026-08-16. `full` was measured at over 40
+    # minutes without finishing on a fully-installed machine — and that was true
+    # before debye registered, so it is not one backend's cost. Three things
+    # compound: the tier runs every case rather than the ones each backend
+    # recorded, the surface override below asks every backend all of them, and
+    # the per-case cost is the slowest backend's. A default nobody can wait out
+    # is a trap rather than a default; exhaustive protein-scale verification is
+    # the corpus's job, where the answers are recorded. `--tier full` is one flag.
     cases = _select(cases_for_tier(CaseTier(args.tier)), args.case)
     names, excluded = _backends_supporting(names, model, explicit=bool(args.backend))
     if len(names) < MIN_BACKENDS:
@@ -474,11 +482,12 @@ def build_parser() -> argparse.ArgumentParser:
     validator.add_argument(
         "--tier",
         choices=[t.value for t in CaseTier],
-        default=CaseTier.FULL.value,
+        default=CaseTier.FAST.value,
         help=(
-            "how much of the corpus to compare; cumulative (default: full). "
+            "how much of the corpus to compare; cumulative (default: fast). "
             "Cost scales with the slowest backend selected, so an in-process "
-            "solver on the 8,279-atom cases is minutes each"
+            "solver on the 8,279-atom cases is minutes each — `--tier full` is "
+            "every case, and on a fully-installed machine that is not minutes"
         ),
     )
     validator.add_argument(

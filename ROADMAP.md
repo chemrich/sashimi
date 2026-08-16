@@ -2837,6 +2837,50 @@ the only environment in which debye's central claim can even be stated.
 Sashimi itself should go quiet after this — a wrapper that needs constant
 attention has failed at its one job.
 
+### `sashimi validate` defaults to the fast tier
+
+**Decided 2026-08-16 by Charlie, and taken as its own change rather than folded
+into M6.** `validate` with no arguments now compares the **fast** tier — 40 of
+the 98 cases — where it previously ran the whole manifest.
+
+**The measurement that forced it, and the part that is easy to get wrong.**
+`--tier full` runs **over 40 minutes without finishing** on a fully-installed
+machine. Registering debye at M5 is the obvious suspect and is *not* the cause:
+the pre-M5 backend set (apbs + delphi + tabipb + gb) was already past 40 minutes
+on `--tier standard`. Three things compound, none of them new and none of them
+one backend's:
+
+- `validate` never respected tiers at all — it iterated `MANIFEST`
+  unconditionally, and `--tier` only exists because M5 added it;
+- it **overrides every case's surface model** to a shared one, so it asks each
+  backend all 98 cases rather than the ones that backend recorded, `mache`
+  included;
+- per-case cost is the *slowest* backend's, which is TABI-PB meshing every
+  structure as much as it is debye solving in-process.
+
+The new default is **36.0 s** with all five backends installed (single run, busy
+machine; the 40 minutes is a floor rather than a measurement, since it never
+finished). `--tier full` is one flag away and unchanged.
+
+**Why `fast` and not a middle tier.** `validate` re-solves everything and has no
+recordings to fall back on, which is the difference from `corpus verify`:
+exhaustive protein-scale verification is the *corpus's* job, where the answers
+are recorded and a diff means something. `validate` was never a substitute for
+that, and a default nobody can wait out is a trap rather than a default — it
+teaches callers that the tool does not work. The guard
+(`test_validate_defaults_to_the_cheapest_tier`) asserts the default is the
+smallest tier the corpus offers rather than naming `fast`, so a new cheaper tier
+moves it and widening it again means deleting the test on purpose.
+
+*Two things this does not fix, both visible in the default run and both
+pre-existing.* 27 of the 40 fast cases come back `SKIP` with everything
+installed — almost all of them TABI-PB declining a structure with fewer than
+four atoms, which is the Born ion and every variant of it — so the default
+compares 13 cases and says so. And `peptide-low-solvent-dielectric` still
+disagrees: the three finite-difference backends land within 1.8% while TABI-PB
+reads 19.4% away and `gb` 46.6%, so the run exits non-zero on a fully-installed
+machine exactly as it did before this change.
+
 ### The order changed: functionality before shipping
 
 **2026-08-12, at Charlie's direction.** sashimi was born out of early protean

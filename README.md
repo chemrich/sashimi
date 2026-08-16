@@ -293,7 +293,8 @@ neither recording could alone — the two reference-tier families agree to
 With two backends installed, they can be checked against *each other*:
 
 ```sh
-sashimi validate                   # every case, every installed backend
+sashimi validate                   # the fast tier, every installed backend
+sashimi validate --tier full       # every case; minutes to tens of minutes
 sashimi validate --backend apbs --backend delphi --surface molecular
 ```
 
