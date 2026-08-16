@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=2.0",
+    "fastmcp>=3.4.7",
     "numpy>=2.0",
     # Structure preparation. Pure Python, so PyPI is the whole story here —
     # unlike APBS, which uv cannot install and which comes from the system
@@ -37,7 +37,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "mypy>=1.18",
-    "pre-commit>=4.0",
+    "pre-commit>=4.6.2",
     "pytest>=8.0",
     "pytest-asyncio>=1.0",
     "ruff>=0.14",
