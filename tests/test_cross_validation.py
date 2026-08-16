@@ -10,8 +10,15 @@ discipline of section 8 rather than a detail. Surface definition moves a
 dipeptide's solvation energy across 25.7% on this code, so a spread computed
 between an APBS `smoothed-molecular` and a DelPhi `molecular` would be a
 modelling difference misreported as a solver disagreement — worse than no
-number. `comparable_surface_models()` is the precondition for *which model* to compare
+number. `shared_models()` below is the precondition for *which model* to compare
 on, and this file skips entirely rather than inventing a comparison.
+
+**That precondition has to be about this pair**, and until M5 it was not: it
+called `comparable_surface_models()`, which reports what *any* two installed
+backends share. The two coincided until debye registered and made
+`van-der-waals` comparable between APBS and debye, at which point CI's pyDelPhi
+leg was handed a surface it refuses by name. A latent bug a fifth backend
+exposed rather than caused.
 
 It is not the precondition for whether the comparison can run at all, and
 reading it as one was a bug that survived from phase 7 to 2026-08-12. That
@@ -42,7 +49,7 @@ from pathlib import Path
 import pytest
 
 from sashimi.apbs import ApbsSolver, discover_apbs
-from sashimi.capabilities import comparable_surface_models
+from sashimi.backends import reports
 from sashimi.delphi import DelphiSolver, discover_delphi
 from sashimi.delphi.discover import DelphiFlavour
 from sashimi.pqr import parse_pqr, read_pqr
@@ -94,7 +101,30 @@ NO_SHARED_MODEL = (
 
 
 def shared_models() -> list[SurfaceModel]:
-    return [SurfaceModel(name) for name in comparable_surface_models()]
+    """The models *these two* backends share — a different question from
+    `comparable_surface_models()`, which this used to call.
+
+    That helper reports what any two installed backends have in common, which is
+    the right question for `sashimi_capabilities` and the wrong one here: every
+    comparison in this file is APBS against DelPhi specifically. The two answers
+    coincided until debye registered at M5 and made `van-der-waals` comparable —
+    APBS and debye both build it — at which point this file began handing
+    pyDelPhi, which has no van der Waals boundary, a request it refuses by name.
+
+    The failure was a *latent* one that a fifth backend exposed rather than
+    caused, and it is the same shape `comparable_surface_models` documents in
+    its own docstring: a set computed across the whole registry, used as though
+    it described one pair.
+    """
+    available = {
+        report.name: set(report.surface_models) for report in reports() if report.available
+    }
+    if not {"apbs", "delphi"} <= available.keys():
+        return []
+    return sorted(
+        (SurfaceModel(name) for name in available["apbs"] & available["delphi"]),
+        key=lambda model: model.value,
+    )
 
 
 @pytest.fixture(scope="module")

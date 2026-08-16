@@ -261,6 +261,48 @@ def _gb_report() -> BackendReport:
     )
 
 
+def _debye_report() -> BackendReport:
+    """debye's state: the second backend with nothing to discover, and the first
+    in the *reference* tier that needs no binary.
+
+    That combination is why ROADMAP.md section 12 exists. `gb` needs nothing
+    installed but approximates the equation; every other backend that
+    discretizes it needs a compiled program. debye is both, so a consumer with
+    no APBS gets a real Poisson-Boltzmann answer rather than known-wrong
+    physics.
+
+    **It answers the two sharp boundaries only, and that is a decision rather
+    than a gap.** `smoothed-molecular` is APBS's harmonic averaging and
+    `gaussian` is DelPhi's; reproducing either would be claiming another code's
+    discretization rather than the equation. Callers see that here, in
+    `surface_models`, which is also what `corpus build`/`verify` read to tell a
+    principled refusal from a missing recording.
+    """
+    from sashimi.debye import BACKEND_VERSION, DebyeOptions  # noqa: PLC0415
+    from sashimi.debye.options import SUPPORTED_SURFACES  # noqa: PLC0415
+
+    options = DebyeOptions()
+    return BackendReport(
+        name="debye",
+        available=True,
+        family="finite-difference",
+        version=BACKEND_VERSION,
+        detail="in process; no binary, nothing to install",
+        surface_models=tuple(sorted(m.value for m in SUPPORTED_SURFACES)),
+        equations=(Equation.LINEAR.value,),
+        accuracy_tier=AccuracyTier.REFERENCE.value,
+        extras={
+            "returns": "polar solvation energy and a potential grid",
+            "discretization": (
+                "finite volume, dielectric at face centres, cloud-in-cell charge "
+                "assignment, multigrid-preconditioned CG"
+            ),
+            "boundary_condition": "multiple Debye-Huckel on the box face",
+            "tolerance": options.tolerance,
+        },
+    )
+
+
 # --- how each backend is built -----------------------------------------------
 
 
@@ -288,11 +330,23 @@ def _build_gb() -> Solver[Any]:
     return GbSolver()
 
 
+def _build_debye() -> Solver[Any]:
+    from sashimi.debye import DebyeSolver  # noqa: PLC0415
+
+    return DebyeSolver()
+
+
 # --- what each backend would cost, and what it requires ----------------------
 
 
 def _apbs_size_grid(structure: PQRData, spec: GridSpec) -> SizedGrid:
     from sashimi.apbs.grid import size_grid  # noqa: PLC0415
+
+    return size_grid(structure, spec)
+
+
+def _debye_size_grid(structure: PQRData, spec: GridSpec) -> SizedGrid:
+    from sashimi.debye.grid import size_grid  # noqa: PLC0415
 
     return size_grid(structure, spec)
 
@@ -371,9 +425,9 @@ class BackendEntry:
 
 
 # Registry order is report order, which is roughly the order the backends
-# arrived and the order §8's table lists them. debye registers here when it
-# exists, and that is the whole edit — `--backend`, `sashimi_solve` and
-# `sashimi_capabilities` all read from this.
+# arrived and the order §8's table lists them. debye joined at M5 and it *was*
+# the whole edit — `--backend`, `sashimi_solve` and `sashimi_capabilities` all
+# read from this, and none of them needed a line.
 REGISTRY: dict[str, BackendEntry] = {
     "apbs": BackendEntry(
         "apbs",
@@ -397,6 +451,13 @@ REGISTRY: dict[str, BackendEntry] = {
         preconditions=_tabipb_preconditions,
     ),
     "gb": BackendEntry("gb", SolverFamily.ANALYTIC, _build_gb, _gb_report),
+    "debye": BackendEntry(
+        "debye",
+        SolverFamily.FINITE_DIFFERENCE,
+        _build_debye,
+        _debye_report,
+        size_grid=_debye_size_grid,
+    ),
 }
 
 

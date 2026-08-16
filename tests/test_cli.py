@@ -9,12 +9,22 @@ means *installed* ones.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 from typing import Any
 
 import pytest
 
-from sashimi.cli import _backends_supporting, _select, _validate
-from sashimi.corpus import CaseTier, cases_for_tier
+from sashimi import backends
+from sashimi.backends import BackendReport
+from sashimi.cli import _backends_supporting, _refuses, _select, _validate
+from sashimi.corpus import (
+    CORPUS_DIR,
+    MANIFEST,
+    ROOT_BACKEND,
+    CaseTier,
+    cases_for_tier,
+    corpus_dir_for,
+)
 from sashimi.protocol import SurfaceModel
 
 
@@ -131,3 +141,67 @@ def test_a_misspelt_case_still_says_unknown():
         _select(cases_for_tier(CaseTier.FULL), ["lysozime"])
 
     assert "unknown case" in str(caught.value)
+
+
+# --- where a backend's recordings go, and what a refusal means (M5) ----------
+
+
+def test_a_backends_recordings_go_to_its_own_directory():
+    """The footgun M5 removed, pinned so it cannot come back.
+
+    `summary_path` used to ignore `--backend` and default to the corpus root,
+    which is APBS's. So `corpus build --backend delphi` wrote DelPhi's answers
+    into APBS's files unless the caller remembered `--directory`, and it failed
+    safe only where APBS had already recorded — printing `skip (exists)` instead
+    of overwriting. On any case APBS had not recorded, it filed a wrong answer
+    silently. Every backend the registry knows is checked, so a sixth one cannot
+    arrive without a home.
+    """
+    assert corpus_dir_for(ROOT_BACKEND) == CORPUS_DIR
+    for name in backends.names():
+        expected = CORPUS_DIR if name == ROOT_BACKEND else CORPUS_DIR / name
+        assert corpus_dir_for(name) == expected
+    assert len({corpus_dir_for(n) for n in backends.names()}) == len(backends.names())
+
+
+def test_a_case_a_backend_refuses_is_not_a_missing_recording():
+    """`n/a` and MISS are different facts and had the same symptom.
+
+    debye declines `smoothed-molecular` and `gaussian` on purpose — they are
+    APBS's and DelPhi's discretizations — so a third of the corpus has no debye
+    recording and never will. Counting those as discrepancies made a
+    partial-coverage backend permanently red, which is what put M5's stated exit
+    criterion out of reach.
+
+    Read from the backend's published report rather than a table here, so this
+    cannot drift from what `sashimi_capabilities` tells a caller.
+    """
+    smoothed = next(
+        c for c in MANIFEST if c.solvent.surface_model is SurfaceModel.SMOOTHED_MOLECULAR
+    )
+    sharp = next(c for c in MANIFEST if c.solvent.surface_model is SurfaceModel.VAN_DER_WAALS)
+
+    assert _refuses("debye", smoothed)
+    assert not _refuses("debye", sharp)
+
+
+def test_an_unavailable_backend_is_not_mistaken_for_a_refusing_one():
+    """Conservative where it cannot tell, which is the DelPhi-shaped trap.
+
+    An undiscoverable DelPhi reports *no* surface models, because which ones it
+    has depends on the flavour found. Reading that as "refuses everything" would
+    turn a missing binary into a clean bill of health for a backend with no
+    recordings at all, so an unavailable backend falls through to the ordinary
+    missing-recording path.
+    """
+    entry = backends.REGISTRY["delphi"]
+    hidden = BackendReport("delphi", available=False, family="finite-difference")
+    case = next(c for c in MANIFEST if c.solvent.surface_model is SurfaceModel.MOLECULAR)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(
+            backends.REGISTRY,
+            "delphi",
+            dataclasses.replace(entry, describe=lambda: hidden),
+        )
+        assert not _refuses("delphi", case)

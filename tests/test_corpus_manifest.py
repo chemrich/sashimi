@@ -19,11 +19,13 @@ import numpy as np
 import pytest
 
 import sashimi.corpus
+from sashimi import backends
 from sashimi.analytic import born_solvation_energy
 from sashimi.apbs.grid import size_grid
 from sashimi.corpus import (
     CORPUS_DIR,
     MANIFEST,
+    ROOT_BACKEND,
     TIER_ORDER,
     AnalyticReference,
     Case,
@@ -31,6 +33,7 @@ from sashimi.corpus import (
     _analytic_field_summary,
     build_case,
     cases_for_tier,
+    corpus_dir_for,
     load_summary,
     verify_case,
 )
@@ -334,32 +337,46 @@ def test_the_tight_delphi_tolerances_are_actually_reaching_delphi():
 def test_the_debye_tolerances_are_actually_reaching_debye():
     """The same guard for the other tight key, which had no equivalent.
 
-    The DelPhi version above reads its identity out of the recordings. debye has
-    none — it is not registered until M5 — so this reads the identity off the
-    solver instead, which is the same coupling from the other end: if
-    `DebyeSolver.label` stops starting with `debye`, every milestone bar in the
-    manifest reverts to the shared tolerance that exists to accommodate APBS, and
-    M1's and M2's gates go green by falling back. Nothing asserted that for the
-    `_born` cases at all; M2's own tests happened to cover its three rungs.
+    If `DebyeSolver.label` stops starting with `debye`, every bar in the
+    manifest reverts to the shared tolerance that exists to accommodate APBS,
+    and M1's and M2's gates go green by falling back. Nothing asserted that for
+    the `_born` cases at all; M2's own tests happened to cover its three rungs.
+
+    **The assertion is that the declared number is the one applied, not that it
+    is tighter.** It was written as `rtol_for(label) < rtol` while every
+    per-backend tolerance in the manifest happened to tighten, which made
+    "tighter" look like the property being guarded. It is not — the property is
+    that the key *matches*, and M5 produced the first widening entry:
+    `born-ion-molecular-r4`, where APBS relaxes the request to 0.4375 A and
+    debye solves the 0.5 it was asked for, so debye's honest 1.504% sits above
+    the 1% APBS earns on a finer lattice. Comparing against `rtol` could not
+    tell that from a mistyped key; comparing against the declared value can.
 
     Derived from the manifest rather than from a list, per the guards file's
     second lesson: a case that gains a `debye_rtol` joins this automatically.
     """
     label = DebyeSolver().label
-    checked = 0
+    checked = tightened = 0
     for case in MANIFEST:
         reference = case.analytic
-        if reference is None or "debye" not in dict(reference.per_backend_rtol):
+        declared = dict(reference.per_backend_rtol).get("debye") if reference else None
+        if reference is None or declared is None:
             continue
-        assert reference.rtol_for(label) < reference.rtol, (
-            f"{case.name}: {label!r} did not match the 'debye' prefix, so its milestone "
-            f"bar fell back to the shared {reference.rtol}"
+        assert reference.rtol_for(label) == declared, (
+            f"{case.name}: {label!r} did not match the 'debye' prefix, so its bar "
+            f"fell back to the shared {reference.rtol} instead of the declared {declared}"
         )
         checked += 1
+        tightened += declared < reference.rtol
 
     assert checked >= 5, (
         f"only {checked} case(s) carry a debye bar; M1's Born pair and M2's three "
         "Kirkwood rungs should all be here"
+    )
+    assert tightened >= 5, (
+        f"only {tightened} debye bar(s) are tighter than the shared tolerance. The "
+        "milestone bars must be: a gate at the tolerance APBS needs is a gate that "
+        "cannot fail."
     )
 
 
@@ -645,10 +662,14 @@ def test_an_analytic_reference_records_how_it_was_derived():
 # `AccuracyTier` claims a reference tier and an approximate one behave
 # differently in kind, and these files are the measurement of that claim.
 
+# Derived from the registry rather than listed, since M5 made the layout a
+# function of the backend name (`corpus.corpus_dir_for`). Two things follow that
+# a hand-maintained dict did not give: a backend registered without recording
+# anything fails `test_every_cross_backend_recording_answers_a_manifest_case`
+# on its empty directory instead of quietly sitting outside every check here,
+# and the mapping cannot disagree with the one `sashimi corpus build` writes to.
 CROSS_BACKEND_DIRECTORIES = {
-    "gb": Path("tests/corpus/gb"),
-    "tabipb": Path("tests/corpus/tabipb"),
-    "delphi": Path("tests/corpus/delphi"),
+    name: corpus_dir_for(name) for name in backends.names() if name != ROOT_BACKEND
 }
 
 # TABI-PB against APBS on every case both recorded. Measured 2026-08-12.
