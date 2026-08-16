@@ -294,7 +294,7 @@ With two backends installed, they can be checked against *each other*:
 
 ```sh
 sashimi validate                              # the fast tier, every installed backend
-sashimi validate --tier full                  # every case; over 40 minutes with five backends
+sashimi validate --tier full                  # every case; tens of minutes with five backends
 sashimi validate --case lysozyme-molecular    # a named case, whatever tier it is in
 sashimi validate --backend apbs --backend delphi --surface molecular
 ```

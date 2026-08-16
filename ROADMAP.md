@@ -2857,6 +2857,15 @@ The run it describes was necessarily over the whole manifest, and the exact
 invocation was not recorded at the time. What survives the correction is the
 attribution, which is what the paragraph is for: the cost predates debye.
 
+**The 40 minutes is still a floor from a run nobody let finish, so here is the
+cost from below instead, which is cheap to re-take.** A *single* 906-atom case
+through five backends — `sashimi validate --case fas2-molecular` — is
+**105.2 s**, against 36 s for all 40 cases of the fast tier put together. `full`
+adds 58 cases to that tier, among them proteins up to 8,279 atoms. **The tier
+boundary is not 98/40 = 2.5× of anything; it is where the proteins start**, and
+one of them costs three fast tiers. That is the whole argument, and it does not
+depend on the unfinished run.
+
 Three things compound, none of them new and none of them one backend's:
 
 - `validate` never respected tiers at all — it iterated `MANIFEST`
