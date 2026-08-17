@@ -2823,7 +2823,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | M4 ✅ | Solvent-excluded surface | **met**: the probe's worth, `(E_molecular − E_vdw)/\|E_vdw\|`, with debye **no further from APBS than DelPhi C++ is** — relational, so it carries no constant and cannot be met by drifting toward either incumbent. **Passes on all twelve real structures measured, 906 → 8,279 atoms**, and debye lands *strictly between* the two incumbents on every one, 2–8× closer to APBS. The original criterion here — "inside the 2.3% band APBS and DelPhi already occupy" — was **wrong and is retracted**: that 2.3% traced to a passing remark about pyDelPhi in §7, not to a measurement, and across the 33 shared `molecular` cases the band is 0.41%–5.74%. Needed nine new cases first, the fourth milestone in a row to find its criterion unstateable by the corpus it had — every closed-form case is blind to the probe, because a lone convex sphere's SES *is* that sphere. **Not below ~900 atoms**, where the probe is worth less than the lattice swing around it: recorded, as M2 and M3 each did |
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
-| M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone** |
+| M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. Revisit when fractional-volume dielectric averaging damps the oscillation. See the section below |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
@@ -2952,6 +2952,112 @@ finite-difference backends land within 1.8% while TABI-PB reads 19.4% away and
 `gb` 46.6% — so the default run exits non-zero on a fully-installed machine
 exactly as it did before this change. Now documented in the README, since the
 old default never finished and nobody reached the verdict.
+
+### M6 — the map is loadable, and the residue axis is measured rather than gated
+
+**2026-08-17.** M6 has two halves and they turned out to need different
+treatment, which is the milestone's main result rather than an inconvenience.
+
+#### The DX half: gated, and the circularity removed first
+
+`sashimi.dx`, `sashimi.analysis.residue_potentials` and debye's
+`want_potential` path all existed before M6 started, so this half was never a
+construction. It was an *evidence* problem: the round-trip test proves our
+reader accepts our writer, which says nothing about a viewer we do not control.
+
+The non-circular version: a real **APBS 3.4.1-written `.dx`** was intercepted
+before its temp directory was cleaned, read with our reader — validating the
+reader against an independent producer — and that same grid written back out
+with our writer. Diffed with whitespace normalised, **exactly one line of the
+first eleven differed**, the comment, and ours was the only file of the two
+carrying a non-ASCII byte (an em dash). Fixed and guarded in
+`test_written_dx_is_pure_ascii_even_with_a_comment`; the pre-existing header
+test never passed a `comment`, the only path that can introduce one.
+
+So the claim is not "our round-trip passes" but **"our file is structurally the
+file those viewers already read"**. *Not claimed: that Mol* loads it.* That
+needs a viewer in the loop, which this repo cannot provide, and saying so is
+the difference between M6 being met and M6 being asserted.
+
+#### The residue half: debye is inside the band, and the band is noise
+
+The stated criterion — "residue potentials on a real protein inside the
+cross-backend band" — is **met by measurement**. It is *not* turned into a gate,
+decided 2026-08-17 by Charlie on the recommendation below. All numbers on
+`fas2-molecular`, 906 atoms, 63 residues:
+
+| comparison | median | max |
+|---|---|---|
+| APBS against *itself*, padding 8→11 Å | 0.49 kT/e | 2.12 |
+| debye against *itself*, padding 8→11 Å | 0.66 kT/e | 3.18 |
+| **debye against APBS**, common lattice | **0.32 kT/e** | 3.73 |
+| debye against APBS at h ≈ 0.5 / 0.4 / 0.35 | 0.43 / 0.49 / 0.43 | — |
+
+| rank comparison | Spearman | top-10 overlap |
+|---|---|---|
+| APBS against itself, padding 8→11 Å | ≥ 0.9916 | 9/10 |
+| debye against itself, padding 8→11 Å | ≥ 0.9783 | 8/10 |
+| debye against APBS | 0.9794–0.9842 | 7–8/10 |
+
+**Every row says the same thing: the disagreement between solvers is the size
+of each solver's own grid noise.** debye is not failing — the quantity is
+dominated by discretization, not by which solver computes it. Two consequences
+that decided the treatment:
+
+- **The obvious relational bar has the wrong comparator.** "As well as APBS
+  agrees with itself" *fails* (0.9794 < 0.9916). The comparator has to be the
+  noisier participant, since a cross-solver difference cannot be expected to
+  beat the noise of a solver inside it. That bar — debye against APBS ≥ debye
+  against itself — passes by **0.0011**. A gate with that margin goes red for
+  reasons unrelated to debye, which is §7's "check that cannot fail" inverted:
+  a check that cannot *pass* reliably teaches as little as one that cannot fail.
+- **Top-N is not gateable at all.** It is unstable *within* one backend — APBS
+  drops to 9/10 against itself across a box change, debye to 8/10. An earlier
+  draft of this gate proposed "the same top-10 set"; it would have been flaky by
+  construction.
+
+So M6 gates the DX half, records this one, and `tests/test_debye_m6.py` pins the
+relationship the way M3 pinned its neutral solute — **if debye ever becomes
+clearly better than the noise, the pin notices and says to revisit rather than
+absorbing it silently.** That is what makes "revisit after fractional-volume
+dielectric averaging" a mechanism rather than an intention.
+
+#### Three findings that outlive M6
+
+- **A three-way pinned lattice is impossible on a real protein, structurally.**
+  DelPhi's grid is *isotropic* — one `scale`, 0.498 Å on every axis — where APBS
+  and debye derive per-axis spacing from the bounding box. Over paddings
+  5.0–25.0 Å: APBS/debye share one lattice (padding 25), DelPhi shares none with
+  either. **M1b's common-lattice recipe worked because Born ions are spheres**
+  and give cubic boxes; it does not transfer to a protein, and any future
+  cross-backend field gate has to know that before it is written.
+- **The control that separates phase from box cannot be run here.** It needs one
+  spacing reachable from two different paddings; searching the whole
+  `(padding, resolution)` space there are **zero**, for either backend. M1b
+  separated them on a sphere and that separation is simply unavailable at
+  protein scale.
+- **`max_points` clamping is both the trap and the only route to a common
+  lattice.** APBS at resolution 0.35 and 0.30 returns *identical* residue
+  potentials — dime (161,161,161) = 4,173,281 = `max_points`, the same grid
+  solved twice — which was one sentence away from being reported as "APBS has
+  converged", the same trap PR #38 hit and recorded. The tell is an implausibly
+  perfect zero; the check is to print the resolved shape beside every row of a
+  convergence study. The same clamp is what puts debye and APBS on a
+  bit-identical lattice — spacing, origin and shape all equal — at resolution
+  0.3, which the padding scan says never otherwise happens.
+
+#### The timings, recorded here so M7 starts from a measurement
+
+Same protein, same settings, this machine: **APBS 6.0 s against debye 39.1 s at
+h ≈ 0.5, and 16.9 s against 85.2 s at h ≈ 0.3** — roughly 5–6×. debye is the
+backend with no binary, so it is the one protean would ship by default: **on the
+machines that most need sashimi, sashimi is at its slowest.** M6's accuracy
+numbers say the residue axis is limited by discretization rather than by the
+solver, so the lead worth taking is the one that damps the oscillation *and*
+would let a coarser grid do — fractional-volume dielectric averaging, which
+`sashimi/debye/dielectric.py` names in its own docstring and which M4a dropped
+on cost/benefit rather than on infeasibility. M6 is the first evidence it would
+pay off on a quantity a user actually looks at.
 
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 
