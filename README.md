@@ -293,16 +293,29 @@ neither recording could alone — the two reference-tier families agree to
 With two backends installed, they can be checked against *each other*:
 
 ```sh
-sashimi validate                   # every case, every installed backend
+sashimi validate                              # the fast tier, every installed backend
+sashimi validate --tier full                  # every case; tens of minutes with five backends
+sashimi validate --case lysozyme-molecular    # a named case, whatever tier it is in
 sashimi validate --backend apbs --backend delphi --surface molecular
 ```
 
 ```
-ok    born-ion-coarse   2 backends agree: 2.30% spread (-234.000 to -228.609 kJ/mol),
-                        potential RMSD 0.8185 kT/e over 200 pts
-        apbs           -234.000 kJ/mol  (polar-solvation)
-        delphi         -228.609 kJ/mol  (polar-solvation)
+  ok    peptide-default          4 backends agree: 4.21% spread (-218.628 to -209.422 kJ/mol,
+                                 tolerance 10%); approximations as documented from the
+                                 reference: gb 5.55% (tolerance 15%)
+          apbs           -214.196 kJ/mol  (polar-solvation)
+          delphi         -209.422 kJ/mol  (polar-solvation)
+          tabipb         -217.361 kJ/mol  (polar-solvation)
+          gb             -226.839 kJ/mol  (polar-solvation)  [approximate, 5.55% from reference]
+          debye          -218.628 kJ/mol  (polar-solvation)
 ```
+
+`validate` **exits non-zero when any compared case disagrees**, which on a
+fully-installed machine today means `peptide-low-solvent-dielectric`: the three
+finite-difference backends land within 1.8% while TABI-PB reads 19.4% away and
+`gb` 46.6%. That is a real result about a low solvent dielectric, not a broken
+install. Cases no backend pair can compare — a Born ion has too few atoms for
+TABI-PB to mesh — are reported as `SKIP` and counted separately.
 
 Most of `validate` is about **refusing to answer**. A spread only means "the
 solvers disagree" if the surface model, the equation and the *reported energy

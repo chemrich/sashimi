@@ -16,7 +16,7 @@ import pytest
 
 from sashimi import backends
 from sashimi.backends import BackendReport
-from sashimi.cli import _backends_supporting, _refuses, _select, _validate
+from sashimi.cli import _backends_supporting, _refuses, _select, _validate, build_parser
 from sashimi.corpus import (
     CORPUS_DIR,
     MANIFEST,
@@ -25,7 +25,8 @@ from sashimi.corpus import (
     cases_for_tier,
     corpus_dir_for,
 )
-from sashimi.protocol import SurfaceModel
+from sashimi.errors import SashimiError
+from sashimi.protocol import SolverFamily, SurfaceModel
 
 
 def reports(*entries: dict[str, Any]) -> dict[str, Any]:
@@ -106,6 +107,10 @@ def test_validate_defaults_to_installed_backends_not_registered_ones(monkeypatch
         backend=None,
         surface=None,
         case=None,
+        # `_validate` reads this before it selects cases; leaving it out passed
+        # only because the backend-count guard raises first, so reordering the
+        # two would have turned this into an AttributeError.
+        tier=CaseTier.FAST.value,
         mesh_density=2.0,
         tolerance=0.1,
         approximation_tolerance=0.15,
@@ -132,8 +137,108 @@ def test_a_case_outside_the_tier_is_not_reported_as_unknown():
 
     message = str(caught.value)
     assert "not in the selected tier" in message
-    assert "--tier full" in message
+    assert "--tier full" in message  # and `lysozyme-molecular` is genuinely a full case
     assert "unknown case" not in message
+
+
+def test_the_tier_hint_names_the_tier_the_case_is_in():
+    """`--tier full` is the wrong advice for a `standard` case.
+
+    It bills the whole 98-case manifest to reach one case, and `validate`'s
+    default dropping to `fast` is what made this message common enough for the
+    difference to cost anyone time.
+    """
+    standard = next(case for case in MANIFEST if case.tier is CaseTier.STANDARD)
+
+    with pytest.raises(SystemExit) as caught:
+        _select(cases_for_tier(CaseTier.FAST), [standard.name])
+
+    message = str(caught.value)
+    assert "--tier standard" in message
+    assert "--tier full" not in message
+
+
+def test_validate_defaults_to_the_cheapest_tier():
+    """A default nobody can wait out is not a default.
+
+    `validate` gained `--tier` at M5 but kept defaulting to the whole manifest,
+    which was measured at over 40 minutes without finishing on a fully-installed
+    machine — and that predates debye, so it is not one backend's cost. Unlike
+    `corpus verify`, `validate` re-solves every case in every backend with no
+    recordings to fall back on, so its default has to be the cheapest tier the
+    corpus offers rather than merely a small one. Widening it again should mean
+    deleting this test on purpose.
+    """
+    parser = build_parser()
+    default = CaseTier(parser.parse_args(["validate"]).tier)
+
+    assert default is min(CaseTier, key=lambda tier: len(cases_for_tier(tier)))
+    assert len(cases_for_tier(default)) < len(MANIFEST)
+    assert CaseTier(parser.parse_args(["validate", "--tier", "full"]).tier) is CaseTier.FULL
+
+
+def _validate_asking(monkeypatch: Any, **overrides: Any) -> list[Any]:
+    """Run `_validate` with the solving stubbed out, and report what it asked.
+
+    The tier is a *cost* control, so the property worth pinning is which cases
+    reach a solver — not what argparse stored. Backends are named explicitly and
+    the surface is given, which is what lets this run with nothing installed.
+    """
+    asked: list[Any] = []
+
+    def stub_solver(_name: str) -> tuple[object, SolverFamily]:
+        return object(), SolverFamily.FINITE_DIFFERENCE
+
+    def record(system: Any, *_args: Any, **_kwargs: Any) -> None:
+        # Recorded, then refused: reaching a solver is the property under test,
+        # and refusing keeps this runnable with nothing installed.
+        asked.append(system)
+        raise SashimiError("stubbed out")
+
+    monkeypatch.setattr("sashimi.backends.solver_for", stub_solver)
+    monkeypatch.setattr("sashimi.cli.validate_system", record)
+
+    fields: dict[str, Any] = {
+        "backend": ["apbs", "delphi"],
+        "surface": "molecular",
+        "case": None,
+        "tier": CaseTier.FAST.value,
+        "mesh_density": 2.0,
+        "tolerance": 0.1,
+        "approximation_tolerance": 0.15,
+        "allow_mismatched": False,
+    }
+    _validate(argparse.Namespace(**{**fields, **overrides}))
+    return asked
+
+
+def test_the_tier_actually_bounds_what_validate_solves(monkeypatch, capsys):
+    """The flag has to reach the loop, not just the Namespace.
+
+    Pinning `parse_args(["validate"]).tier` alone would leave the pre-M5 bug —
+    `_select(MANIFEST, args.case)`, ignoring the tier entirely — green, which is
+    the exact regression this change exists to prevent.
+    """
+    asked = _validate_asking(monkeypatch)
+    capsys.readouterr()
+
+    assert len(asked) == len(cases_for_tier(CaseTier.FAST))
+    assert len(asked) < len(MANIFEST)
+
+
+def test_a_named_case_is_reachable_from_outside_the_default_tier(monkeypatch, capsys):
+    """Lowering a cost default must not lower reach.
+
+    The first cut of the `fast` default narrowed `--case` along with it, so
+    `sashimi validate --case lysozyme-molecular` — which worked before — started
+    exiting 1 for the 58 cases outside `fast`.
+    """
+    outside = next(case for case in MANIFEST if case.tier is not CaseTier.FAST)
+
+    asked = _validate_asking(monkeypatch, case=[outside.name])
+    capsys.readouterr()
+
+    assert len(asked) == 1
 
 
 def test_a_misspelt_case_still_says_unknown():

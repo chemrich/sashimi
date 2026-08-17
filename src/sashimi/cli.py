@@ -59,27 +59,38 @@ def _corpus_solver(name: str) -> tuple[Solver[Any], SolverFamily]:
     return backends.solver_for(name)
 
 
-def _select(cases: tuple[Case, ...], names: Sequence[str] | None) -> tuple[Case, ...]:
+def _select(
+    cases: tuple[Case, ...], names: Sequence[str] | None, *, tier_bounds_names: bool = True
+) -> tuple[Case, ...]:
     """The named cases, or every case in the tier.
 
     A case that exists but sits outside the selected tier is reported as such
     rather than as unknown. Those are different mistakes with different fixes —
     raise `--tier`, versus check the spelling — and calling both "unknown" cost
     a CI round trip: a measurement step named ten real cases, was told they did
-    not exist, and reported nothing while looking green.
+    not exist, and reported nothing while looking green. The hint names the tier
+    the case is *in*, because sending someone to `--tier full` to reach a
+    `standard` case bills them the whole manifest to run one case.
+
+    `tier_bounds_names=False` lets a named case come from outside the tier
+    entirely. `validate` needs that: its tier is purely a cost default, and
+    narrowing that default must not narrow what a caller is allowed to name.
     """
     if not names:
         return cases
-    known = {case.name: case for case in cases}
-    in_manifest = {case.name for case in MANIFEST}
+    pool = MANIFEST if not tier_bounds_names else cases
+    known = {case.name: case for case in pool}
+    tier_of = {case.name: case.tier.value for case in MANIFEST}
     unknown = [n for n in names if n not in known]
     if unknown:
-        out_of_tier = [n for n in unknown if n in in_manifest]
-        misspelt = [n for n in unknown if n not in in_manifest]
+        out_of_tier = [n for n in unknown if n in tier_of]
+        misspelt = [n for n in unknown if n not in tier_of]
         problems = []
         if out_of_tier:
+            wanted = sorted({tier_of[n] for n in out_of_tier})
             problems.append(
-                f"not in the selected tier: {', '.join(out_of_tier)} — pass --tier full"
+                f"not in the selected tier: {', '.join(out_of_tier)} — "
+                f"pass --tier {' or --tier '.join(wanted)}"
             )
         if misspelt:
             problems.append(
@@ -336,8 +347,21 @@ def _validate(args: argparse.Namespace) -> int:
     # while every installed backend was either a fast binary or `gb`; debye is a
     # reference-tier solver running in this process, so the giants cost minutes
     # apiece and a caller needs a way to say "not those" short of naming cases.
-    # The default is unchanged.
-    cases = _select(cases_for_tier(CaseTier(args.tier)), args.case)
+    #
+    # The default is `fast` since 2026-08-16. `full` was measured at over 40
+    # minutes without finishing on a fully-installed machine — and that was true
+    # before debye registered, so it is not one backend's cost. Three things
+    # compound: the tier runs every case rather than the ones each backend
+    # recorded, the surface override below asks every backend all of them, and
+    # the per-case cost is the slowest backend's. A default nobody can wait out
+    # is a trap rather than a default; exhaustive protein-scale verification is
+    # the corpus's job, where the answers are recorded. `--tier full` is one flag.
+    #
+    # `--case` is deliberately not bounded by that tier. The first cut of this
+    # change narrowed both at once, which silently broke `sashimi validate
+    # --case lysozyme-molecular` — a command that worked before it — for the 58
+    # cases outside `fast`. Lowering a cost default must not remove reach.
+    cases = _select(cases_for_tier(CaseTier(args.tier)), args.case, tier_bounds_names=False)
     names, excluded = _backends_supporting(names, model, explicit=bool(args.backend))
     if len(names) < MIN_BACKENDS:
         raise SystemExit(
@@ -474,11 +498,12 @@ def build_parser() -> argparse.ArgumentParser:
     validator.add_argument(
         "--tier",
         choices=[t.value for t in CaseTier],
-        default=CaseTier.FULL.value,
+        default=CaseTier.FAST.value,
         help=(
-            "how much of the corpus to compare; cumulative (default: full). "
+            "how much of the corpus to compare; cumulative (default: fast). "
             "Cost scales with the slowest backend selected, so an in-process "
-            "solver on the 8,279-atom cases is minutes each"
+            "solver on the 8,279-atom cases is minutes each — `--tier full` is "
+            "every case, and on a fully-installed machine that is not minutes"
         ),
     )
     validator.add_argument(

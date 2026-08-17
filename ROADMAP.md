@@ -2837,6 +2837,121 @@ the only environment in which debye's central claim can even be stated.
 Sashimi itself should go quiet after this — a wrapper that needs constant
 attention has failed at its one job.
 
+### `sashimi validate` defaults to the fast tier
+
+**Decided 2026-08-16 by Charlie, and taken as its own change rather than folded
+into M6.** `validate` with no arguments now compares the **fast** tier — 40 of
+the 98 cases — where it previously ran the whole manifest.
+
+**The measurement that forced it, and the part that is easy to get wrong.**
+`--tier full` runs **over 40 minutes without finishing** on a fully-installed
+machine. Registering debye at M5 is the obvious suspect and is *not* the cause:
+the four-backend set (apbs + delphi + tabipb + gb) was already past 40 minutes
+before debye was registered.
+
+*State that carefully, because the first draft of this entry did not.* It said
+the four-backend measurement was taken "on `--tier standard`", which the next
+bullet contradicts — pre-M5 `validate` had no `--tier` at all, and
+`git show a985ec8~1:src/sashimi/cli.py` shows `_select(MANIFEST, args.case)`.
+The run it describes was necessarily over the whole manifest, and the exact
+invocation was not recorded at the time. What survives the correction is the
+attribution, which is what the paragraph is for: the cost predates debye.
+
+**The 40 minutes is still a floor from a run nobody let finish, so here is the
+cost from below instead, which is cheap to re-take.** A *single* 906-atom case
+through five backends — `sashimi validate --case fas2-molecular` — is
+**105.2 s**, against 36 s for all 40 cases of the fast tier put together. `full`
+adds 58 cases to that tier, among them proteins up to 8,279 atoms. **The tier
+boundary is not 98/40 = 2.5× of anything; it is where the proteins start**, and
+one of them costs three fast tiers. That is the whole argument, and it does not
+depend on the unfinished run.
+
+Three things compound, none of them new and none of them one backend's:
+
+- `validate` never respected tiers at all — it iterated `MANIFEST`
+  unconditionally, and `--tier` only exists because M5 added it;
+- it **overrides every case's surface model** to a shared one, so it asks each
+  backend all 98 cases rather than the ones that backend recorded, `mache`
+  included;
+- per-case cost is the *slowest* backend's, which is TABI-PB meshing every
+  structure as much as it is debye solving in-process.
+
+The new default is **36.0 / 36.6 / 37.8 s** across three runs with all five
+backends installed. A review of this change measured **64.6 s** for the same
+command on the same machine under concurrent load, which is the useful caveat:
+the figure is load-sensitive to roughly a factor of two, and what carries the
+decision is the three orders of magnitude between it and `--tier full`, not the
+second digit. `--tier full` is one flag away and unchanged.
+
+**Why `fast` and not a middle tier.** `validate` re-solves everything and has no
+recordings to fall back on, which is the difference from `corpus verify`:
+exhaustive protein-scale verification is the *corpus's* job, where the answers
+are recorded and a diff means something. `validate` was never a substitute for
+that, and a default nobody can wait out is a trap rather than a default — it
+teaches callers that the tool does not work. The guard
+(`test_validate_defaults_to_the_cheapest_tier`) asserts the default is the
+smallest tier the corpus offers rather than naming `fast`, so a new cheaper tier
+moves it and widening it again means deleting the test on purpose.
+
+**The regression the first cut shipped, because the shape recurs.** Narrowing
+the default tier also narrowed `--case`: `sashimi validate --case
+lysozyme-molecular` had worked, and started exiting 1 for all 58 cases outside
+`fast`. **A cost default and a reach limit are different things, and one flag
+was doing both.** `_select` now takes `tier_bounds_names=False` for `validate`,
+whose tier is purely a cost knob. Caught in review, not by the suite — the
+original guard read `parse_args(["validate"]).tier` and never called
+`_validate`, so it would also have stayed green against the pre-M5 bug of
+ignoring the tier entirely. Two behavioural tests replace that reasoning: each
+reddens on its own mutation, checked.
+
+Related, and the same review: the out-of-tier hint said "pass `--tier full`"
+whatever tier the case was in, so reaching one `standard` case billed the whole
+98-case manifest. It names the case's own tier now. That message became common
+precisely because the default dropped.
+
+**Four things this change does not fix, all pre-existing, all measured.** They
+are recorded here rather than folded in, because each changes what `validate`
+*means* rather than what it costs, and the first is worth its own small PR:
+
+1. **One backend refusing a case discards every other backend's answer.**
+   `validate_system` raises, `_validate` catches `SashimiError` and drops the
+   case whole. That is why the default compares only **13 of its 40 cases**: 27
+   are TABI-PB declining a structure with fewer than four atoms — the Born ion
+   and every variant — after APBS and DelPhi have already solved it. `sashimi
+   validate --case methanol` shows it at its worst: four backends can answer, one
+   cannot mesh three atoms, and the run prints "Nothing was comparable".
+   `backends.get(name).check(system)` already answers "would this backend
+   decline" for free and `_refuses` already uses it, so dropping the *backend*
+   per case — skipping only if fewer than `MIN_BACKENDS` remain — would restore
+   the cases and cut the wasted solves.
+2. **The surface override collapses distinct cases into identical systems.** The
+   40 fast cases reduce to 18 distinct `System` values once `surface_model` is
+   overridden; of the 14 compared, 7 are distinct. `born-ion-coarse`,
+   `born-ion-molecular` and `born-ion-vdw` are one system solved three times.
+   Deduplicating helps `--tier full` far more than narrowing the default does.
+3. **Rows are labelled with a case name whose defining parameter was
+   overridden.** A `-vdw` row reports a molecular-surface number. The review
+   illustrated this with `born-ion-vdw` against `born-ion-molecular`, and that
+   is the one pair where it is harmless — M2 measured them identical to the last
+   digit (−233.9996297277) because an isolated convex sphere's SES *is* that
+   sphere, so the override changes nothing there. **`peptide-vdw` against
+   `peptide-molecular` is the real case**: M4 measured the probe worth +5.72% on
+   ALA-GLY, and `validate` prints both names against the same molecular number,
+   hiding exactly the quantity M4 gates on. The header discloses the surface
+   once; the rows underneath keep contradicting it.
+4. **The tier is defined by APBS wall time and `validate` pays the slowest
+   backend's.** `CaseTier`'s own docstring says the cost "is APBS's, which makes
+   it a statement about this backend and no other", which is why
+   `test_tabipb_solver.py` refuses to read a tier. So a case added to `fast`
+   because APBS solves it in 0.4 s can put minutes of TABI-PB meshing into the
+   default, and nothing catches it.
+
+And `peptide-low-solvent-dielectric` still disagrees — the three
+finite-difference backends land within 1.8% while TABI-PB reads 19.4% away and
+`gb` 46.6% — so the default run exits non-zero on a fully-installed machine
+exactly as it did before this change. Now documented in the README, since the
+old default never finished and nobody reached the verdict.
+
 ### The order changed: functionality before shipping
 
 **2026-08-12, at Charlie's direction.** sashimi was born out of early protean
