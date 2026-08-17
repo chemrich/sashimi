@@ -300,22 +300,31 @@ sashimi validate --backend apbs --backend delphi --surface molecular
 ```
 
 ```
-  ok    peptide-default          4 backends agree: 4.21% spread (-218.628 to -209.422 kJ/mol,
+  ok    born-ion-coarse          3 backends agree: 2.30% spread (-234.000 to -228.609 kJ/mol,
                                  tolerance 10%); approximations as documented from the
-                                 reference: gb 5.55% (tolerance 15%)
-          apbs           -214.196 kJ/mol  (polar-solvation)
-          delphi         -209.422 kJ/mol  (polar-solvation)
-          tabipb         -217.361 kJ/mol  (polar-solvation)
-          gb             -226.839 kJ/mol  (polar-solvation)  [approximate, 5.55% from reference]
-          debye          -218.628 kJ/mol  (polar-solvation)
+                                 reference: gb 1.76% (tolerance 15%)
+          apbs           -234.000 kJ/mol  (polar-solvation)
+          delphi         -228.609 kJ/mol  (polar-solvation)
+          gb             -235.681 kJ/mol  (polar-solvation)  [approximate, 1.76% from reference]
+          debye          -232.213 kJ/mol  (polar-solvation)
+          not asked: tabipb — tabipb needs at least 4 atoms to triangulate a surface and this structure has 1
+          same system as born-ion-molecular, born-ion-vdw once the molecular surface is applied — solved once
 ```
+
+Two lines there are the point of the tool. **`not asked`** means that backend
+declined *this* system and the others were compared without it — a boundary
+element solver has no mesh for a one-atom solute, and that is not a reason to
+throw away the answers of the four solvers that do. **`same system as`** means
+the named cases differ only in a surface model that `validate` had to override
+to compare across backends, so they are one question and were solved once;
+without that line their identical energies read as a measurement.
 
 `validate` **exits non-zero when any compared case disagrees**, which on a
 fully-installed machine today means `peptide-low-solvent-dielectric`: the three
 finite-difference backends land within 1.8% while TABI-PB reads 19.4% away and
 `gb` 46.6%. That is a real result about a low solvent dielectric, not a broken
-install. Cases no backend pair can compare — a Born ion has too few atoms for
-TABI-PB to mesh — are reported as `SKIP` and counted separately.
+install. A case is only `SKIP`ped when fewer than two backends can take it, or
+when one crashes on a structure it had accepted.
 
 Most of `validate` is about **refusing to answer**. A spread only means "the
 solvers disagree" if the surface model, the equation and the *reported energy

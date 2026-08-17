@@ -2911,7 +2911,8 @@ precisely because the default dropped.
 
 **Four things this change does not fix, all pre-existing, all measured.** They
 are recorded here rather than folded in, because each changes what `validate`
-*means* rather than what it costs, and the first is worth its own small PR:
+*means* rather than what it costs, and the first is worth its own small PR.
+**Items 1-3 were taken in that PR — see the section below; item 4 stands.**
 
 1. **One backend refusing a case discards every other backend's answer.**
    `validate_system` raises, `_validate` catches `SashimiError` and drops the
@@ -2951,6 +2952,56 @@ finite-difference backends land within 1.8% while TABI-PB reads 19.4% away and
 `gb` 46.6% — so the default run exits non-zero on a fully-installed machine
 exactly as it did before this change. Now documented in the README, since the
 old default never finished and nobody reached the verdict.
+
+### `validate` asks the backends that can answer — items 1–3 above, taken
+
+**Done 2026-08-16, at Charlie's direction, in its own PR as planned.** The three
+items that change what `validate` *means* are fixed together, because they turn
+out to be one question asked twice: **what is actually being compared, and who
+is comparing it.**
+
+**The result is more coverage for less time**, which is not the trade the
+recorded items implied. The default went from **13 cases compared in 36 s to 17
+in 26 s** — dedupe saves more than per-backend selection costs, and the one
+remaining `SKIP` is a genuine crash rather than a design refusal.
+
+- **A refusal drops the backend, not the case.** `_backends_answering` asks
+  every selected backend's published preconditions *before* anything solves, so
+  a boundary-element solver declining a one-atom solute no longer discards the
+  four finite-difference answers to the same question. A case is skipped only
+  when fewer than `MIN_BACKENDS` remain. **The row says `not asked: <backend> —
+  <reason>`**, because a backend that sat a case out must not read as one that
+  agreed.
+- **Identical systems are solved once and say so.** `_identical_systems` groups
+  by a content fingerprint; the row prints `same system as …`. The saying-so is
+  the half that matters — three identical rows read as a measurement of the
+  probe, and M4 measured the probe worth +5.72% on ALA-GLY, so "no difference"
+  is exactly the wrong conclusion to hand a reader.
+- **The fingerprint hashes array bytes, not `repr`.** `repr` elides a large
+  numpy array, so two proteins agreeing at the ends would share a fingerprint
+  and one would be reported under the other's name — the failure the grouping
+  exists to prevent, inverted. Guarded with a 2000-atom pair whose `repr`s are
+  equal and whose fingerprints differ.
+
+**The solve-time crash stays a case-level skip, and the distinction is
+deliberate.** `aspartate-residue` — TABI-PB aborting on a structure it accepted
+— cannot be predicted from preconditions, and by the time it surfaces the work
+is spent. A documented refusal and an unexpected crash are different events and
+now print differently.
+
+**Item 4 is not fixed and is not obviously fixable.** `CaseTier` encodes APBS
+wall time by construction and says so in its own docstring; `validate` pays the
+slowest backend's. Making the tier mean "cheap for every backend" would either
+re-tier the corpus against its documented meaning or need a second, per-backend
+cost model. Left as a known asymmetry, with the mitigation being that the
+default tier is now small enough that the worst case is bounded anyway.
+
+**A guard lesson, third occurrence in two PRs.** The first test written for the
+refusal fix called `_backends_answering` directly — so replacing `_validate`'s
+call to it with `selected, {}`, which reverts the entire change, left the suite
+green. **A helper test is not a wiring test.** The stub now records the backend
+*list* each solve was handed, and all three mutations redden. See
+[[sashimi-guards-that-guard-nothing]].
 
 ### The order changed: functionality before shipping
 

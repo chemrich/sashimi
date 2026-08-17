@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from sashimi import backends
 from sashimi.capabilities import comparable_surface_models, describe_capabilities
@@ -28,11 +31,12 @@ from sashimi.corpus import (
     write_summary,
 )
 from sashimi.errors import SashimiError, UnsupportedRequest
-from sashimi.protocol import Solver, SurfaceModel
+from sashimi.protocol import Solver, SurfaceModel, System
 from sashimi.validate import (
     DEFAULT_APPROXIMATION_TOLERANCE,
     DEFAULT_ENERGY_TOLERANCE,
     Backend,
+    Comparison,
     SolverFamily,
     validate_system,
 )
@@ -98,6 +102,115 @@ def _select(
             )
         raise SystemExit("\n".join(problems))
     return tuple(known[n] for n in names)
+
+
+def _system_fingerprint(system: System) -> str:
+    """A content hash of everything a solve depends on.
+
+    Hashed from the array *bytes* rather than from `repr`, which elides large
+    numpy arrays with `...` and would collude two different proteins into one
+    fingerprint. The scalar fields are stringified, which is exact for the enums
+    and floats they hold.
+    """
+    digest = hashlib.sha256()
+    for array in (system.structure.coords, system.structure.charges, system.structure.radii):
+        digest.update(np.ascontiguousarray(array, dtype=np.float64).tobytes())
+    digest.update(
+        repr(
+            (
+                system.solvent,
+                system.grid,
+                system.mesh_density,
+                system.want_energy,
+                system.want_potential,
+            )
+        ).encode()
+    )
+    return digest.hexdigest()
+
+
+def _identical_systems(
+    cases: tuple[Case, ...], systems: dict[str, System]
+) -> list[tuple[Case, tuple[str, ...]]]:
+    """Cases grouped by the system they resolve to, first name representing each.
+
+    `validate` overrides every case's surface model so that one question can go
+    to backends that do not share a model, and the side effect is that cases
+    which differ *only* in surface model become the same question. Measured on
+    the fast tier: 40 cases, 18 distinct systems — `born-ion-coarse`,
+    `born-ion-molecular` and `born-ion-vdw` are one system asked three times.
+
+    Solving each group once is the obvious half. The half that matters more is
+    that the collapse is now *visible*: the row says which other cases it
+    answers for, so nobody reads two identical energies as a measurement.
+    """
+    groups: dict[str, list[Case]] = {}
+    for case in cases:
+        groups.setdefault(_system_fingerprint(systems[case.name]), []).append(case)
+    return [(members[0], tuple(m.name for m in members[1:])) for members in groups.values()]
+
+
+def _backends_answering(
+    selected: list[Backend], system: System
+) -> tuple[list[Backend], dict[str, str]]:
+    """The backends that will take this system, and why the others will not.
+
+    Asked *before* anything solves, from the same preconditions
+    `sashimi_capabilities` publishes — so this costs no solve and cannot drift
+    from what the backend actually does.
+
+    **Dropping the backend rather than the case is the whole point.** TABI-PB
+    cannot mesh a three-atom solute; letting that discard APBS's and DelPhi's
+    answers to the same question threw away 27 of the fast tier's 40 cases over
+    a backend that was never going to be in them, after the others had already
+    solved. A comparison needs two backends, not every backend.
+    """
+    running, refused = [], {}
+    for backend in selected:
+        reasons = backends.get(backend.name).check(system)
+        if reasons:
+            # First sentence only. A precondition explains itself at length for
+            # someone who hit it head-on; here it is a footnote repeated under
+            # every case in the run, and the length is what stops it being read.
+            refused[backend.name] = reasons[0].split(". ")[0].rstrip(".")
+        else:
+            running.append(backend)
+    return running, refused
+
+
+def _print_case(
+    case: Case,
+    comparison: Comparison,
+    *,
+    refused: dict[str, str],
+    aliases: tuple[str, ...],
+    model: SurfaceModel,
+) -> None:
+    """One case's verdict, its per-backend energies, and what it stands for."""
+    marker = "ok   " if comparison.agrees else "DIFF "
+    print(f"  {marker} {case.name:<24} {comparison.summary()}")
+    for run in comparison.runs:
+        energy = f"{run.energy_kj_mol:12.3f}" if run.energy_kj_mol is not None else "          -"
+        deviation = comparison.approximation_deviation.get(run.name)
+        # Named on the row it belongs to: an approximation's distance from the
+        # reference is not part of the spread and must not read as if it were.
+        tier = f"  [{run.accuracy_tier}, {deviation:.2%} from reference]" if deviation else ""
+        print(f"          {run.name:<10} {energy} kJ/mol  ({run.energy_term}){tier}")
+    for name, why in refused.items():
+        # A backend that sat this case out is not a backend that agreed.
+        print(f"          not asked: {name} — {why}")
+    if aliases:
+        # Said out loud, because the row is labelled with one case name and the
+        # number answers all of them. Without it a reader compares the `-vdw`
+        # row against the `-molecular` row, sees no difference and concludes the
+        # probe is worth nothing — when the override put both on one surface and
+        # only one solve ever happened.
+        print(
+            f"          same system as {', '.join(aliases)} once the "
+            f"{model.value} surface is applied — solved once"
+        )
+    for note in comparison.notes:
+        print(f"          note: {note}")
 
 
 def _refuses(backend: str, case: Case) -> bool:
@@ -383,47 +496,53 @@ def _validate(args: argparse.Namespace) -> int:
     disagreed: list[str] = []
     incomparable: list[str] = []
 
-    for case in cases:
-        # `Case.system()` is the seam; this only overrides the two things a
-        # cross-solver run has to choose for itself — the shared surface model,
-        # and a mesh density the corpus has no opinion about. Potentials are off
-        # because a volume and a triangulated surface have nothing to compare.
-        system = dataclasses.replace(
+    # `Case.system()` is the seam; this only overrides the two things a
+    # cross-solver run has to choose for itself — the shared surface model, and
+    # a mesh density the corpus has no opinion about. Potentials are off because
+    # a volume and a triangulated surface have nothing to compare.
+    systems = {
+        case.name: dataclasses.replace(
             case.system(),
             solvent=dataclasses.replace(case.solvent, surface_model=model),
             mesh_density=args.mesh_density,
             want_potential=False,
         )
+        for case in cases
+    }
+    groups = _identical_systems(cases, systems)
+
+    for case, aliases in groups:
+        system = systems[case.name]
+        running, refused = _backends_answering(selected, system)
+        if len(running) < MIN_BACKENDS:
+            reasons = "; ".join(f"{name}: {why}" for name, why in refused.items())
+            print(
+                f"  SKIP  {case.name}: fewer than {MIN_BACKENDS} backends can answer — {reasons}\n"
+            )
+            incomparable.append(case.name)
+            continue
+
         try:
             comparison = validate_system(
                 system,
-                selected,
+                running,
                 tolerance=args.tolerance,
                 approximation_tolerance=args.approximation_tolerance,
                 allow_mismatch=args.allow_mismatched,
             )
         except SashimiError as exc:
+            # A precondition is asked above; this is the unpredictable half — a
+            # solver that crashes on a structure it accepted. Still a case-level
+            # skip, because the work is already spent by the time it surfaces.
             print(f"  SKIP  {case.name}: {exc}\n")
             incomparable.append(case.name)
             continue
 
-        marker = "ok   " if comparison.agrees else "DIFF "
-        print(f"  {marker} {case.name:<24} {comparison.summary()}")
-        for run in comparison.runs:
-            energy = (
-                f"{run.energy_kj_mol:12.3f}" if run.energy_kj_mol is not None else "          -"
-            )
-            deviation = comparison.approximation_deviation.get(run.name)
-            # Named on the row it belongs to: an approximation's distance from the
-            # reference is not part of the spread and must not read as if it were.
-            tier = f"  [{run.accuracy_tier}, {deviation:.2%} from reference]" if deviation else ""
-            print(f"          {run.name:<10} {energy} kJ/mol  ({run.energy_term}){tier}")
-        for note in comparison.notes:
-            print(f"          note: {note}")
+        _print_case(case, comparison, refused=refused, aliases=aliases, model=model)
         if not comparison.agrees:
             disagreed.append(case.name)
 
-    compared = len(cases) - len(incomparable)
+    compared = len(groups) - len(incomparable)
     print()
     if incomparable:
         # Not a failure on its own: refusing to compare incomparable things is
