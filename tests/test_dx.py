@@ -69,6 +69,24 @@ def test_written_header_matches_apbs_conventions(tmp_path):
     assert 'component "data" value 3' in text
 
 
+def test_written_dx_is_pure_ascii_even_with_a_comment(tmp_path):
+    """The consumer is a third-party parser we cannot test against.
+
+    Compared byte for byte with a file APBS 3.4.1 wrote for the same grid, our
+    output differed in exactly one line — the comment — and ours was the only
+    one of the two carrying a non-ASCII character. The comment is the sole path
+    that can introduce one, and nothing exercised it with a comment set, so the
+    em dash shipped. The guarantee worth holding is that our header is the
+    header APBS emits, since that is what viewers already read.
+    """
+    path = tmp_path / "p.dx"
+    write_dx(path, make_grid(), comment="debye fas2")
+
+    raw = path.read_bytes()
+    assert raw.decode("ascii")  # raises if any byte is non-ASCII
+    assert "debye fas2" in raw.decode("ascii")
+
+
 def test_rejects_truncated_data():
     truncated = APBS_HEADER.replace("7.000000e+00 8.000000e+00\n", "")
     with pytest.raises(ValueError, match="truncated"):

@@ -123,7 +123,14 @@ def write_dx(path: str | os.PathLike[str], grid: PotentialGrid, *, comment: str 
     hx, hy, hz = grid.spacing
 
     head = [
-        f"# Data from sashimi{(' — ' + comment) if comment else ''}",
+        # ASCII only, deliberately. Compared byte for byte against a file APBS
+        # 3.4.1 wrote, sashimi's DX differs in exactly one place — this comment
+        # — and it was the only line in either file carrying a non-ASCII
+        # character (an em dash). Every consumer of these maps is a third-party
+        # viewer whose parser we do not control and cannot test here, so the
+        # one thing worth guaranteeing is that our header is the header APBS
+        # emits, which those parsers already read.
+        f"# Data from sashimi{(': ' + comment) if comment else ''}",
         "#",
         "# POTENTIAL (kT/e)",
         "#",
