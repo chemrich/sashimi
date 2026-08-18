@@ -63,6 +63,11 @@ __all__ = [
 # used; the flag exists because the right number depends on the load.
 DEFAULT_REPEATS = 3
 
+# A baseline solve that has not finished in this long has hung rather than been
+# slow: the whole corpus at protein scale is minutes, and an interleaved run
+# blocked forever is indistinguishable from the instrument being broken.
+BASELINE_TIMEOUT = 3600
+
 
 @dataclass(frozen=True)
 class CaseSpec:
@@ -206,6 +211,8 @@ def compare_against(
     two sides sit adjacent in time. Which goes first inside a repeat does not
     matter; that they are never blocked apart does.
     """
+    if repeats < 1:
+        raise ValueError(f"repeats must be at least 1, got {repeats}")
     here: list[float] = []
     there: list[float] = []
     energy_here = 0.0
@@ -276,7 +283,8 @@ def _remote_sample(checkout: Path, spec: CaseSpec) -> tuple[float, float]:
         capture_output=True,
         text=True,
         cwd=checkout,
-        env={**os.environ},
+        env=_baseline_environment(),
+        timeout=BASELINE_TIMEOUT,
         check=False,
     )
     if completed.returncode != 0:
@@ -294,6 +302,24 @@ def _remote_sample(checkout: Path, spec: CaseSpec) -> tuple[float, float]:
     if report["energy"] is None:  # pragma: no cover - the request asks for energy
         raise SashimiError("the baseline checkout returned no energy")
     return float(report["best"]), float(report["energy"])
+
+
+def _baseline_environment() -> dict[str, str]:
+    """The parent environment with anything that could import *this* tree removed.
+
+    `PYTHONPATH` takes precedence over a project's own site-packages, so a
+    developer with `PYTHONPATH=$PWD/src` exported — ordinary for a src-layout
+    checkout — would have the baseline subprocess import the working tree and
+    measure it against itself. That failure is silent and it is the worst one
+    available here: it reads as ~1.000x with bit-identical energies, which is
+    exactly what a correct no-op change looks like, reported by the one tool
+    whose whole job is refusing to compare two different programs.
+
+    `VIRTUAL_ENV` goes for the same reason: `uv run` will warn and prefer the
+    project's environment, but leaving the parent's active is asking the child
+    to resolve a conflict it should never see.
+    """
+    return {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "VIRTUAL_ENV")}
 
 
 def render(measurement: Measurement, energy: float) -> str:

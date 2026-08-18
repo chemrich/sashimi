@@ -12,12 +12,18 @@ the last digit of an energy — and a tolerance here would pass exactly the bug
 the check exists for, which is the same reasoning `tests/test_bench.py` records
 for the instrument that measures it.
 
-**`RIM_BATCH` is the thing to be afraid of.** It is a memory bound with no
+**`PAIR_BATCH` is the thing to be afraid of.** It is a memory bound with no
 business in an answer, which is precisely the shape of constant this repo keeps
 catching after it has quietly become one: ROADMAP.md section 12 records a
 sampled surface where the sample count *was* the answer, and where 256 happened
 to match the reference. So the batch size is swept rather than reasoned about,
-at values that put one rim, a few rims, and every rim in a single batch.
+at values that force one rim per batch, a few, and every rim at once.
+
+It is counted in **pairs rather than rims** for a reason a review caught and the
+first draft had wrong: a rim count bounds nothing, because the pairs a rim
+expands to scale with node density. Batching a flat 2,000 rims peaked at 580 MB
+on fas2 at 0.5 A against 14 MB unbatched, and the comment above it claimed
+"tens of megabytes" — asserted rather than measured.
 """
 
 from __future__ import annotations
@@ -36,10 +42,11 @@ from sashimi.protocol import GridSpec, SolventModel, SurfaceModel
 # boundaries coincide and `undecided` comes back empty.
 PEPTIDE = "tests/data/ala-gly.pqr"
 
-# One rim per batch, a few, and more than exist. The first and last are the
-# interesting ones: at 1 every batch boundary is exercised, and at 100,000 the
-# loop runs once and the batching is bypassed entirely.
-BATCH_SIZES = (1, 3, 97, 100_000)
+# Pair budgets small enough to force one rim per batch, mid-range, and large
+# enough that every rim lands in one. The extremes are the interesting ones: at
+# 1 every batch boundary is exercised, and at 10^12 the loop runs once and the
+# batching is bypassed entirely.
+BATCH_SIZES = (1, 500, 50_000, 10**12)
 
 
 def _molecular_mask(batch: int | None = None, monkeypatch=None) -> np.ndarray:
@@ -47,28 +54,52 @@ def _molecular_mask(batch: int | None = None, monkeypatch=None) -> np.ndarray:
     solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
     axes = axis_coordinates(size_grid(structure, GridSpec()))
     if batch is not None and monkeypatch is not None:
-        monkeypatch.setattr(surface_module, "RIM_BATCH", batch)
+        monkeypatch.setattr(surface_module, "PAIR_BATCH", batch)
     return ReducedSurface(structure, solvent).inside(axes)
 
 
-def test_the_structure_actually_exercises_the_rim_loop():
+def _batch_count(budget: int, monkeypatch) -> int:
+    """How many batched queries the rim loop actually issues at this budget.
+
+    Counted by watching `near_many` rather than by re-deriving the weights the
+    loop computes, so the test cannot agree with a broken loop by making the
+    same mistake twice.
+    """
+    calls = 0
+    original = _Bins.near_many
+
+    def counting(self, centres, radii):
+        nonlocal calls
+        calls += 1
+        return original(self, centres, radii)
+
+    monkeypatch.setattr(_Bins, "near_many", counting)
+    monkeypatch.setattr(surface_module, "PAIR_BATCH", budget)
+    _molecular_mask()
+    return calls
+
+
+def test_the_structure_actually_exercises_the_rim_loop(monkeypatch):
     """Otherwise every test below passes by never running the code under test.
 
     The trap this repo keeps recording: a check that cannot fail. A structure
-    whose rims decide nothing would make the batch sweep unanimous for reasons
-    having nothing to do with batching.
+    whose rims decide nothing, or a sweep whose budgets all produce one batch,
+    would make the comparison unanimous for reasons having nothing to do with
+    batching.
     """
     structure = read_pqr(PEPTIDE)
     surface = ReducedSurface(structure, SolventModel(surface_model=SurfaceModel.MOLECULAR))
     assert len(surface.rims) > 1
-    # The sweep is only a sweep if it spans the boundary: some value has to
-    # force several batches and some value has to force exactly one.
-    assert min(BATCH_SIZES) < len(surface.rims) <= max(BATCH_SIZES)
+
+    # The sweep only sweeps if its extremes land on opposite sides: the smallest
+    # budget has to split the work and the largest has to not.
+    assert _batch_count(min(BATCH_SIZES), monkeypatch) > 1
+    assert _batch_count(max(BATCH_SIZES), monkeypatch) == 1
 
 
 @pytest.mark.parametrize("batch", BATCH_SIZES)
 def test_the_batch_size_does_not_move_a_single_node(batch: int, monkeypatch):
-    """`RIM_BATCH` bounds a temporary, so it must be invisible in the answer.
+    """`PAIR_BATCH` bounds a temporary, so it must be invisible in the answer.
 
     Compared node by node rather than by a count of solute nodes: two masks can
     hold the same number of nodes and disagree about which, and a count would

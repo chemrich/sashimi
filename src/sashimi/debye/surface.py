@@ -108,13 +108,33 @@ DEGENERATE = 1e-12
 # higher-numbered neighbours before it can raise one at all.
 PAIRS_PER_SEAT = 2
 
-# How many rims are queried at once. A memory bound on one batch, not an
-# answer: at protein scale it is ~850,000 (rim, node) pairs, tens of megabytes,
-# and `tests/test_debye_m7.py` solves a real structure at several values and
-# asserts the energy does not move. A constant that changes a result is the
-# thing this module is most afraid of, so the batch size is asserted not to be
-# one rather than argued not to be.
-RIM_BATCH = 2000
+# The working set of one batched rim query, in `(rim, node)` pairs *before* the
+# radius test thins them. A memory bound and not an answer:
+# `tests/test_debye_m7.py` sweeps it and asserts the mask does not move by a
+# single node, because a constant that changes a result is the thing this module
+# is most afraid of.
+#
+# **Counted in pairs rather than in rims, and measured rather than chosen.** The
+# first draft bounded a flat 2,000 rims and called it "tens of megabytes" on the
+# strength of the *surviving* pair count. A rim count bounds nothing — the pairs
+# a rim expands to scale with node density — and the surviving pairs are not the
+# working set. Measured on fas2 with `tracemalloc`, peak transients over one
+# `inside()`:
+#
+#     rims=2000, 0.5 A      580 MB      against 13 MB unbatched
+#     rims=2000, 1.0 A      348 MB      against  3 MB unbatched
+#
+# Bounded by pairs instead, the peak is flat in resolution *and* the speed is
+# flat in the bound — CPU varies under 1% from 20,000 pairs to 2,000,000 while
+# the peak moves 20x, so the whole speed-up is present at the bottom of the
+# range and everything above it was cost for nothing:
+#
+#     50,000 pairs, 0.5 A    41 MB, 18.48 s      2,000,000: 592 MB, 18.6 s
+#     50,000 pairs, 1.0 A    37 MB,  6.86 s      2,000,000: 354 MB,  7.0 s
+#
+# 20,000 halves the memory again at no measurable cost, so there is room here if
+# memory ever binds before speed does.
+PAIR_BATCH = 50_000
 
 
 def inside_union_of_spheres(
@@ -328,6 +348,28 @@ def _ragged(lengths: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return segment, np.arange(total, dtype=np.int64) - np.repeat(starts, lengths)
 
 
+def _batches(weights: np.ndarray, limit: int) -> list[tuple[int, int]]:
+    """Consecutive index ranges whose weights sum to under `limit`.
+
+    Used where the work per item is known in advance and varies by orders of
+    magnitude, so a fixed count of items would size a batch differently at every
+    grid spacing. A single item over the limit gets its own batch rather than an
+    exception: the limit bounds a temporary, and refusing to answer would be
+    worse than one large allocation.
+    """
+    if not len(weights):
+        return []
+    total = np.cumsum(weights)
+    ranges = []
+    start = 0
+    while start < len(weights):
+        base = float(total[start - 1]) if start else 0.0
+        stop = max(int(np.searchsorted(total, base + limit, side="right")), start + 1)
+        ranges.append((start, stop))
+        start = stop
+    return ranges
+
+
 def _legal(
     points: FloatArray,
     coords: FloatArray,
@@ -400,7 +442,7 @@ class _Bins:
 
     def __init__(self, points: FloatArray, cell: float) -> None:
         self.points = points
-        self._cell = cell
+        self.cell = cell
         self._origin = points.min(axis=0)
         keys = self.keys_of(points)
         self._order = np.lexsort((keys[:, 2], keys[:, 1], keys[:, 0]))
@@ -426,7 +468,7 @@ class _Bins:
         return np.asarray((keys - self._low_key) @ self._strides)
 
     def keys_of(self, points: FloatArray) -> np.ndarray:
-        return np.floor((points - self._origin) / self._cell).astype(np.int64)
+        return np.floor((points - self._origin) / self.cell).astype(np.int64)
 
     def _block(self, low: np.ndarray, high: np.ndarray) -> np.ndarray:
         """Every point in the inclusive range of bins from `low` to `high`.
@@ -630,7 +672,7 @@ def _toroidally_reachable(
 
     So every stage below runs over a flat array of `(rim, node)` pairs: which
     nodes each rim reaches, the projection onto the circle, and the legality of
-    the projections. `RIM_BATCH` bounds the working set; it is not a sample
+    the projections. `PAIR_BATCH` bounds the working set; it is not a sample
     count and it does not appear in an answer.
 
     **What was given up, and what it cost.** The old loop skipped the nodes an
@@ -668,8 +710,18 @@ def _toroidally_reachable(
     bins = _Bins(nodes.points, float(np.median(reach)))
     decided = np.zeros(len(nodes), dtype=bool)
 
-    for first in range(0, len(rims), RIM_BATCH):
-        batch = slice(first, first + RIM_BATCH)
+    # What one batch costs, estimated before it is run. `near_many` expands
+    # every bin its query box touches, so the pre-filter pair count for a rim is
+    # the node density times that box — which is what has to be bounded, since
+    # the surviving pairs are a quarter of it and vary with the geometry. The
+    # box is padded by the cell because a bin is included whole.
+    span = nodes.points.max(axis=0) - nodes.points.min(axis=0)
+    volume = float(np.prod(np.maximum(span, bins.cell)))
+    density = len(nodes) / volume
+    expected = density * (2.0 * reach + bins.cell) ** DIMENSIONS
+
+    for first, last in _batches(expected, PAIR_BATCH):
+        batch = slice(first, last)
         rim, node = bins.near_many(origins[batch], reach[batch])
         live = ~decided[node]
         rim, node = rim[live], node[live]
@@ -703,7 +755,7 @@ def _toroidally_reachable(
         # `near_many` returns its pairs grouped by query, so each rim's rows are
         # already contiguous and the split is a `searchsorted` rather than a
         # sort.
-        edges = np.searchsorted(rim, np.arange(len(origins[batch]) + 1))
+        edges = np.searchsorted(rim, np.arange(last - first + 1))
         for local, (lo, hi) in enumerate(itertools.pairwise(edges)):
             if lo == hi:
                 continue

@@ -3377,6 +3377,50 @@ M7's result at protean's settings is therefore **1.9–2.0×**, bit-identical,
 measured on fas2 and barnase at minimum-of-5 and minimum-of-3 with spreads under
 1.04×.
 
+#### The batch bound was a constant nobody had measured
+
+`/code-review high` on PR #52 found it, and it is the third instance in this
+milestone of a number that was asserted rather than measured — so it is recorded
+next to the other two rather than quietly fixed.
+
+The batch was bounded at **2,000 rims**, with a comment calling that "~850,000
+pairs, tens of megabytes". Both halves were wrong. A rim count bounds nothing,
+because the pairs a rim expands to scale with node density; and the surviving
+pairs are not the working set, since `near_many` expands every bin its query box
+touches *before* the radius test thins it. Measured with `tracemalloc` over one
+`inside()` on fas2:
+
+| | peak, batched | peak, unbatched |
+|---|---|---|
+| 0.5 Å | **580 MB** | 13 MB |
+| 1.0 Å | **348 MB** | 3 MB |
+
+**A hundred times the memory for twice the speed**, on a structure of 906 atoms
+and a grid `GridSpec.max_points` would allow four times over. Nothing in the
+suite would have caught it, because every test asserted the *answer* and none
+asserted the cost.
+
+Bounded in pairs instead — `PAIR_BATCH`, 50,000 — the peak is flat in resolution.
+And the sweep that set it says the original number was not a trade-off at all:
+
+| pairs | 0.5 Å | 1.0 Å |
+|---|---|---|
+| 20,000 | 23 MB, 18.60 s | 29 MB, 6.97 s |
+| 50,000 | 41 MB, 18.48 s | 37 MB, 6.86 s |
+| 2,000,000 | 592 MB, 18.6 s | 354 MB, 7.02 s |
+
+**CPU varies under 1% while the peak moves twentyfold.** The whole speed-up is
+present at the bottom of the range, so the 2,000-rim bound bought nothing it
+cost anything for. M7's number after the fix is **2.017×** on fas2 at 1.0 Å,
+minimum of 5, energies bit-identical.
+
+*The general form, and it is the same one M7 keeps producing:* a constant
+introduced to bound a resource must be measured against that resource. The
+`RIM_BATCH` sweep in `test_debye_m7.py` was real and caught a real mutation, but
+it swept the constant against the **answer** — which it could not change — and
+never against the **memory**, which was the only thing it existed to control. A
+guard aimed at the wrong axis is the same guard that guards nothing.
+
 #### What M7 leaves on the table, in evidence order
 
 1. **`_legal` at level 0**, the largest single stage at 0.5 Å — a node-major

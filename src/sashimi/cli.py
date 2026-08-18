@@ -573,6 +573,8 @@ def _bench(args: argparse.Namespace) -> int:
     path = Path(args.structure)
     if not path.is_file():
         raise SystemExit(f"no such structure: {path}")
+    if args.repeats < 1:
+        raise SystemExit(f"--repeats must be at least 1, got {args.repeats}")
     spec = bench.CaseSpec(
         path=path,
         resolution=args.resolution,

@@ -25,6 +25,7 @@ from sashimi.bench import (
     CaseSpec,
     Comparison,
     Measurement,
+    _baseline_environment,
     remote_snippet,
     render_comparison,
     solve_case,
@@ -137,14 +138,27 @@ def test_the_command_names_the_structure_it_could_not_find():
         main(["bench", "--structure", "tests/data/does-not-exist.pqr"])
 
 
-def test_reading_the_structure_is_outside_the_timed_closure():
-    """Parsing a PQR is not what is being measured, and it contends like everything else."""
-    work = solve_case(_spec())
-    ALA_GLY.rename(moved := ALA_GLY.with_suffix(".pqr.moved"))
-    try:
-        assert work() == pytest.approx(ALA_GLY_ENERGY)
-    finally:
-        moved.rename(ALA_GLY)
+def test_reading_the_structure_is_outside_the_timed_closure(tmp_path):
+    """Parsing a PQR is not what is being measured, and it contends like everything else.
+
+    Demonstrated by deleting the file the closure was built from, which only a
+    closure that had already read it can survive. The copy lives in `tmp_path`
+    rather than the fixture being moved aside and restored: a `finally` does not
+    run through a `SIGKILL` or a CI timeout, and the first draft of this test
+    could leave the checkout missing a tracked fixture — with a symptom in the
+    corpus tests pointing nowhere near the cause.
+    """
+    copied = tmp_path / ALA_GLY.name
+    copied.write_bytes(ALA_GLY.read_bytes())
+    work = solve_case(_spec(path=copied))
+    copied.unlink()
+    assert work() == pytest.approx(ALA_GLY_ENERGY)
+
+
+def test_a_repeat_count_below_one_is_refused(capsys):
+    """`measure` guards it and so must the interleaved path, which has its own loop."""
+    with pytest.raises(SystemExit, match="at least 1"):
+        main(["bench", "--structure", str(ALA_GLY), "--repeats", "0"])
 
 
 def test_the_bench_command_solves_the_structure_it_was_given(capsys):
@@ -161,6 +175,25 @@ def test_repeats_is_how_many_samples_are_taken(capsys):
     report = json.loads(capsys.readouterr().out)
     assert len(report["samples"]) == 3
     assert report["best"] == min(report["samples"])
+
+
+@pytest.mark.parametrize("variable", ["PYTHONPATH", "VIRTUAL_ENV"])
+def test_the_baseline_cannot_inherit_a_path_to_this_tree(variable: str, monkeypatch):
+    """The silent failure this instrument would be worst at reporting.
+
+    `PYTHONPATH` outranks a project's own site-packages, and `uv run` passes it
+    to the child — verified against a real subprocess, not assumed. So a
+    developer with `PYTHONPATH=$PWD/src` exported, which is ordinary for a
+    src-layout checkout, would have the baseline import the *working tree* and
+    measure it against itself. It reads as ~1.000x with bit-identical energies,
+    which is precisely what a correct no-op change looks like — from the one
+    tool whose stated job is refusing to compare two different programs.
+    """
+    monkeypatch.setenv(variable, "/tmp/definitely-not-the-baseline")
+    assert variable not in _baseline_environment()
+    # Everything else is still handed through; this is a filter, not a scrub.
+    monkeypatch.setenv("SASHIMI_BENCH_CANARY", "kept")
+    assert _baseline_environment()["SASHIMI_BENCH_CANARY"] == "kept"
 
 
 def test_a_baseline_that_is_not_a_checkout_says_so(tmp_path, capsys):
