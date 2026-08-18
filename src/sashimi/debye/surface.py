@@ -81,6 +81,7 @@ rather than trusting it.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -106,6 +107,14 @@ DEGENERATE = 1e-12
 # A seat is a probe against three atoms, so the atom raising the triple needs two
 # higher-numbered neighbours before it can raise one at all.
 PAIRS_PER_SEAT = 2
+
+# How many rims are queried at once. A memory bound on one batch, not an
+# answer: at protein scale it is ~850,000 (rim, node) pairs, tens of megabytes,
+# and `tests/test_debye_m7.py` solves a real structure at several values and
+# asserts the energy does not move. A constant that changes a result is the
+# thing this module is most afraid of, so the batch size is asserted not to be
+# one rather than argued not to be.
+RIM_BATCH = 2000
 
 
 def inside_union_of_spheres(
@@ -297,6 +306,28 @@ def _neighbours(coords: FloatArray, inflated: FloatArray) -> list[list[int]]:
     return lists
 
 
+def _ragged(lengths: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Segment index and within-segment position for a run of variable lengths.
+
+    The one shape that appears everywhere below. Geometry here is ragged in two
+    places at once — a rim reaches a different number of nodes, and a node is
+    tested against a different number of blockers — and a Python loop over
+    either is what M7 exists to remove. Given `[3, 0, 2]` this returns
+    `[0, 0, 0, 2, 2]` and `[0, 1, 2, 0, 1]`, so a flat array of every pair can
+    be built with one `repeat` and one `arange` and then indexed as if it were
+    rectangular.
+
+    Empty segments cost nothing and are not special-cased, which is what lets
+    the callers skip a `where` that would otherwise be needed at every use.
+    """
+    total = int(lengths.sum())
+    if not total:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    segment = np.repeat(np.arange(len(lengths), dtype=np.int64), lengths)
+    starts = np.cumsum(lengths) - lengths
+    return segment, np.arange(total, dtype=np.int64) - np.repeat(starts, lengths)
+
+
 def _legal(
     points: FloatArray,
     coords: FloatArray,
@@ -436,6 +467,51 @@ class _Bins:
         """Every point in the bin `key` and the twenty-six around it."""
         return self._block(key - 1, key + 1)
 
+    def near_many(self, centres: FloatArray, radii: FloatArray) -> tuple[np.ndarray, np.ndarray]:
+        """Flat `(query, point)` pairs for a batch of ball queries at once.
+
+        The same answer as calling `near` once per row and the same bins walked;
+        what changes is that the two ragged expansions — a query covers a
+        variable number of bins, a bin holds a variable number of points — are
+        built with `repeat` rather than with a Python loop around a handful of
+        floating-point operations.
+
+        This is the call M7 is about. The rim loop asked it 11,380 times per
+        lattice, and on the coarsest multigrid level 3,801 of those calls
+        decided fifty-one nodes between them.
+        """
+        low = np.maximum(self.keys_of(centres - radii[:, None]), self._low_key)
+        high = np.minimum(self.keys_of(centres + radii[:, None]), self._high_key)
+        span = np.maximum(high - low + 1, 0)
+
+        # Every bin every query covers, as one flat list of (query, bin code).
+        query, local = _ragged(span.prod(axis=1))
+        if not len(query):
+            return query, local
+        extent = span[query]
+        plane = extent[:, 1] * extent[:, 2]
+        wanted = self._encode(
+            low[query]
+            + np.column_stack([local // plane, local % plane // extent[:, 2], local % extent[:, 2]])
+        )
+
+        at = np.searchsorted(self._codes, wanted)
+        within = at < len(self._codes)
+        at, wanted, query = at[within], wanted[within], query[within]
+        hit = self._codes[at] == wanted
+        at, query = at[hit], query[hit]
+
+        # Every point in every bin that was hit, as (query, point).
+        segment, position = _ragged(self._stops[at] - self._starts[at])
+        if not len(segment):
+            return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+        found = self._order[self._starts[at][segment] + position]
+        query = query[segment]
+
+        gap = self.points[found] - centres[query]
+        inside = (gap * gap).sum(axis=1) <= radii[query] * radii[query]
+        return query[inside], found[inside]
+
     def near(self, centre: FloatArray, radius: float) -> np.ndarray:
         """Indices of the points within `radius` of `centre`.
 
@@ -543,9 +619,28 @@ def _toroidally_reachable(
     a groove is made of — the re-entrant surface between two atoms close enough
     that a probe bridges them.
 
-    The rims are geometry and the nodes are one cloud, so both are built before
-    the loop. What is left inside it is the part that genuinely depends on both:
-    projecting a node onto a circle.
+    **This is two thirds of a protein solve, and it is batched rather than
+    looped for that reason (M7).** The geometry above is a few dozen
+    floating-point operations per rim; the loop that fed it was 11,380
+    iterations of about twenty numpy calls each, per lattice, sixteen lattices
+    per solve. Measured on `fas2`, the cost per point was 29x worse on the
+    coarsest multigrid level than on the finest — the signature of a fixed cost
+    per call rather than of arithmetic — and the coarsest level spent 0.42 s to
+    decide fifty-one nodes.
+
+    So every stage below runs over a flat array of `(rim, node)` pairs: which
+    nodes each rim reaches, the projection onto the circle, and the legality of
+    the projections. `RIM_BATCH` bounds the working set; it is not a sample
+    count and it does not appear in an answer.
+
+    **What was given up, and what it cost.** The old loop skipped the nodes an
+    earlier rim had already claimed, which is why it had to be a loop. Measured,
+    that pruning removes 16% of the pairs — live nodes are 84% of found nodes at
+    every level — so it is kept between batches, where it costs nothing, and
+    given up inside one. It cannot change an answer either way: `decided` feeds
+    a boolean or, so a node claimed by *any* rim is the node claimed by *the
+    first*, and that is what makes this rewrite checkable against the last digit
+    of an energy rather than against a tolerance.
     """
     spheres = surface.spheres
     coords, inflated = spheres.coords, spheres.inflated
@@ -558,33 +653,63 @@ def _toroidally_reachable(
     if not rims or not len(nodes):
         return reachable
 
+    # The rims are geometry and the nodes are one cloud, so both are built
+    # before the loop. What is left inside it is the part that genuinely
+    # depends on both: projecting a node onto a circle.
+    origins = np.array([origin for origin, _, _, _ in rims])
+    normals = np.array([normal for _, normal, _, _ in rims])
+    ring_radii = np.array([ring_radius for _, _, ring_radius, _ in rims])
+
     # Every node a rim can decide is within `ring_radius + probe` of its centre,
     # so the typical such distance is the scale to bin on. Swept on fas2 across
     # a quarter to one times the median: the query cost is flat from 0.5x to 1x
     # and only degrades below that, so this is a knob that does not need one.
-    reach = np.array([ring_radius for _, _, ring_radius, _ in rims]) + probe
+    reach = ring_radii + probe
     bins = _Bins(nodes.points, float(np.median(reach)))
     decided = np.zeros(len(nodes), dtype=bool)
 
-    for origin, normal, ring_radius, blockers in rims:
-        found = bins.near(origin, ring_radius + probe)
-        found = found[~decided[found]]
-        if not len(found):
+    for first in range(0, len(rims), RIM_BATCH):
+        batch = slice(first, first + RIM_BATCH)
+        rim, node = bins.near_many(origins[batch], reach[batch])
+        live = ~decided[node]
+        rim, node = rim[live], node[live]
+        if not len(rim):
             continue
 
-        offset = nodes.points[found] - origin
-        axial = offset @ normal
+        owner = rim + first
+        offset = nodes.points[node] - origins[owner]
+        normal = normals[owner]
+        axial = (offset * normal).sum(axis=1)
         radial = offset - axial[:, None] * normal
         length = np.sqrt((radial**2).sum(axis=1))
         usable = length > DEGENERATE
-        close = usable & (((length - ring_radius) ** 2 + axial**2) <= squared_probe)
+        close = usable & (((length - ring_radii[owner]) ** 2 + axial**2) <= squared_probe)
         if not close.any():
             continue
-        projected = origin + ring_radius * radial[close] / length[close, None]
 
-        allowed = _legal(projected, coords, inflated, blockers)
-        if allowed.any():
-            decided[found[close][allowed]] = True
+        rim, owner, node = rim[close], owner[close], node[close]
+        projected = (
+            origins[owner] + ring_radii[owner][:, None] * radial[close] / length[close, None]
+        )
+
+        # Legality stays one call per rim, and that is a measurement rather than
+        # a leftover. `_legal` broadcasts a point cloud against an atom set, so
+        # it touches 35 atom coordinates and keeps the whole product in cache;
+        # the batched form has to *gather* a coordinate per pair, and there are
+        # 69 million of those on the finest level. Measured on fas2, batching
+        # this stage cost 1.27 s -> 2.47 s, which is most of why the first
+        # version of this rewrite came out at 1.000x overall.
+        #
+        # `near_many` returns its pairs grouped by query, so each rim's rows are
+        # already contiguous and the split is a `searchsorted` rather than a
+        # sort.
+        edges = np.searchsorted(rim, np.arange(len(origins[batch]) + 1))
+        for local, (lo, hi) in enumerate(itertools.pairwise(edges)):
+            if lo == hi:
+                continue
+            allowed = _legal(projected[lo:hi], coords, inflated, rims[first + local][3])
+            if allowed.any():
+                decided[node[lo:hi][allowed]] = True
 
     nodes.mark(reachable, decided)
     return reachable

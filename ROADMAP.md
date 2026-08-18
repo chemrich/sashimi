@@ -2824,7 +2824,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. Revisit when fractional-volume dielectric averaging damps the oscillation. See the section below |
-| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. Projected **~4.4× on `_toroidally_reachable`, ~2.1× on the solve**. See the two sections below |
+| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. See the three sections below |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
 18 of them with closed forms; three independent reference backends to be graded
@@ -3193,50 +3193,97 @@ the node claimed by *the first* rim; no float depends on which. That is the same
 kind of gate M4 had, on a change in the same file, and it is the reason this
 rewrite is safer than its size suggests.
 
-#### What batching can reach, from the arithmetic rather than from hope
+#### The projection above was wrong, and how it was wrong is the finding
 
-The same two expansions done as a handful of large calls instead of tens of
-thousands of small ones: the projection stage, 4.85M pairs, **0.10 s**; the
-`_legal` stage, 69.3M pairs in 8M-pair chunks, **0.61 s**. Against level 0's
-measured 2.61 s that is **0.71 s of arithmetic inside a 2.61 s loop**, and the
-gap is not all fixed overhead — small arrays also cost more per element than
-large ones, having nothing to amortise a temporary against.
+**The estimate.** The two expansions done as a handful of large calls instead of
+tens of thousands of small ones: the projection stage, 4.85M pairs, 0.10 s; the
+`_legal` stage, 69.3M pairs in 8M-pair chunks, 0.61 s. Against level 0's
+measured 2.61 s that reads as 0.71 s of arithmetic inside a 2.61 s loop, and
+projected to **4.4× on the family, ~2.1× on the solve**.
 
-Projected across the four levels: **4.44 s → ~1.0 s, about 4.4× on the family**,
-weighted towards the coarse levels where the overhead ratio is worst. On
-Amdahl's arithmetic, with the family at 78.5% of `build_levels` and
-`build_levels` at 86% of the solve — **67% of the run, so ~2.1× overall**.
+**The measurement, once it was built.** Batching every stage came out at
+**1.000×** on the instrument, energies bit-identical. Per level, against the
+loop:
 
-**This subsumes the "cheapen the coarse levels" idea the section above bounded
-at ~23%**, rather than competing with it: levels 1 through 3 are 27% of the
-geometry cost for 2% of the points *because* they are nearly pure per-call
-overhead, and that is exactly what batching removes.
+| level | looped | batched |
+|---|---|---|
+| 0 | 2.61 s | **3.75 s** |
+| 1 | 0.82 s | 0.49 s |
+| 2 | 0.59 s | 0.08 s |
+| 3 | 0.42 s | 0.02 s |
 
-#### The four steps, in the order they should land
+**Batching wins by 3× to 21× on the coarse levels and loses by 1.4× on the fine
+one, and the fine one is 59% of the family.** The two cancel almost exactly.
 
-1. **The instrument, committed.** The section above settled that M7 claims
-   CPU-time ratios at minimum-of-N, and then measured them by hand. A
-   performance claim needs a harness someone else can re-run, so this goes
-   first and everything after it is reported through it.
-2. **Batched incidence.** One bins-to-bins join producing flat `rim_id` and
-   `node_id` arrays, replacing 11,380 `_Bins.near` calls per lattice. The query
-   radii are tight enough for one cell to serve — `ring_radius + probe` has mean
-   3.81 Å and maximum 4.65 Å.
-3. **Vectorised projection**, one pass over the flat pair list with `origin`,
-   `normal` and `ring_radius` gathered by `rim_id`. Mechanical, and the smallest
-   of the four.
-4. **Batched `_legal` by segmented reduction.** Blockers are ragged — mean 35
-   per rim, maximum 74, 398,761 in total — so they flatten to a CSR-style pair
-   of arrays, the surviving nodes repeat by their rim's blocker count, one
-   distance test runs over the flat triples, and `logical_and.reduceat` folds it
-   back per node.
+**Why the estimate was wrong: it timed arithmetic on contiguous arrays, where
+the real stage is a gather.** `_legal` broadcasts one point cloud against one
+atom set, so it fetches 35 atom coordinates and keeps the whole product in
+cache. The batched form has to fetch a coordinate *per pair*, and there are 69.3
+million of those on the finest level. Stage-by-stage at level 0, batched: the
+gathers alone are 1.43 s of a 3.75 s pass, against 0.81 s for the arithmetic
+they feed. The benchmark that predicted 0.61 s had the arrays already in place.
 
-**Two things to be afraid of, both with precedent in this repo.** `surface.py` is
-where M4 built and discarded two implementations before the third worked, so the
-bit-identity check against the 56 debye recordings runs at every step rather than
-at the end. And step 4's chunk size is a constant that could silently change an
-answer: it needs a test that fails if the answer depends on it, or it is another
-guard that guards nothing.
+**And the per-call overhead the milestone was aimed at is not where the profile
+implied.** Timed directly inside the loop at level 0 — `near` 0.98 s, projection
+0.34 s, `_legal` 1.27 s — the residue is **0.05 s, 2%**. There was never 4× to
+recover there. At level 3 the same split is `near` 0.32 s of 0.44 s, **73%**,
+which is the fixed cost per call the groundwork correctly identified; it is just
+that the level it dominates holds fifty-one nodes.
+
+*The general form, worth carrying past M7:* "cost is sublinear in points, so the
+cost is per call" was sound, and "therefore batching pays" did not follow. The
+per-call cost was concentrated in the levels that are cheap for the same reason
+they have few points, and the level that carries the runtime was already
+spending its time on arithmetic.
+
+#### What landed: the query batched, the legality left alone
+
+Batched: the ball query, `_Bins.near_many`, which replaces 11,380 `near` calls
+per lattice with one per `RIM_BATCH` rims, and the projection that follows it.
+Not batched: `_legal`, which keeps its per-rim broadcast for the measurement
+above. `near_many` returns its pairs grouped by query, so splitting them per rim
+is a `searchsorted` rather than a sort.
+
+**1.209× on the solve, CPU time, minimum of 3, interleaved — energies
+bit-identical at −2078.7814508266547 kJ/mol.** `_toroidally_reachable` goes
+17.96 s → 13.63 s and `build_levels` 22.89 s → 18.51 s on fas2.
+
+Two controls make that ratio readable. Identical code on both sides of the same
+instrument reads **0.993×** at protein scale, so 1.209× is twenty times the
+noise floor. And on the run that produced it the samples themselves spread only
+1.00×–1.01×, against the 1.36× spread the control saw under load — with the
+minima agreeing to 0.7% across both, which is the whole case for minimum-of-N.
+
+**`RIM_BATCH` is a memory bound and `tests/test_debye_m7.py` sweeps it** at one,
+three, ninety-seven and a hundred thousand rims, asserting the mask does not
+move by a single node. Two of those values force several batches and two force
+exactly one, and the test asserts *that* too — a sweep that never crossed the
+boundary would be unanimous for the wrong reason.
+
+The tests were checked by mutation rather than by inspection, and one of the
+three mutations survived the first draft: relaxing the batched distance filter
+from `<=` to `<` passed everything, because random points land on a query radius
+with probability zero. A fixture with a point exactly on the radius is what
+closes it — the same hole, in the same shape, as the twenty instances the
+`guards that guard nothing` history already records.
+
+#### What is left of M7
+
+The claim is **1.209×**, not the 2.1× projected above, and debye is still
+roughly 4–5× slower than APBS rather than 5–6×. What the measurements say about
+where the rest would come from, in the order the evidence supports:
+
+1. **`_legal` at level 0 is now the largest single stage** — 1.27 s of a 2.57 s
+   pass, 69.3M (node, blocker) tests deciding 14,377 nodes. 1.99M of the pairs
+   survive the `close` test but only ~71 per node are needed to find one legal
+   rim, and a node that is *never* legal must exhaust all of them. A node-major
+   pass that stops at the first legal rim is answer-preserving by the same
+   boolean-or argument, and is the one remaining lever with a measured size
+   behind it. **Unmeasured, and not to be claimed until it is.**
+2. **The query is a ball where the test is a torus.** `near` returns 4.85M nodes
+   at level 0 and the `close` test discards 59% of them.
+3. **Coarse-level re-discretization**, which batching has now taken from 1.83 s
+   to 0.59 s — most of what the groundwork bounded at ~23% is already collected.
 
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 
