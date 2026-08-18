@@ -2824,7 +2824,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. Revisit when fractional-volume dielectric averaging damps the oscillation. See the section below |
-| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. Threading measures **~2.3×**, answer-identical, capped at four workers and costing 41% more CPU, so it belongs to the caller rather than to a default. See the four sections below |
+| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. See the sections below |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
 18 of them with closed forms; three independent reference backends to be graded
@@ -3316,52 +3316,85 @@ which is a quantity it has no way to produce today. And the cost is
 **superlinear in atoms**: 6.5× the atoms costs 11.7× the time, which is the
 scaling that actually threatens the use case, not the constant factor M7 chased.
 
-#### Threads work here, and stop at four
+#### Threads work at 0.5 Å and do not at 1.0 Å
 
 The geometry is per-node independent and numpy releases the GIL over most of
-it, so the three staggered lattices `dielectric_faces` builds — and the twelve
-across the multigrid hierarchy — can be built concurrently. Masks came back
-**identical at every width**, which is the only reason this is worth reporting.
-fas2, best of three, wall clock against a serial baseline:
+it, so the twelve lattices across the multigrid hierarchy can be built
+concurrently. Masks came back **identical at every width**, which is the only
+reason this got as far as a table. At **0.5 Å**, fas2, wall clock:
 
-| workers | all 12 lattices | speed-up | CPU cost |
+| workers | wall | speed-up | CPU cost |
 |---|---|---|---|
 | 2 | 20.16 s | 1.47× | 1.20× |
 | 3 | 18.63 s | 1.59× | 1.45× |
 | 4 | **12.97 s** | **2.28×** | 1.41× |
 | 8 | 13.49 s | 2.19× | 1.38× |
 
-**~2.3×, capped at four**, which is this machine's performance-core count; the
-four efficiency cores add nothing. The trade is explicit and is the reason this
-must not be a default: **41% more CPU burned to remove 56% of the wall clock.**
-Deciding to occupy four cores belongs to the application, not to a library that
-was called to solve one system, so if this lands it lands as an option.
+**At 1.0 Å — the resolution protean asks for — the same change is worth
+1.06×.** Whole solves, energies bit-identical at every worker count:
 
-*A methodology note, because the first run of this experiment was wrong.* It
-built a `ThreadPoolExecutor` per repeat without closing it, so the wide runs
+| structure | serial | 3 workers | speed-up | CPU cost |
+|---|---|---|---|---|
+| fas2 | 5.84 s | 5.54 s | **1.06×** | 1.19× |
+| barnase | 12.57 s | 11.67 s | **1.08×** | 1.16× |
+
+Not Amdahl — geometry is still **92%** of the solve at 1.0 Å. It is array size:
+the undecided shell holds a quarter as many nodes, so the rim loop's arrays are
+four times smaller and a far larger share of the time is spent in code that
+holds the GIL rather than in ufuncs that release it. **Threading is dropped**,
+at 1.06× for 16–19% more CPU.
+
+*A methodology note, because the first run of the 0.5 Å experiment was wrong.*
+It built a `ThreadPoolExecutor` per repeat without closing it, so the wide runs
 were measured inside a process carrying dozens of idle threads and read 1.36×
 where the corrected run reads 2.28×. Wall-clock experiments accumulate state
 that CPU-time experiments do not.
 
+#### Both levers inverted at the consumer's resolution, in opposite directions
+
+This is the finding to carry, and it is not about either optimisation:
+
+| lever | at 0.5 Å | at 1.0 Å (protean's) | verdict |
+|---|---|---|---|
+| batched rim query | 1.209× | **1.966× / 1.902×** | **kept** |
+| threading the lattices | 2.28× | **1.06× / 1.08×** | **dropped** |
+
+**Each one is worth roughly what the other was worth, depending only on which
+resolution it is graded at.** Both readings are correct measurements of
+different questions, and the milestone had been asking the wrong one throughout
+— §12's whole performance thread was graded at 0.5 Å because that is what the
+corpus and the accuracy milestones use, and the accuracy work had every reason
+to be there.
+
+The mechanism is the same in both cases and is worth stating once: **coarsening
+the grid shifts work out of large-array numpy and into per-call and per-iteration
+overhead.** Batching removes that overhead, so it gains. Threading needs large
+arrays to have any GIL to release, so it loses. A performance change here must
+name the resolution it is claimed at, and the resolution that counts is the one
+the caller uses.
+
+M7's result at protean's settings is therefore **1.9–2.0×**, bit-identical,
+measured on fas2 and barnase at minimum-of-5 and minimum-of-3 with spreads under
+1.04×.
+
 #### What M7 leaves on the table, in evidence order
 
-1. **Threading, ~2.3×** — measured above, answer-identical, not implemented.
-   Compounded with the 1.209× already landed that is ~2.7× from `main`, which
-   at protean's settings is fas2 in ~3.4 s against coulombic's 1.0 s.
-2. **`_legal` at level 0**, the largest single stage — a node-major pass
-   stopping at the first legal rim is answer-preserving by the same boolean-or
-   argument. Unmeasured.
-3. **The ball query where the test is a torus** — 59% of what `near` returns is
+1. **`_legal` at level 0**, the largest single stage at 0.5 Å — a node-major
+   pass stopping at the first legal rim is answer-preserving by the same
+   boolean-or argument. Unmeasured, and **to be graded at 1.0 Å first.**
+2. **The ball query where the test is a torus** — 59% of what `near` returns is
    discarded by the `close` test.
-4. **The superlinear scaling**, which none of the above addresses and which is
-   the only one that matters above ~2,000 atoms.
+3. **The superlinear scaling in atom count**, which none of the above addresses
+   and which is the only one that matters above ~2,000 atoms.
+4. **Threading**, measured and dropped, revisitable only if debye is ever asked
+   for 0.5 Å work at protein scale.
 
-**What debye is actually competing with, measured on fas2 at protean's
-defaults:** coulombic **1.04 s** with no binary and no Poisson-Boltzmann in it
-— protean's own label is "not a Poisson-Boltzmann solution; magnitudes are
-indicative only" — and APBS **0.95 s** with a binary. debye is the only one of
-the three that is both. **That, and not a constant factor, is the case for
-shipping it**, and it is why M7 parks rather than continues.
+**What debye is actually competing with, on fas2 at protean's defaults:**
+coulombic **1.04 s** with no binary and no Poisson-Boltzmann in it — protean's
+own label is "not a Poisson-Boltzmann solution; magnitudes are indicative only"
+— and APBS **0.95 s** with a binary. debye is now **5.9 s** and is the only one
+of the three that is both. **That, and not a constant factor, is the case for
+shipping it.**
 
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 
