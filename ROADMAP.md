@@ -2824,7 +2824,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. Revisit when fractional-volume dielectric averaging damps the oscillation. See the section below |
-| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. See the section below |
+| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. Projected **~4.4× on `_toroidally_reachable`, ~2.1× on the solve**. See the two sections below |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
 18 of them with closed forms; three independent reference backends to be graded
@@ -3140,6 +3140,103 @@ On that instrument the same comparison is clean and repeatable: `main`
 digit — the 6.5% above. The same pair on wall clock read as a *40% regression*
 an hour earlier. **So M7 claims CPU-time ratios, measured back to back on one
 machine, and §11's VM is retired on evidence rather than on preference.**
+
+### M7 — the plan for the rim loop, measured before it is written
+
+**2026-08-18.** The groundwork above named batching the rim loop as M7's
+remaining work. This section is what that loop turns out to look like when it is
+measured directly rather than read off a profile, which changed one thing that
+matters and confirmed the rest.
+
+#### The profiled ratio holds, and the profiled absolute does not
+
+`_toroidally_reachable` measured with `time.process_time()` and no profiler
+attached is **78.5% of `build_levels`** — against radial at 12.5% and vertex at
+5.5% — where the section above reports 66% of the total run and `build_levels`
+at 86%, so 77% of it. The two agree.
+
+The absolutes do not: `build_levels` is **22.89 s** unprofiled against the
+**59.6 s** `cProfile` recorded. A 2.6× inflation is what a deterministic profiler
+does to code that makes millions of small calls, which is precisely the code
+under diagnosis here. **The ratios in the section above are safe to plan from;
+the seconds are not safe to quote**, and M7's claim has to come off the
+instrument rather than off a profile.
+
+#### The loop's shape, per `inside()` call
+
+fas2, 906 atoms, h ≈ 0.5, the staggered-x lattice at each multigrid level:
+
+| level | nodes | rims | `near` calls | (rim, node) pairs | `_legal` (node, blocker) pairs | CPU |
+|---|---|---|---|---|---|---|
+| 0 | 27,991 | 11,380 | 11,380 | 4,849,371 | 69,304,243 | 2.61 s |
+| 1 | 3,476 | 11,380 | 11,380 | 601,043 | 8,596,374 | 0.82 s |
+| 2 | 427 | 11,380 | 10,652 | 76,235 | 1,105,742 | 0.59 s |
+| 3 | 51 | 11,380 | 3,801 | 9,717 | 148,968 | 0.42 s |
+
+The rims are geometry, so there are 11,380 of them at every level — 11,380
+`near` calls per `inside()` and sixteen `inside()` calls per solve gives the
+182,080 the profile counted, so the accounting closes exactly. **Level 3 spends
+0.42 s to decide fifty-one nodes**, which is the per-call floor with the
+arithmetic removed and the clearest statement of what is wrong.
+
+#### The dependency that forces the loop to be a loop is worth 16%
+
+`decided` is why the rim loop cannot simply be flattened: each rim skips the
+nodes an earlier rim has already claimed, so the iterations are not independent.
+**Measured, that pruning removes 16% of the work** — live nodes are 84% of found
+nodes at every level, 84 / 84 / 84 / 87. A batched pass gives up a sixth of the
+pairs and buys every one of the call overheads.
+
+**And the batched answer must come out bit-identical, not merely close.**
+`decided` feeds a boolean OR and nothing else, so a node claimed by *any* rim is
+the node claimed by *the first* rim; no float depends on which. That is the same
+kind of gate M4 had, on a change in the same file, and it is the reason this
+rewrite is safer than its size suggests.
+
+#### What batching can reach, from the arithmetic rather than from hope
+
+The same two expansions done as a handful of large calls instead of tens of
+thousands of small ones: the projection stage, 4.85M pairs, **0.10 s**; the
+`_legal` stage, 69.3M pairs in 8M-pair chunks, **0.61 s**. Against level 0's
+measured 2.61 s that is **0.71 s of arithmetic inside a 2.61 s loop**, and the
+gap is not all fixed overhead — small arrays also cost more per element than
+large ones, having nothing to amortise a temporary against.
+
+Projected across the four levels: **4.44 s → ~1.0 s, about 4.4× on the family**,
+weighted towards the coarse levels where the overhead ratio is worst. On
+Amdahl's arithmetic, with the family at 78.5% of `build_levels` and
+`build_levels` at 86% of the solve — **67% of the run, so ~2.1× overall**.
+
+**This subsumes the "cheapen the coarse levels" idea the section above bounded
+at ~23%**, rather than competing with it: levels 1 through 3 are 27% of the
+geometry cost for 2% of the points *because* they are nearly pure per-call
+overhead, and that is exactly what batching removes.
+
+#### The four steps, in the order they should land
+
+1. **The instrument, committed.** The section above settled that M7 claims
+   CPU-time ratios at minimum-of-N, and then measured them by hand. A
+   performance claim needs a harness someone else can re-run, so this goes
+   first and everything after it is reported through it.
+2. **Batched incidence.** One bins-to-bins join producing flat `rim_id` and
+   `node_id` arrays, replacing 11,380 `_Bins.near` calls per lattice. The query
+   radii are tight enough for one cell to serve — `ring_radius + probe` has mean
+   3.81 Å and maximum 4.65 Å.
+3. **Vectorised projection**, one pass over the flat pair list with `origin`,
+   `normal` and `ring_radius` gathered by `rim_id`. Mechanical, and the smallest
+   of the four.
+4. **Batched `_legal` by segmented reduction.** Blockers are ragged — mean 35
+   per rim, maximum 74, 398,761 in total — so they flatten to a CSR-style pair
+   of arrays, the surviving nodes repeat by their rim's blocker count, one
+   distance test runs over the flat triples, and `logical_and.reduceat` folds it
+   back per node.
+
+**Two things to be afraid of, both with precedent in this repo.** `surface.py` is
+where M4 built and discarded two implementations before the third worked, so the
+bit-identity check against the 56 debye recordings runs at every step rather than
+at the end. And step 4's chunk size is a constant that could silently change an
+answer: it needs a test that fails if the answer depends on it, or it is another
+guard that guards nothing.
 
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 
