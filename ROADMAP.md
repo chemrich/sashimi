@@ -2824,7 +2824,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. Revisit when fractional-volume dielectric averaging damps the oscillation. See the section below |
-| M7 | Performance claim | the §11 benchmark-VM question, revisited only here |
+| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. See the section below |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
 18 of them with closed forms; three independent reference backends to be graded
@@ -3058,6 +3058,88 @@ would let a coarser grid do — fractional-volume dielectric averaging, which
 `sashimi/debye/dielectric.py` names in its own docstring and which M4a dropped
 on cost/benefit rather than on infeasibility. M6 is the first evidence it would
 pay off on a quantity a user actually looks at.
+
+### M7 groundwork — where the time goes, and how to measure it at all
+
+**2026-08-17.** Two findings, both of which changed the plan they were meant to
+support. Neither is the optimisation; both had to come first.
+
+#### debye is geometry-bound, and the lever we chose was the wrong one
+
+The plan going in was fractional-volume dielectric averaging, on a chain: better
+dielectric → less oscillation → a coarser grid suffices → faster. **The profile
+breaks the chain at step three.** `fas2-molecular`, 68.9 s under `cProfile`:
+
+| | cumulative | share |
+|---|---|---|
+| `build_levels` | 59.6 s | **86%** |
+| ↳ `surface.inside` | 59.2 s | 86% |
+| ↳ `_toroidally_reachable` | 45.6 s | **66%** |
+| `solve_system` — the actual multigrid solve | 7.3 s | **11%** |
+
+**Two thirds of a protein solve is classifying points against the toroidal
+patches of the solvent-excluded surface; a ninth is the linear algebra.**
+Fractional-volume averaging replaces a binary inside/outside test with a
+fractional volume per face — *more* geometric work per query point. It would
+make the dominant 86% more expensive to improve the 11%. It remains a real
+accuracy lever, with M4a's recorded numbers to beat, and it belongs to M6's
+follow-up where its evidence points. It is not a performance lever.
+
+**The per-level split, which bounds the obvious fix and suggests a better one:**
+
+| level | points | time | µs / 1000 points |
+|---|---|---|---|
+| 0 — finest, decides the answer | 1,514,073 | 41.2 s | 27 |
+| 1 | 194,285 | 7.8 s | 40 |
+| 2 | 25,575 | 5.0 s | 194 |
+| 3 | 3,536 | 2.8 s | **778** |
+
+`build_levels` re-discretizes the geometry at every multigrid level, and only the
+finest decides the answer — the rest are preconditioner. So "cheapen the coarse
+levels" is worth **27% of the geometry cost, about 23% of runtime**: real, and
+bounded. The more useful reading is the last column: cost is wildly sublinear in
+points, the coarsest level being **29× worse per point**. That is a large fixed
+cost per *call*, and the profile names it — 162,740 calls to `_legal` and
+182,080 to `near`, one per rim. **The problem is the number of small numpy
+calls, not the arithmetic in any one of them**, so the change that follows is
+batching the rim loop into hundreds of large calls rather than hundreds of
+thousands of small ones. That is M7's remaining work.
+
+*One thing landed here, and its size is the point.* `_Bins._block` walked its
+bin range with a Python triple loop and a dict keyed by tuples, 197,050 times.
+It is now one `searchsorted` over encoded bin codes with the variable-length
+ranges flattened by `repeat`. **6.5% of CPU time, energies bit-identical.** It
+was also written before the profile had been read one level deeper: `_block` is
+8% of `tottime`, so 6.5% is close to all there was, and the 66% was never in
+reach from there.
+
+#### Wall clock cannot measure this, and a VM would not fix it
+
+**§11 deferred the benchmark VM until "debye makes a performance claim against
+APBS", so this is where that question comes due. The answer is that the VM is
+not what was missing — the instrument was.**
+
+Measured on this machine, interleaved, alternating between `main` and the branch
+on the same case: `main` 61.8 / 79.1 / 42.5 s, branch 52.2 / 44.6 / 60.5 s.
+**Identical code varies 1.9× run to run**, which is larger than anything M7
+would claim, and the ranges overlap so completely that the comparison says
+nothing. Earlier in the same session the same `sashimi validate` invocation read
+36.0 s for one run and 64.6 s for another under review load.
+
+That instability is *contention*, not architecture, and **a VM on the same host
+contends the same way** — so the hardware §11 proposed would not have bought the
+stability it was proposed for. What does:
+
+- **CPU time rather than wall clock.** Other processes take wall-clock time away
+  from a run; they do not change how many CPU-seconds the work costs.
+- **Minimum of N rather than a mean.** The minimum is the least-contaminated
+  sample; a mean averages in the contamination.
+
+On that instrument the same comparison is clean and repeatable: `main`
+**44.96 s** CPU against the branch's **42.04 s**, energies identical to the last
+digit — the 6.5% above. The same pair on wall clock read as a *40% regression*
+an hour earlier. **So M7 claims CPU-time ratios, measured back to back on one
+machine, and §11's VM is retired on evidence rather than on preference.**
 
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 

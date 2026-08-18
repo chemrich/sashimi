@@ -376,26 +376,61 @@ class _Bins:
         ordered = keys[self._order]
         starts = np.flatnonzero(np.r_[True, (ordered[1:] != ordered[:-1]).any(axis=1)])
         stops = np.r_[starts[1:], len(ordered)]
-        self._ranges = {
-            (int(key[0]), int(key[1]), int(key[2])): (int(start), int(stop))
-            for key, start, stop in zip(ordered[starts], starts, stops, strict=True)
-        }
+
+        # Occupied bins as sorted integer codes rather than a dict of tuples.
+        # `_block` is the innermost thing in the module — 197,000 calls on a
+        # 906-atom protein — and a dict keyed by a Python tuple forces the
+        # lookup, and therefore the bin walk, to happen one bin at a time in
+        # Python. Encoded this way the whole walk is one `searchsorted`.
+        self._low_key = keys.min(axis=0)
+        self._high_key = keys.max(axis=0)
+        extent = self._high_key - self._low_key + 1
+        self._strides = np.array([extent[1] * extent[2], extent[2], 1], dtype=np.int64)
+        self._codes = self._encode(ordered[starts])
+        self._starts = starts.astype(np.int64)
+        self._stops = stops.astype(np.int64)
+
+    def _encode(self, keys: np.ndarray) -> np.ndarray:
+        """Bin keys as one integer each, valid only inside the occupied extent."""
+        return np.asarray((keys - self._low_key) @ self._strides)
 
     def keys_of(self, points: FloatArray) -> np.ndarray:
         return np.floor((points - self._origin) / self._cell).astype(np.int64)
 
     def _block(self, low: np.ndarray, high: np.ndarray) -> np.ndarray:
-        """Every point in the inclusive range of bins from `low` to `high`."""
-        blocks = []
-        for i in range(int(low[0]), int(high[0]) + 1):
-            for j in range(int(low[1]), int(high[1]) + 1):
-                for k in range(int(low[2]), int(high[2]) + 1):
-                    found = self._ranges.get((i, j, k))
-                    if found is not None:
-                        blocks.append(self._order[found[0] : found[1]])
-        if not blocks:
+        """Every point in the inclusive range of bins from `low` to `high`.
+
+        Clipped to the occupied extent first: a bin outside it holds no points
+        by construction, so clipping changes nothing and keeps every code inside
+        the range the encoding is valid over.
+        """
+        low = np.maximum(low, self._low_key)
+        high = np.minimum(high, self._high_key)
+        if (low > high).any():
             return np.zeros(0, dtype=np.int64)
-        return np.concatenate(blocks)
+
+        span = high - low + 1
+        i, j, k = (np.arange(low[axis], high[axis] + 1) for axis in range(3))
+        wanted = (
+            ((i - self._low_key[0]) * self._strides[0])[:, None, None]
+            + ((j - self._low_key[1]) * self._strides[1])[None, :, None]
+            + (k - self._low_key[2])[None, None, :]
+        ).reshape(int(span.prod()))
+
+        at = np.searchsorted(self._codes, wanted)
+        within = at < len(self._codes)
+        at, wanted = at[within], wanted[within]
+        hit = at[self._codes[at] == wanted]
+        starts, stops = self._starts[hit], self._stops[hit]
+
+        lengths = stops - starts
+        total = int(lengths.sum())
+        if not total:
+            return np.zeros(0, dtype=np.int64)
+        # Flatten the variable-length ranges without a Python loop: repeat each
+        # range's start, then add a running offset that restarts at each range.
+        offsets = np.repeat(starts - np.r_[0, np.cumsum(lengths)[:-1]], lengths)
+        return np.asarray(self._order[offsets + np.arange(total)])
 
     def gather(self, key: np.ndarray) -> np.ndarray:
         """Every point in the bin `key` and the twenty-six around it."""
