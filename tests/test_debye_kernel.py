@@ -24,7 +24,6 @@ two ever disagree about whether the kernel is present.
 from __future__ import annotations
 
 import importlib.util
-import os
 
 import numpy as np
 import pytest
@@ -43,18 +42,22 @@ HAVE_NUMBA = importlib.util.find_spec("numba") is not None
 needs_numba = pytest.mark.skipif(not HAVE_NUMBA, reason="numba is an optional extra")
 
 
-def _masks(structure: str, resolution: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
-    """The molecular mask down both paths, on the same lattice."""
+def _masks(structure: str, monkeypatch, resolution: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+    """The molecular mask down both paths, on the same lattice.
+
+    `monkeypatch` rather than mutating `os.environ` directly: a developer who
+    has `SASHIMI_NO_NUMBA` exported — which is how the README says to turn the
+    kernel off — would otherwise lose it for the rest of the pytest process the
+    first time this ran, and every later test would silently switch paths
+    against their explicit instruction.
+    """
     pqr = read_pqr(structure)
     solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
     axes = axis_coordinates(size_grid(pqr, GridSpec(resolution=resolution)))
-    surface = ReducedSurface(pqr, solvent)
 
-    os.environ[kernel.DISABLE] = "true"
-    try:
-        reference = surface.inside(axes)
-    finally:
-        del os.environ[kernel.DISABLE]
+    with monkeypatch.context() as patched:
+        patched.setenv(kernel.DISABLE, "true")
+        reference = ReducedSurface(pqr, solvent).inside(axes)
     return reference, ReducedSurface(pqr, solvent).inside(axes)
 
 
@@ -118,26 +121,50 @@ def test_an_absent_kernel_explains_itself_and_a_present_one_says_nothing():
 
 
 @needs_numba
-def test_the_compiled_mask_is_identical_on_a_peptide():
-    reference, compiled = _masks(PEPTIDE)
+def test_a_numba_that_will_not_import_falls_back_rather_than_crashing(monkeypatch):
+    """The regression an optional accelerator must never introduce.
+
+    Needs numba present to be meaningful: without it `find_spec` short-circuits
+    first and the branch under test is unreachable, so this asserts nothing on
+    a machine that has no numba at all.
+
+    numba raises `ImportError` from its own `__init__` when numpy is outside the
+    window it supports, and this package pins no numpy ceiling — so `find_spec`
+    saying yes is not proof the import succeeds. Before the guard, that
+    environment died inside `_toroidally_reachable` on every `molecular` solve,
+    on a machine that had worked before the extra existed. Slower is acceptable;
+    broken is not.
+    """
+    monkeypatch.delenv(kernel.DISABLE, raising=False)
+    kernel._importable.cache_clear()
+    monkeypatch.setattr(kernel, "_importable", lambda: False)
+    assert not kernel.available()
+    reason = kernel.why_unavailable()
+    assert reason is not None
+    assert "will not import" in reason
+
+
+@needs_numba
+def test_the_compiled_mask_is_identical_on_a_peptide(monkeypatch):
+    reference, compiled = _masks(PEPTIDE, monkeypatch)
     assert reference.any(), "the fixture decided nothing, so this compares two empties"
     assert np.array_equal(reference, compiled)
 
 
 @needs_numba
-def test_the_compiled_mask_is_identical_on_a_protein():
+def test_the_compiled_mask_is_identical_on_a_protein(monkeypatch):
     """Peptide geometry is not protein geometry: 62 rims against 11,380.
 
     The trap M4 records is a construction that is right on small solutes and
     wrong where three atoms meet, which is most of a real surface.
     """
-    reference, compiled = _masks("tests/data/apbs-examples/fas2.pqr", resolution=1.0)
+    reference, compiled = _masks("tests/data/apbs-examples/fas2.pqr", monkeypatch, resolution=1.0)
     assert reference.any()
     assert np.array_equal(reference, compiled)
 
 
 @needs_numba
-def test_the_compiled_energy_is_identical_to_the_last_digit():
+def test_the_compiled_energy_is_identical_to_the_last_digit(monkeypatch):
     """The claim the corpus recordings rest on, stated end to end."""
     from sashimi.debye import DebyeSolver  # noqa: PLC0415 — keeps import cost local
     from sashimi.protocol import FiniteDifferenceRequest  # noqa: PLC0415
@@ -148,11 +175,9 @@ def test_the_compiled_energy_is_identical_to_the_last_digit():
         grid=GridSpec(resolution=0.5),
         want_potential=False,
     )
-    os.environ[kernel.DISABLE] = "true"
-    try:
+    with monkeypatch.context() as patched:
+        patched.setenv(kernel.DISABLE, "true")
         reference = DebyeSolver().solve(request).energy_kj_mol
-    finally:
-        del os.environ[kernel.DISABLE]
     compiled = DebyeSolver().solve(request).energy_kj_mol
     assert reference is not None
     assert repr(compiled) == repr(reference)

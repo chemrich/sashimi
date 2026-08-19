@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from sashimi.corpus import MANIFEST, SYNTHETIC, Case, load_summary, verify_case
+from sashimi.corpus import MANIFEST, SYNTHETIC, Case, CaseTier, load_summary, verify_case
 from sashimi.gb import GbSolver
 from sashimi.gb.options import GbOptions
 from sashimi.gb.radii import input_radii
@@ -57,6 +57,19 @@ GB_CASES = tuple(
     if c.solvent.surface_model is SurfaceModel.MOLECULAR and not gb_would_replace_the_geometry(c)
 )
 
+# Which of them are re-solved on every run, as opposed to merely read back.
+#
+# `gb` is O(N^2) in atoms with no grid to cap it, so its cost tracks the solute
+# and nothing else: the 18,242-atom `serum-albumin` alone took 17.4 s of this
+# file's 19.8 s, against 0.68 s for the next slowest. That is the edit-test loop
+# `tests/test_corpus_debye.py` says it is protecting, broken by one case.
+#
+# The split is by tier, and only the *re-solve* is scoped. Every deviation and
+# schema check below still covers every case, because those read a recorded file
+# and cost nothing. `sashimi corpus verify --backend gb --tier full` is the
+# unscoped version, and CI's corpus step is where the full tier belongs.
+GB_RESOLVED = tuple(c for c in GB_CASES if c.tier is not CaseTier.FULL)
+
 
 @pytest.fixture(scope="module")
 def solver():
@@ -66,9 +79,14 @@ def solver():
 def test_the_gb_corpus_is_not_empty():
     """A guard on the selection above: a typo here would silently test nothing."""
     assert len(GB_CASES) >= 19
+    # And a guard on the tier split: a filter that took everything would make
+    # the re-solve free by not running, which is the failure it is meant to
+    # avoid rather than the one it causes.
+    assert len(GB_RESOLVED) >= 19
+    assert len(GB_RESOLVED) < len(GB_CASES)
 
 
-@pytest.mark.parametrize("case", GB_CASES, ids=lambda c: c.name)
+@pytest.mark.parametrize("case", GB_RESOLVED, ids=lambda c: c.name)
 def test_gb_reproduces_its_recorded_answer(case: Case, solver):
     """Our own solver against its own recorded numbers, on real structures."""
     recorded = load_summary(case, GB_DIRECTORY)
@@ -179,13 +197,13 @@ GB_DEVIATION: dict[str, float] = {
     # below is the controlled version of it.
     "lysozyme-molecular": 0.1345,
     "hca-molecular": 0.2113,
-    # The corpus's largest solute, 18,263 atoms, and it lands at the *gentle*
+    # The corpus's largest solute, 18,242 atoms, and it lands at the *gentle*
     # end — nearer the 1.65% of barnase than the 21% of hca a seventh its size.
     # Which end a case lands on is not predicted by its size, and this is now
     # the strongest instance of that: an analytic approximation fit to
-    # Poisson-Boltzmann on the molecular surface tracks a 1,186-residue protein
+    # Poisson-Boltzmann on the molecular surface tracks a 1,156-residue protein
     # to 2.94% while missing a 161-residue one by 21%.
-    "serum-albumin": 0.0294,
+    "serum-albumin": 0.0286,
 }
 
 # Both sides are checked-in recordings, so each deviation is exact and this band

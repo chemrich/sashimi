@@ -178,7 +178,7 @@ def _describe_acceleration() -> dict[str, Any]:
         "applies_to": "debye",
         "worth": (
             "~7x on surface classification, which is 86-92% of a debye solve; "
-            "measured 6.8x on a 382-residue protein and 7.0x on a 1,186-residue "
+            "measured 6.8x on a 382-residue protein and 7.0x on a 1,156-residue "
             "one, with energies bit-identical either way"
         ),
         "install": "pip install 'sashimi-electro[fast]'",

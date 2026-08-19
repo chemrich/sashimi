@@ -10,7 +10,7 @@ numba, selected at run time when numba is installed.
 the numpy rim loop, masks bit-identical at every multigrid level:
 
     actin-monomer,  382 residues    8.2x on the finest level, 6.8x overall
-    serum-albumin, 1,186 residues   9.5x on the finest level, 7.0x overall
+    serum-albumin, 1,156 residues   9.5x on the finest level, 7.0x overall
 
 `parallel=True` was measured and is not used: it bought 7.0x against 6.8x
 single-threaded, which is nothing, and it would have made a library take four
@@ -82,15 +82,44 @@ def _disabled() -> bool:
 
 
 def available() -> bool:
-    """Whether the compiled path will be used, without importing numba to find out.
+    """Whether the compiled path will be used.
 
-    `find_spec` rather than a `try: import` because importing numba costs about
-    a second and every `import sashimi` would pay it, on every machine, to answer
-    a question most callers never ask.
+    Two-stage, and the second stage is the point. `find_spec` is cheap and
+    answers "is numba installed" without paying the ~1 s import on every
+    `import sashimi` — but **it is not proof that importing numba succeeds.**
+    numba raises `ImportError` from its own `__init__` when numpy is outside its
+    supported window (`numpy_version > (2, 5)` today), and this package declares
+    `numpy>=2.0` with no upper bound. A caller with numba installed for
+    something else and a newer numpy would have had `find_spec` say yes, the
+    import fail deep inside a solve, and every `molecular` request die with an
+    exception outside this project's error taxonomy — on a machine that solved
+    fine before the accelerator existed.
+
+    **An optional accelerator must never turn "slower" into "broken."** So the
+    import is attempted once, behind a cache, and any failure is a permanent
+    fall-through to the reference path.
     """
     if _disabled():
         return False
-    return importlib.util.find_spec("numba") is not None
+    if importlib.util.find_spec("numba") is None:
+        return False
+    return _importable()
+
+
+@cache
+def _importable() -> bool:
+    """Whether `import numba` actually works, tried once and remembered.
+
+    Deliberately catches `Exception` rather than `ImportError` alone: an llvmlite
+    ABI mismatch in a conda environment surfaces as neither reliably, and there
+    is no failure here worth propagating when a correct answer is one branch
+    away.
+    """
+    try:
+        import numba  # noqa: F401, PLC0415 — probing, not using
+    except Exception:
+        return False
+    return True
 
 
 def why_unavailable() -> str | None:
@@ -99,6 +128,12 @@ def why_unavailable() -> str | None:
         return (
             f"the compiled kernel is disabled by {DISABLE}="
             f"{os.environ.get(DISABLE)!r} in the environment"
+        )
+    if importlib.util.find_spec("numba") is not None and not _importable():
+        return (
+            "numba is installed but will not import — most often numpy is "
+            "outside the window numba supports. debye is solving on the "
+            "pure-numpy surface path, which is correct and slower"
         )
     if importlib.util.find_spec("numba") is None:
         return (
@@ -197,10 +232,18 @@ def _compiled() -> Any:  # noqa: PLR0915
                             gap = length - ring
                             if gap * gap + axial * axial > squared_probe:
                                 continue
-                            scale = ring / length
-                            px = ox + rx * scale
-                            py = oy + ry * scale
-                            pz = oz + rz * scale
+                            # `ring * r / length`, associated exactly as the
+                            # reference does it in `surface.py` — which computes
+                            # `(ring_radii * radial) / length`. Hoisting
+                            # `ring / length` into a scale factor changes the
+                            # association and so the last bit, and a projected
+                            # centre landing within an ulp of a blocker's radius
+                            # would flip one node of the mask. Bit-identical is
+                            # this module's contract, so it is arranged rather
+                            # than hoped for.
+                            px = ox + ring * rx / length
+                            py = oy + ring * ry / length
+                            pz = oz + ring * rz / length
                             legal = True
                             for b in range(first_blocker, last_blocker):
                                 atom = blocker_flat[b]

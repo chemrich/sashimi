@@ -93,7 +93,7 @@ structure and never notice the difference.
 What it buys, and where. Between 86% and 92% of a `debye` solve is classifying
 grid points against the solvent-excluded surface, and the extra swaps that loop
 for a compiled one — measured at **6.8x on a 382-residue protein and 7.0x on a
-1,186-residue one**. On this machine that is a 1,186-residue solve going from
+1,156-residue one**. On this machine that is a 1,156-residue solve going from
 about two and a half minutes to about half a minute. It changes nothing else:
 **the energies are bit-identical either way**, which `tests/test_debye_kernel.py`
 asserts on real geometry rather than assuming, and CI runs the pure-numpy path

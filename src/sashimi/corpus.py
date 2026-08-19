@@ -1686,10 +1686,11 @@ MANIFEST: tuple[Case, ...] = (
     Case(
         name="serum-albumin",
         description=(
-            "18,263 atoms over 1,186 residues at -30e, the largest in the "
+            "18,242 atoms over 1,156 residues at -30e, the largest in the "
             "corpus and more than twice the next. Human serum albumin, PDB "
-            "1AO6, protonated by pdb2pqr at the AMBER force field; stored "
-            "gzipped because the text is 1.25 MB. Two deliberate choices. It "
+            "1AO6, prepared by pdb2pqr 3.7.1 with AMBER radii at pH 7 and "
+            "`--drop-water`; see `tests/data/PROVENANCE.md`. Stored gzipped "
+            "because the text is 1.25 MB. Two deliberate choices. It "
             "asks for **1.0 A** because 0.5 and 0.35 both resolve to the *same* "
             "clamped 161^3 lattice on a solute this size, so a case at 0.5 A "
             "would not be measuring 0.5 A and a refinement study across the two "

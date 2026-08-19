@@ -833,7 +833,7 @@ def test_no_recorded_delphi_answer_is_absurd():
     # Per atom, not absolute. The bound is here to catch an energy wrong by
     # orders of magnitude, and "absurd" scales with the solute: the flat
     # -20,000 this used to carry was set when the corpus stopped at 8,279 atoms,
-    # and a 1,186-residue protein legitimately reads -38,701. Widening the flat
+    # and a 1,156-residue protein legitimately reads -38,701. Widening the flat
     # bound to fit it would have loosened the guard for every small molecule at
     # once — including acetate, which is the case the guard exists for.
     #
