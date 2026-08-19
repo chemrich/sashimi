@@ -3509,7 +3509,7 @@ it needs nothing fetched by hand. A caller solving one peptide should not pay it
 a caller doing protein electrostatics should. So the cost is stated wherever the
 decision gets made — the README says it in the install section, and
 `sashimi_capabilities` reports `acceleration.compiled_surface_kernel` with the
-size and the measured worth beside it. `SASHIMI_NO_NUMBA=1` turns it off.
+size and the measured worth beside it. `SASHIMI_NO_NUMBA=true` turns it off.
 
 **Two verification steps, because an unexercised second implementation is the
 trap this repo keeps hitting.** CI installs the extra on `full` only and asserts

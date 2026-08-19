@@ -101,7 +101,8 @@ on two of its three legs and the compiled one on the third.
 
 If you are unsure whether you have it, `sashimi_capabilities` reports
 `acceleration.compiled_surface_kernel` and, when it is missing, says so in one
-sentence. `SASHIMI_NO_NUMBA=1` turns it off without uninstalling anything.
+sentence. `SASHIMI_NO_NUMBA=true` turns it off without uninstalling anything (`1`, `yes`
+and `on` work too; `false`, `0`, `no` and `off` leave it on).
 
 Nothing else in sashimi is affected — APBS, DelPhi, TABI-PB and `gb` do not use
 it, and `debye` is correct without it, only slower.

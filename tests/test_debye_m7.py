@@ -51,7 +51,7 @@ def _reference_path(monkeypatch):
     is the fixture earning its place rather than papering over a failure. The
     two paths are compared against each other in `tests/test_debye_kernel.py`.
     """
-    monkeypatch.setenv(kernel.DISABLE, "1")
+    monkeypatch.setenv(kernel.DISABLE, "true")
 
 
 # Twenty atoms, and the smallest structure in the corpus whose rims decide

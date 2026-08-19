@@ -50,7 +50,7 @@ def _masks(structure: str, resolution: float = 0.5) -> tuple[np.ndarray, np.ndar
     axes = axis_coordinates(size_grid(pqr, GridSpec(resolution=resolution)))
     surface = ReducedSurface(pqr, solvent)
 
-    os.environ[kernel.DISABLE] = "1"
+    os.environ[kernel.DISABLE] = "true"
     try:
         reference = surface.inside(axes)
     finally:
@@ -58,25 +58,51 @@ def _masks(structure: str, resolution: float = 0.5) -> tuple[np.ndarray, np.ndar
     return reference, ReducedSurface(pqr, solvent).inside(axes)
 
 
-def test_the_environment_agrees_with_itself():
+def test_the_environment_agrees_with_itself(monkeypatch):
     """`available()` must match reality, or every skip below is meaningless.
 
     It answers by `find_spec` rather than by importing numba, since importing it
     costs about a second on every `import sashimi`. That is a real optimisation
     and therefore a real thing to get wrong.
     """
-    assert kernel.available() == (HAVE_NUMBA and not os.environ.get(kernel.DISABLE))
+    monkeypatch.delenv(kernel.DISABLE, raising=False)
+    assert kernel.available() == HAVE_NUMBA
 
 
-def test_the_disable_switch_actually_disables():
+@pytest.mark.parametrize("spelling", ["TRUE", "True", "true", "1", "yes", "on", "ture"])
+def test_the_disable_switch_accepts_how_people_write_it(spelling: str, monkeypatch):
+    """Readable spellings, and a typo, all mean disable.
+
+    The asymmetry is deliberate and documented in `kernel._disabled`: the
+    variable is named `NO_NUMBA`, so setting it at all expresses intent to turn
+    the kernel off, and off is the safe direction — the answer is identical
+    either way and only the wait changes. `ture` is in this list on purpose.
+    """
+    monkeypatch.setenv(kernel.DISABLE, spelling)
+    assert not kernel.available()
+    reason = kernel.why_unavailable()
+    assert reason is not None
+    assert kernel.DISABLE in reason
+
+
+@pytest.mark.parametrize("spelling", ["0", "false", "False", "FALSE", "no", "off", ""])
+def test_a_false_spelling_does_not_disable_it(spelling: str, monkeypatch):
+    """The trap the first version of this shipped with.
+
+    `os.environ.get(DISABLE)` is truthy for any non-empty string, so
+    `SASHIMI_NO_NUMBA=false` and `=0` both *disabled* the kernel — the opposite
+    of what they say, and silently, because a correct-but-slow answer is
+    indistinguishable from a correct one.
+    """
+    monkeypatch.setenv(kernel.DISABLE, spelling)
+    assert kernel.available() == HAVE_NUMBA
+
+
+def test_disabling_it_yields_the_reference_path(monkeypatch):
     """Otherwise the reference half of every comparison below is not the reference."""
-    os.environ[kernel.DISABLE] = "1"
-    try:
-        assert not kernel.available()
-        assert kernel.why_unavailable() is not None
-        assert kernel.DISABLE in str(kernel.why_unavailable())
-    finally:
-        del os.environ[kernel.DISABLE]
+    monkeypatch.setenv(kernel.DISABLE, "true")
+    assert not kernel.available()
+    assert kernel.DISABLE in str(kernel.why_unavailable())
 
 
 def test_an_absent_kernel_explains_itself_and_a_present_one_says_nothing():
@@ -122,7 +148,7 @@ def test_the_compiled_energy_is_identical_to_the_last_digit():
         grid=GridSpec(resolution=0.5),
         want_potential=False,
     )
-    os.environ[kernel.DISABLE] = "1"
+    os.environ[kernel.DISABLE] = "true"
     try:
         reference = DebyeSolver().solve(request).energy_kj_mol
     finally:

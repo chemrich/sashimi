@@ -52,6 +52,34 @@ __all__ = ["available", "decide_rims", "why_unavailable"]
 # cached, so a test can flip it without reaching into module state.
 DISABLE = "SASHIMI_NO_NUMBA"
 
+# Spellings that mean "no, do not disable it". Everything else that is set at
+# all means "disable", including a typo — see `_disabled`.
+_FALSE = frozenset({"", "0", "false", "no", "off"})
+
+
+def _disabled() -> bool:
+    """Whether the environment asks for the reference path.
+
+    **Unset is not the same as set to a false value, and neither is the same as
+    set to anything else.** The first version of this read
+    `os.environ.get(DISABLE)` for truthiness, which quietly made
+    `SASHIMI_NO_NUMBA=false` and `SASHIMI_NO_NUMBA=0` *disable* the kernel — the
+    exact opposite of what someone writing them means, and silently, since a
+    correct-but-slow answer looks like a correct answer.
+
+    So false spellings are honoured as false, and **anything else that is set is
+    honoured as true, including `ture`**. That asymmetry is deliberate: the
+    variable is named `NO_NUMBA`, so setting it at all expresses intent to turn
+    the thing off, and turning it off is the safe direction — the answer is
+    identical either way and only the wait changes. A typo that disables an
+    optimisation costs seconds; a typo that silently ignores an operator's
+    instruction is the kind of thing that is found much later.
+    """
+    value = os.environ.get(DISABLE)
+    if value is None:
+        return False
+    return value.strip().lower() not in _FALSE
+
 
 def available() -> bool:
     """Whether the compiled path will be used, without importing numba to find out.
@@ -60,15 +88,18 @@ def available() -> bool:
     a second and every `import sashimi` would pay it, on every machine, to answer
     a question most callers never ask.
     """
-    if os.environ.get(DISABLE):
+    if _disabled():
         return False
     return importlib.util.find_spec("numba") is not None
 
 
 def why_unavailable() -> str | None:
     """A sentence for a caller wondering why a solve is slow, or None if it is not."""
-    if os.environ.get(DISABLE):
-        return f"the compiled kernel is disabled by {DISABLE} in the environment"
+    if _disabled():
+        return (
+            f"the compiled kernel is disabled by {DISABLE}="
+            f"{os.environ.get(DISABLE)!r} in the environment"
+        )
     if importlib.util.find_spec("numba") is None:
         return (
             "numba is not installed, so debye is solving on the pure-numpy "
