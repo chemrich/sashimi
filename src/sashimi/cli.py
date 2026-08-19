@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import hashlib
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -16,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from sashimi import backends
+from sashimi import backends, bench
 from sashimi.capabilities import comparable_surface_models, describe_capabilities
 from sashimi.corpus import (
     MANIFEST,
@@ -31,7 +32,7 @@ from sashimi.corpus import (
     write_summary,
 )
 from sashimi.errors import SashimiError, UnsupportedRequest
-from sashimi.protocol import Solver, SurfaceModel, System
+from sashimi.protocol import GridSpec, Solver, SurfaceModel, System
 from sashimi.validate import (
     DEFAULT_APPROXIMATION_TOLERANCE,
     DEFAULT_ENERGY_TOLERANCE,
@@ -562,6 +563,44 @@ def _validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _bench(args: argparse.Namespace) -> int:
+    """CPU-time measurement of a debye solve, optionally against another checkout.
+
+    Lives here rather than in `sashimi.bench` because writing to stdout is what
+    a command-line entry point is for and what every other module is linted out
+    of. The instrument itself returns text and data.
+    """
+    path = Path(args.structure)
+    if not path.is_file():
+        raise SystemExit(f"no such structure: {path}")
+    if args.repeats < 1:
+        raise SystemExit(f"--repeats must be at least 1, got {args.repeats}")
+    spec = bench.CaseSpec(
+        path=path,
+        resolution=args.resolution,
+        padding=args.padding,
+        surface=SurfaceModel(args.surface),
+    )
+    work = bench.solve_case(spec)
+
+    if args.against is None:
+        measurement, energy = bench.measure(work, repeats=args.repeats, label="working tree")
+        if args.json:
+            print(json.dumps({**measurement.as_dict(), "energy": energy}))
+        else:
+            print(bench.render(measurement, energy))
+        return 0
+
+    comparison = bench.compare_against(Path(args.against), spec, work, repeats=args.repeats)
+    if args.json:
+        print(json.dumps(comparison.as_dict()))
+    else:
+        print(bench.render_comparison(comparison))
+    # A ratio between two different answers is not a speed-up, so it is a
+    # failure rather than a footnote.
+    return 0 if comparison.identical else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sashimi", description=__doc__)
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -660,6 +699,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="report a spread even across differing surface models or energy terms",
     )
     validator.set_defaults(func=_validate)
+
+    benchmark = subcommands.add_parser(
+        "bench",
+        help="CPU-time measurement of a debye solve",
+        description=bench.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    benchmark.add_argument("--structure", required=True, help="PQR file to solve")
+    benchmark.add_argument("--resolution", type=float, default=GridSpec().resolution)
+    benchmark.add_argument("--padding", type=float, default=GridSpec().padding)
+    benchmark.add_argument(
+        "--surface",
+        choices=[m.value for m in SurfaceModel],
+        default=SurfaceModel.MOLECULAR.value,
+        help=f"boundary to solve against (default: {SurfaceModel.MOLECULAR.value})",
+    )
+    benchmark.add_argument(
+        "--repeats",
+        type=int,
+        default=bench.DEFAULT_REPEATS,
+        help=(
+            "samples to take; the report is the minimum, which is the "
+            f"least-contaminated one (default: {bench.DEFAULT_REPEATS})"
+        ),
+    )
+    benchmark.add_argument(
+        "--against",
+        help=(
+            "another sashimi checkout to interleave against, one sample each "
+            "in turn; exits non-zero if the two energies differ"
+        ),
+    )
+    benchmark.add_argument("--json", action="store_true", help="machine-readable output")
+    benchmark.set_defaults(func=_bench)
 
     return parser
 

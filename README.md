@@ -340,6 +340,38 @@ refused, and says why.
 Energies are compared directly, potentials by sampling both maps at the same
 physical coordinates, since two backends never produce the same grid.
 
+### Measuring a change to the solver
+
+`debye` runs in this process, so it is the one backend whose speed is sashimi's
+own problem. `sashimi bench` is the instrument its performance claims are made
+on, and every part of it is a reaction to a measurement that lied:
+
+```sh
+sashimi bench --structure tests/data/apbs-examples/fas2.pqr
+sashimi bench --structure tests/data/apbs-examples/fas2.pqr --against ../sashimi-main
+```
+
+**Wall clock cannot measure this.** Interleaved on one machine, alternating
+between two revisions of the same case, *identical* code read 61.8 / 79.1 /
+42.5 s against 52.2 / 44.6 / 60.5 s — a 1.9x spread with the ranges overlapping
+completely. That is other processes taking wall-clock time away from the run,
+which does not change how many CPU-seconds the work costs. So `bench` reports
+**CPU time**, takes the **minimum of N** rather than a mean, and with
+`--against` **interleaves** the two revisions one sample at a time so that a
+drift in machine state lands on both. The same pair that read as a 40%
+regression on wall clock reads 44.96 s against 42.04 s here.
+
+`--against` takes any checkout of this repository — a `git worktree` at the
+revision you are comparing to. It runs there with that tree's own lockfile, and
+it does **not** require the baseline to contain `sashimi bench`, which would
+make every revision before this one unmeasurable.
+
+**The energy is part of the measurement.** A solver can be made arbitrarily fast
+by computing something else, so both sides report their energy to full precision
+and `bench` exits non-zero when they differ. An answer-preserving change is held
+to *bit*-identical, not to a tolerance — which is the bar the batched surface
+work in M7 has to meet.
+
 Not yet released to PyPI. See [ROADMAP.md](ROADMAP.md) for where this is
 heading — it is the single planning document, covering the protocol, the
 multi-backend future, distribution and `debye`.
