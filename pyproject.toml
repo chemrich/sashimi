@@ -34,6 +34,15 @@ dependencies = [
     "pydantic>=2.0",
 ]
 
+[project.optional-dependencies]
+# The compiled surface kernel. Deliberately an extra rather than a dependency:
+# numba brings llvmlite and the two are ~145 MB installed, against a package
+# whose proposition is that it installs anywhere with nothing to fetch by hand.
+# It makes the debye backend's surface classification ~7x faster, which is most
+# of a solve, so anyone doing protein electrostatics with `debye` wants it — see
+# README "A faster debye" and `sashimi_capabilities`.
+fast = ["numba>=0.61"]
+
 [dependency-groups]
 dev = [
     "mypy>=1.18",
@@ -140,6 +149,13 @@ enable_error_code = [
     "redundant-expr",
     "truthy-bool",
 ]
+
+[[tool.mypy.overrides]]
+# numba is an optional extra, so the default development environment does not
+# have it and never should — the pure-numpy path is the one most contributors
+# run. Its absence is the normal case, not a missing stub to chase.
+module = ["numba.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # Test functions are discovered by name, not called by typed code, so requiring

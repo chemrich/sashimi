@@ -74,6 +74,39 @@ uv run pytest -m "not apbs"   # skips everything needing the binary
 `SASHIMI_APBS_PATH` overrides binary discovery; otherwise `which apbs` wins,
 with an active conda environment as a fallback.
 
+### If you are doing real electrostatics with `debye`, install the extra
+
+**`debye` — the built-in solver that needs no binary at all — is roughly seven
+times faster with `sashimi-electro[fast]`, and you almost certainly want it if
+you are working on proteins rather than peptides.**
+
+```sh
+uv sync --all-extras                 # or: pip install 'sashimi-electro[fast]'
+```
+
+**It is an extra rather than a dependency because it is large: ~145 MB**, since
+it pulls in numba and llvmlite — several times the size of everything else here
+combined. That is a real cost on a laptop, in a container image and in CI, and
+it is not a decision to make on your behalf when many callers solve one small
+structure and never notice the difference.
+
+What it buys, and where. Between 86% and 92% of a `debye` solve is classifying
+grid points against the solvent-excluded surface, and the extra swaps that loop
+for a compiled one — measured at **6.8x on a 382-residue protein and 7.0x on a
+1,156-residue one**. On this machine that is a 1,156-residue solve going from
+about two and a half minutes to about half a minute. It changes nothing else:
+**the energies are bit-identical either way**, which `tests/test_debye_kernel.py`
+asserts on real geometry rather than assuming, and CI runs the pure-numpy path
+on two of its three legs and the compiled one on the third.
+
+If you are unsure whether you have it, `sashimi_capabilities` reports
+`acceleration.compiled_surface_kernel` and, when it is missing, says so in one
+sentence. `SASHIMI_NO_NUMBA=true` turns it off without uninstalling anything (`1`, `yes`
+and `on` work too; `false`, `0`, `no` and `off` leave it on).
+
+Nothing else in sashimi is affected — APBS, DelPhi, TABI-PB and `gb` do not use
+it, and `debye` is correct without it, only slower.
+
 Both package managers above ship exactly the 3.4.1 this project is frozen
 against — but unlike a lockfile, neither *holds* it there. `tests/test_corpus.py`
 is what replaces that pin: it asserts the discovered version and re-solves the

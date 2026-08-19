@@ -3440,6 +3440,94 @@ own label is "not a Poisson-Boltzmann solution; magnitudes are indicative only"
 of the three that is both. **That, and not a constant factor, is the case for
 shipping it.**
 
+### The size range protean actually uses, and a compiled-kernel spike
+
+**2026-08-18.** Charlie set the working range at **250 to 1,200 residues**,
+which is the first time this roadmap has had one. Two things follow, and the
+first is that most of the performance work above was graded on a structure below
+the floor: **fas2 is 59 residues.**
+
+#### Measured across the range, at 1.0 Å
+
+| backend | scaling | 59 aa | 161 aa | 382 aa | 538 aa | 1,156 aa |
+|---|---|---|---|---|---|---|
+| APBS | atoms^0.96 | 0.7 s | 2.4 s | 3.8 s | 5.5 s | **14.2 s** |
+| DelPhi C++ | atoms^1.60 | 0.4 s | 1.4 s | 5.8 s | 10.2 s | **53.8 s** |
+| debye | atoms^1.13 | 5.9 s | 15.0 s | 52.8 s | 74.0 s | **159.1 s** |
+| protean `coulombic` | atoms^1.87 | 0.7 s | 3.4 s | 20.7 s | 26.6 s | **201.4 s** |
+
+**The ordering inverts inside the working range, and that is the headline.**
+`coulombic` is protean's no-binary default and is 8.7× faster than debye at
+59 residues; by 1,156 it is **slower**, because it is O(points × atoms) and
+debye is near-linear. Measured crossover: **~1,290 residues**, with debye ahead
+of it at the top of the range already. So above roughly 1,200 residues debye is
+both faster than the default protean ships *and* the only one of the two solving
+the Poisson-Boltzmann equation.
+
+**DelPhi C++ is the other surprise.** It is the fastest backend at peptide scale
+and scales at atoms^1.60, so by 1,156 residues it is 3.8× slower than APBS and
+only 3.0× faster than our pure-numpy solver. **Two compiled incumbents differ by
+3.8× from each other**, which is nearly the 3.0× between the slower of them and
+debye — so on this problem the implementation and the algorithm dominate the
+language. APBS's near-linear exponent is focusing; debye has none, by design.
+
+#### The numba spike: 7×, and where that leaves Rust
+
+Ported `_toroidally_reachable` — bin walk, projection and blocker test — to a
+single `njit` kernel and graded it against the shipped numpy version. **Masks
+bit-identical at every level, on both structures tested.**
+
+| | level 0 | total, 4–5 levels |
+|---|---|---|
+| actin-monomer, 382 aa | 8.2× | **6.8×** |
+| serum-albumin, 1,156 aa | 9.5× | **7.0×** |
+
+**`parallel=True` bought nothing** — 7.0× against 6.8× single-threaded — so this
+is compiled code, not parallelism, and it is the second measurement in this
+milestone saying the parallel axis is not the one to push here.
+
+Geometry is 92% of the solve at 1.0 Å, so **porting all three families projects
+to ~4.7× overall: 1,156 residues from 159 s to ~34 s**, between DelPhi and APBS,
+and beating `coulombic` by 6× at the top of the range. That is the number a port
+has to be worth; it is a projection and the last four in this section were wrong,
+so it is to be re-measured per family and not assumed.
+
+**What the spike did not settle was what to ship**, and the answer taken on
+2026-08-19 is: **both, with the caller choosing.** `sashimi-electro[fast]` is an
+optional extra carrying numba; `sashimi.debye.kernel` holds the compiled rim
+loop and `surface.py` dispatches to it when it is importable.
+
+The shape matters more than the choice. **The numpy path stays the reference** —
+it defines the answer, it is what the corpus is recorded against, and it is what
+two of CI's three legs run. The kernel is required to be *bit*-identical, never
+merely close, for the same reason the batching was: `decided` feeds a boolean or,
+so nothing downstream can depend on which rim won.
+
+**145 MB is the reason it is not a dependency.** numba plus llvmlite is several
+times the rest of the install, against a package whose whole proposition is that
+it needs nothing fetched by hand. A caller solving one peptide should not pay it;
+a caller doing protein electrostatics should. So the cost is stated wherever the
+decision gets made — the README says it in the install section, and
+`sashimi_capabilities` reports `acceleration.compiled_surface_kernel` with the
+size and the measured worth beside it. `SASHIMI_NO_NUMBA=true` turns it off.
+
+**Two verification steps, because an unexercised second implementation is the
+trap this repo keeps hitting.** CI installs the extra on `full` only and asserts
+the compiled path is live there; the other two legs assert it is *not*, so the
+fallback is genuinely the thing most installs run rather than an untested branch.
+That is the DelPhi lesson — a skipped tier and a passing tier look identical —
+applied one implementation over.
+
+*One test earned its place immediately.* With the extra installed,
+`test_the_structure_actually_exercises_the_rim_loop` failed: it counts
+`near_many` calls, and the kernel never makes any. The M7 tests are tests of the
+*reference* implementation — `PAIR_BATCH`, the batch sweep, `near_many` — so they
+now pin `SASHIMI_NO_NUMBA`. The failure was the check doing exactly its job.
+
+Rust via PyO3 remains the better long-term vehicle on size alone, and this
+does not foreclose it: the dispatch seam is where a second accelerator would
+land, and the bit-identity test is the gate it would have to pass.
+
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 
 **Done 2026-08-16, at Charlie's direction, in its own PR as planned.** The three

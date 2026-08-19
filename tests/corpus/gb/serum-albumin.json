@@ -1,0 +1,39 @@
+{
+  "name": "serum-albumin",
+  "description": "18,242 atoms over 1,156 residues at -30e, the largest in the corpus and more than twice the next. Human serum albumin, PDB 1AO6, prepared by pdb2pqr 3.7.1 with AMBER radii at pH 7 and `--drop-water`; see `tests/data/PROVENANCE.md`. Stored gzipped because the text is 1.25 MB. Two deliberate choices. It asks for **1.0 A** because 0.5 and 0.35 both resolve to the *same* clamped 161^3 lattice on a solute this size, so a case at 0.5 A would not be measuring 0.5 A and a refinement study across the two would report a perfect zero \u2014 the trap section 12 records APBS springing on the residue axis. And it is `molecular` rather than `smoothed-molecular` so that debye and DelPhi C++ can answer it at all: every other case above 5,000 atoms is on APBS's own averaging, which left the top of the size range graded by a single backend.",
+  "source": "1ao6.pqr.gz",
+  "tier": "full",
+  "family": "analytic",
+  "backend": "gb-obc2-1",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 1.0,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solute_dielectric": 2.0,
+    "solvent_dielectric": 78.54,
+    "ionic_strength": 0.15,
+    "temperature": 298.15,
+    "gb": {
+      "model": "obc2",
+      "radii": "mbondi",
+      "offset": 0.09,
+      "minimum_radius": 0.8,
+      "element_screening": true,
+      "debye_kappa_inverse_a": 0.127282
+    }
+  },
+  "energy_kj_mol": -41221.410385273084
+}

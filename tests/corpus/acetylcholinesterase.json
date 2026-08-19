@@ -1,6 +1,6 @@
 {
   "name": "acetylcholinesterase",
-  "description": "8,279 atoms, the largest in the corpus. It asks for 0.5 A and is given coarser, because `max_points` caps the grid rather than the atom count \u2014 which is why 8,000 atoms costs 15 s and not an hour.",
+  "description": "8,279 atoms. It asks for 0.5 A and is given coarser, because `max_points` caps the grid rather than the atom count \u2014 which is why 8,000 atoms costs 15 s and not an hour.",
   "source": "apbs-examples/mache.pqr",
   "tier": "full",
   "family": "finite-difference",

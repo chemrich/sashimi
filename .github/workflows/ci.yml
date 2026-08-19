@@ -218,7 +218,20 @@ jobs:
       - name: Install
         # --frozen: fail if uv.lock is out of date with pyproject.toml, rather
         # than silently resolving something different from what runs locally.
-        run: uv sync --frozen --all-groups
+        #
+        # The `fast` extra — debye's compiled surface kernel — is installed on
+        # the `full` leg only, and that split is the test. numba is ~145 MB and
+        # optional by design, so `none` and `apbs-only` prove the pure-numpy
+        # path is what most installs actually run, and `full` proves the
+        # compiled path agrees with it. Two implementations of the same loop
+        # with only one of them ever exercised is the trap this workflow already
+        # records for DelPhi.
+        run: |
+          if [ "${{ matrix.profile }}" = "full" ]; then
+            uv sync --frozen --all-groups --all-extras
+          else
+            uv sync --frozen --all-groups
+          fi
 
       - name: Lint
         run: uv run --frozen ruff check .
@@ -237,6 +250,31 @@ jobs:
       # skipped, and CI stayed green. A skipped tier and a passing tier look
       # identical in the summary line, so assert the distinction whenever a
       # DelPhi was actually found.
+      # The same trap, one implementation over: with the extra installed but the
+      # dispatch broken, every kernel test would skip and the leg would stay
+      # green while the compiled path was never entered. So assert the path is
+      # live, then run the tests that compare it against the reference.
+      - name: Verify the compiled surface kernel actually ran
+        if: matrix.profile == 'full'
+        run: |
+          uv run --frozen python -c "
+          from sashimi.debye import kernel
+          assert kernel.available(), 'the fast extra is installed but the kernel is not selected'
+          print('compiled surface kernel: active')
+          "
+          uv run --frozen pytest -q tests/test_debye_kernel.py
+
+      # And the other side of it: the two legs without the extra must be
+      # exercising the numpy path, not quietly finding numba some other way.
+      - name: Verify the pure-numpy surface path actually ran
+        if: matrix.profile != 'full'
+        run: |
+          uv run --frozen python -c "
+          from sashimi.debye import kernel
+          assert not kernel.available(), 'numba reached a leg that should not have it'
+          print('pure-numpy surface path: active')
+          "
+
       - name: Verify the DelPhi tier actually ran
         if: steps.delphi_path.outputs.found == 'true'
         run: uv run --frozen pytest -q -m delphi
