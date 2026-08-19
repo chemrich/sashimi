@@ -179,6 +179,13 @@ GB_DEVIATION: dict[str, float] = {
     # below is the controlled version of it.
     "lysozyme-molecular": 0.1345,
     "hca-molecular": 0.2113,
+    # The corpus's largest solute, 18,263 atoms, and it lands at the *gentle*
+    # end — nearer the 1.65% of barnase than the 21% of hca a seventh its size.
+    # Which end a case lands on is not predicted by its size, and this is now
+    # the strongest instance of that: an analytic approximation fit to
+    # Poisson-Boltzmann on the molecular surface tracks a 1,186-residue protein
+    # to 2.94% while missing a 161-residue one by 21%.
+    "serum-albumin": 0.0294,
 }
 
 # Both sides are checked-in recordings, so each deviation is exact and this band

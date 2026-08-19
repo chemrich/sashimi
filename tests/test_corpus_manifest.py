@@ -748,6 +748,12 @@ DELPHI_DIRECTORY = Path("tests/corpus/delphi")
 # change-detector for physics that is allowed to change.
 DELPHI_DEVIATION_CEILING = 0.08
 
+# kJ/mol per atom, above which a recorded energy is wrong rather than large.
+# Measured at both ends: 914 is the worst legitimate density in the corpus (a
+# divalent Born ion) and 108,151 is the bug this guards (acetate read on shifted
+# columns). This is their geometric midpoint.
+PER_ATOM_ABSURD = 10_000.0
+
 
 def test_the_two_grid_codes_agree_where_they_can_be_compared():
     """The third reference, and the one that anchors the Born ion.
@@ -824,8 +830,25 @@ def test_no_recorded_delphi_answer_is_absurd():
             )
         seen[energy] = name
 
+    # Per atom, not absolute. The bound is here to catch an energy wrong by
+    # orders of magnitude, and "absurd" scales with the solute: the flat
+    # -20,000 this used to carry was set when the corpus stopped at 8,279 atoms,
+    # and a 1,186-residue protein legitimately reads -38,701. Widening the flat
+    # bound to fit it would have loosened the guard for every small molecule at
+    # once — including acetate, which is the case the guard exists for.
+    #
+    # Both ends measured rather than chosen. Across every recording the worst
+    # legitimate density is 914 kJ/mol per atom (a divalent Born ion, where the
+    # energy goes as q^2 on a single atom) and the gentlest is 1.2 (a protein).
+    # The bug is 108,151 per atom — acetate at -865,205 where the answer is
+    # -196.90. The bound below is the geometric midpoint of those two, so it
+    # sits ~11x above anything real and ~11x below the failure, and it still
+    # admits a hypothetical hexavalent ion at ~8,200.
     for name, energy in energies.items():
-        assert -20_000 < energy < 0, f"{name}: {energy}"
+        atoms = len(by_case[name].structure().coords)
+        assert -PER_ATOM_ABSURD * atoms < energy < 0, (
+            f"{name}: {energy} over {atoms} atoms is {energy / atoms:.0f} per atom"
+        )
 
 
 def test_the_field_check_samples_every_cubic_symmetry_class():

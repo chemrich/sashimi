@@ -1705,6 +1705,22 @@ MANIFEST: tuple[Case, ...] = (
         tier=CaseTier.FULL,
     ),
     Case(
+        name="serum-albumin-vdw",
+        description=(
+            "The van der Waals half of `serum-albumin`, and the largest solute "
+            "in the corpus by more than a factor of two. Not optional: M4 gates "
+            "on the probe's *worth*, `(E_molecular - E_vdw)/|E_vdw|`, so a "
+            "gateable solute without a surface sibling is a solute the gate "
+            "cannot see — which is what "
+            "`test_the_corpus_can_state_the_probes_worth_above_twenty_atoms` "
+            "caught when this pair arrived as a single case."
+        ),
+        source="1ao6.pqr.gz",
+        grid=GridSpec(resolution=1.0, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS),
+        tier=CaseTier.FULL,
+    ),
+    Case(
         name="fas2-fine",
         description=(
             "906 atoms at 0.35 A. The corpus tests convergence only on a single "
