@@ -3440,6 +3440,66 @@ own label is "not a Poisson-Boltzmann solution; magnitudes are indicative only"
 of the three that is both. **That, and not a constant factor, is the case for
 shipping it.**
 
+### The size range protean actually uses, and a compiled-kernel spike
+
+**2026-08-18.** Charlie set the working range at **250 to 1,200 residues**,
+which is the first time this roadmap has had one. Two things follow, and the
+first is that most of the performance work above was graded on a structure below
+the floor: **fas2 is 59 residues.**
+
+#### Measured across the range, at 1.0 Å
+
+| backend | scaling | 59 aa | 161 aa | 382 aa | 538 aa | 1,186 aa |
+|---|---|---|---|---|---|---|
+| APBS | atoms^0.96 | 0.7 s | 2.4 s | 3.8 s | 5.5 s | **14.2 s** |
+| DelPhi C++ | atoms^1.60 | 0.4 s | 1.4 s | 5.8 s | 10.2 s | **53.8 s** |
+| debye | atoms^1.13 | 5.9 s | 15.0 s | 52.8 s | 74.0 s | **159.1 s** |
+| protean `coulombic` | atoms^1.87 | 0.7 s | 3.4 s | 20.7 s | 26.6 s | **201.4 s** |
+
+**The ordering inverts inside the working range, and that is the headline.**
+`coulombic` is protean's no-binary default and is 8.7× faster than debye at
+59 residues; by 1,186 it is **slower**, because it is O(points × atoms) and
+debye is near-linear. Measured crossover: **~1,290 residues**, with debye ahead
+of it at the top of the range already. So above roughly 1,200 residues debye is
+both faster than the default protean ships *and* the only one of the two solving
+the Poisson-Boltzmann equation.
+
+**DelPhi C++ is the other surprise.** It is the fastest backend at peptide scale
+and scales at atoms^1.60, so by 1,186 residues it is 3.8× slower than APBS and
+only 3.0× faster than our pure-numpy solver. **Two compiled incumbents differ by
+3.8× from each other**, which is nearly the 3.0× between the slower of them and
+debye — so on this problem the implementation and the algorithm dominate the
+language. APBS's near-linear exponent is focusing; debye has none, by design.
+
+#### The numba spike: 7×, and where that leaves Rust
+
+Ported `_toroidally_reachable` — bin walk, projection and blocker test — to a
+single `njit` kernel and graded it against the shipped numpy version. **Masks
+bit-identical at every level, on both structures tested.**
+
+| | level 0 | total, 4–5 levels |
+|---|---|---|
+| actin-monomer, 382 aa | 8.2× | **6.8×** |
+| serum-albumin, 1,186 aa | 9.5× | **7.0×** |
+
+**`parallel=True` bought nothing** — 7.0× against 6.8× single-threaded — so this
+is compiled code, not parallelism, and it is the second measurement in this
+milestone saying the parallel axis is not the one to push here.
+
+Geometry is 92% of the solve at 1.0 Å, so **porting all three families projects
+to ~4.7× overall: 1,186 residues from 159 s to ~34 s**, between DelPhi and APBS,
+and beating `coulombic` by 6× at the top of the range. That is the number a port
+has to be worth; it is a projection and the last four in this section were wrong,
+so it is to be re-measured per family and not assumed.
+
+**What the spike does not settle is what to ship.** numba is 145 MB installed —
+20 MB plus llvmlite's 125 — against a library whose entire proposition is that it
+installs anywhere with no binary to fetch. Rust via PyO3 would be a fraction of
+that and likely faster still, at the cost of a `cibuildwheel` matrix and a second
+implementation of the module where M4 discarded two. The spike says the *kernel*
+is worth roughly 7×; it does not say numba is the vehicle, and the 145 MB is a
+strong argument that it is not.
+
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 
 **Done 2026-08-16, at Charlie's direction, in its own PR as planned.** The three
