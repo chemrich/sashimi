@@ -3492,13 +3492,41 @@ and beating `coulombic` by 6× at the top of the range. That is the number a por
 has to be worth; it is a projection and the last four in this section were wrong,
 so it is to be re-measured per family and not assumed.
 
-**What the spike does not settle is what to ship.** numba is 145 MB installed —
-20 MB plus llvmlite's 125 — against a library whose entire proposition is that it
-installs anywhere with no binary to fetch. Rust via PyO3 would be a fraction of
-that and likely faster still, at the cost of a `cibuildwheel` matrix and a second
-implementation of the module where M4 discarded two. The spike says the *kernel*
-is worth roughly 7×; it does not say numba is the vehicle, and the 145 MB is a
-strong argument that it is not.
+**What the spike did not settle was what to ship**, and the answer taken on
+2026-08-19 is: **both, with the caller choosing.** `sashimi-electro[fast]` is an
+optional extra carrying numba; `sashimi.debye.kernel` holds the compiled rim
+loop and `surface.py` dispatches to it when it is importable.
+
+The shape matters more than the choice. **The numpy path stays the reference** —
+it defines the answer, it is what the corpus is recorded against, and it is what
+two of CI's three legs run. The kernel is required to be *bit*-identical, never
+merely close, for the same reason the batching was: `decided` feeds a boolean or,
+so nothing downstream can depend on which rim won.
+
+**145 MB is the reason it is not a dependency.** numba plus llvmlite is several
+times the rest of the install, against a package whose whole proposition is that
+it needs nothing fetched by hand. A caller solving one peptide should not pay it;
+a caller doing protein electrostatics should. So the cost is stated wherever the
+decision gets made — the README says it in the install section, and
+`sashimi_capabilities` reports `acceleration.compiled_surface_kernel` with the
+size and the measured worth beside it. `SASHIMI_NO_NUMBA=1` turns it off.
+
+**Two verification steps, because an unexercised second implementation is the
+trap this repo keeps hitting.** CI installs the extra on `full` only and asserts
+the compiled path is live there; the other two legs assert it is *not*, so the
+fallback is genuinely the thing most installs run rather than an untested branch.
+That is the DelPhi lesson — a skipped tier and a passing tier look identical —
+applied one implementation over.
+
+*One test earned its place immediately.* With the extra installed,
+`test_the_structure_actually_exercises_the_rim_loop` failed: it counts
+`near_many` calls, and the kernel never makes any. The M7 tests are tests of the
+*reference* implementation — `PAIR_BATCH`, the batch sweep, `near_many` — so they
+now pin `SASHIMI_NO_NUMBA`. The failure was the check doing exactly its job.
+
+Rust via PyO3 remains the better long-term vehicle on size alone, and this
+does not foreclose it: the dispatch seam is where a second accelerator would
+land, and the bit-identity test is the gate it would have to pass.
 
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 

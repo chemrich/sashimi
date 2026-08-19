@@ -31,11 +31,28 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from sashimi.debye import kernel
 from sashimi.debye import surface as surface_module
 from sashimi.debye.grid import axis_coordinates, size_grid
 from sashimi.debye.surface import ReducedSurface, _Bins, _ragged
 from sashimi.pqr import read_pqr
 from sashimi.protocol import GridSpec, SolventModel, SurfaceModel
+
+
+@pytest.fixture(autouse=True)
+def _reference_path(monkeypatch):
+    """Everything here tests the numpy rim loop, so pin it on.
+
+    `PAIR_BATCH`, `near_many` and the batch sweep are properties of the
+    reference implementation; the optional compiled kernel in `kernel.py`
+    bypasses all three, so with `sashimi-electro[fast]` installed these tests
+    would silently measure nothing. `test_the_structure_actually_exercises_the
+    _rim_loop` caught exactly that the first time the extra was installed, which
+    is the fixture earning its place rather than papering over a failure. The
+    two paths are compared against each other in `tests/test_debye_kernel.py`.
+    """
+    monkeypatch.setenv(kernel.DISABLE, "1")
+
 
 # Twenty atoms, and the smallest structure in the corpus whose rims decide
 # anything: a lone sphere never reaches this code at all, since its two

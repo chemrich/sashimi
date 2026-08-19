@@ -87,7 +87,14 @@ from functools import cached_property
 
 import numpy as np
 
-from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel, SurfaceModel
+from sashimi.debye import kernel
+from sashimi.protocol import (
+    DIMENSIONS,
+    FloatArray,
+    PQRData,
+    SolventModel,
+    SurfaceModel,
+)
 
 __all__ = [
     "ReducedSurface",
@@ -348,6 +355,20 @@ def _ragged(lengths: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return segment, np.arange(total, dtype=np.int64) - np.repeat(starts, lengths)
 
 
+def _blocker_table(
+    rims: list[tuple[FloatArray, FloatArray, float, np.ndarray]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Each rim's blocking atoms, flattened, because every rim has a different set.
+
+    Counts run 0 to 74 on a protein, so this cannot be rectangular. Flat plus
+    offsets is the form the compiled kernel indexes directly.
+    """
+    count = np.array([len(blockers) for *_, blockers in rims], dtype=np.int64)
+    pieces = [np.asarray(blockers, dtype=np.int64) for *_, blockers in rims]
+    flat = np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.int64)
+    return flat, np.cumsum(count) - count, count
+
+
 def _batches(weights: np.ndarray, limit: int) -> list[tuple[int, int]]:
     """Consecutive index ranges whose weights sum to under `limit`.
 
@@ -462,6 +483,41 @@ class _Bins:
         self._codes = self._encode(ordered[starts])
         self._starts = starts.astype(np.int64)
         self._stops = stops.astype(np.int64)
+
+    # The compiled kernel in `kernel.py` walks these same bins, so the structure
+    # is named rather than reached into across modules. Read-only by contract:
+    # they are the index, not a copy of it.
+    @property
+    def order(self) -> np.ndarray:
+        return self._order
+
+    @property
+    def starts(self) -> np.ndarray:
+        return self._starts
+
+    @property
+    def stops(self) -> np.ndarray:
+        return np.asarray(self._stops)
+
+    @property
+    def codes(self) -> np.ndarray:
+        return self._codes
+
+    @property
+    def low_key(self) -> np.ndarray:
+        return self._low_key
+
+    @property
+    def high_key(self) -> np.ndarray:
+        return self._high_key
+
+    @property
+    def strides(self) -> np.ndarray:
+        return self._strides
+
+    @property
+    def bin_origin(self) -> FloatArray:
+        return self._origin
 
     def _encode(self, keys: np.ndarray) -> np.ndarray:
         """Bin keys as one integer each, valid only inside the occupied extent."""
@@ -709,6 +765,28 @@ def _toroidally_reachable(
     reach = ring_radii + probe
     bins = _Bins(nodes.points, float(np.median(reach)))
     decided = np.zeros(len(nodes), dtype=bool)
+
+    # The compiled path, when `sashimi-electro[fast]` is installed. It answers
+    # the identical question — `tests/test_debye_kernel.py` asserts the mask is
+    # bit-identical on real geometry, and CI runs the numpy path on two legs and
+    # this one on the third — so the branch is a speed choice and nothing else.
+    # It needs no batch bound: it never materialises the pair lists that the
+    # numpy path has to bound.
+    if kernel.available():
+        kernel.decide_rims(
+            nodes.points,
+            bins,
+            origins,
+            normals,
+            ring_radii,
+            _blocker_table(rims),
+            coords,
+            inflated,
+            probe,
+            decided,
+        )
+        nodes.mark(reachable, decided)
+        return reachable
 
     # What one batch costs, estimated before it is run. `near_many` expands
     # every bin its query box touches, so the pre-filter pair count for a rim is

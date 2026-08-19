@@ -143,6 +143,11 @@ def describe_capabilities() -> dict[str, Any]:
         # boundary is the larger modelling choice of the two.
         "solvent_defaults": _describe(solvent_defaults),
         "artifacts": describe_cleanup(),
+        # Reported because it is the difference between a 1,200-residue protein
+        # taking about half a minute and taking two and a half, and because a
+        # caller cannot discover it from a result — the answer is identical
+        # either way, only the wait changes.
+        "acceleration": _describe_acceleration(),
         "not_supported": [
             "nonlinear Poisson-Boltzmann (representable in the request; no solver path yet)",
             "raw solver input passthrough (deliberately absent)",
@@ -153,6 +158,32 @@ def describe_capabilities() -> dict[str, Any]:
             + (f" ({', '.join(usable)})" if usable else "")
             + f"; potentials in {UNITS['potential']}, energies in {UNITS['energy']}."
         ),
+    }
+
+
+def _describe_acceleration() -> dict[str, Any]:
+    """Whether debye's compiled surface kernel is installed, and what it is worth.
+
+    `sashimi-electro[fast]` is an extra rather than a dependency because numba
+    brings llvmlite and the pair are ~145 MB — several times the rest of the
+    install — against a package whose proposition is that it needs nothing
+    fetched by hand. So the trade is the caller's to make, which means the
+    caller has to be told it exists.
+    """
+    from sashimi.debye import kernel  # noqa: PLC0415 — avoids a debye import cost here
+
+    reason = kernel.why_unavailable()
+    return {
+        "compiled_surface_kernel": kernel.available(),
+        "applies_to": "debye",
+        "worth": (
+            "~7x on surface classification, which is 86-92% of a debye solve; "
+            "measured 6.8x on a 382-residue protein and 7.0x on a 1,186-residue "
+            "one, with energies bit-identical either way"
+        ),
+        "install": "pip install 'sashimi-electro[fast]'",
+        "cost": "~145 MB, since numba brings llvmlite",
+        "why_unavailable": reason,
     }
 
 
