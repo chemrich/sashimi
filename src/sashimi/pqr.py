@@ -9,6 +9,7 @@ only part of the layout every writer agrees on.
 
 from __future__ import annotations
 
+import gzip
 import os
 from pathlib import Path
 
@@ -67,7 +68,26 @@ def parse_pqr(text: str) -> PQRData:
 
 
 def read_pqr(path: str | os.PathLike[str]) -> PQRData:
-    return parse_pqr(Path(path).read_text())
+    """Read a PQR, transparently decompressing a `.pqr.gz`.
+
+    Compression is here rather than at the call sites because nothing
+    downstream ever sees the file: both binary backends re-serialise from
+    `PQRData` with `format_pqr`, so the on-disk form is this function's business
+    alone.
+
+    It exists for one fixture and says so. A protonated 1,200-residue protein is
+    18,000 atoms and 1.25 MB of text, which is half the size of `tests/data`
+    entire and over the 1 MB limit the pre-commit hook enforces; gzipped it is
+    324 KB, smaller than the largest PQR already committed. The alternative was
+    a corpus case whose structure had to be fetched, and a case that can be
+    absent is a case that silently does not run — the trap
+    `.github/workflows/ci.yml` and ROADMAP.md section 7 both already record.
+    """
+    location = Path(path)
+    if location.suffix == ".gz":
+        with gzip.open(location, "rt") as handle:
+            return parse_pqr(handle.read())
+    return parse_pqr(location.read_text())
 
 
 def format_pqr(pqr: PQRData) -> str:

@@ -1674,13 +1674,34 @@ MANIFEST: tuple[Case, ...] = (
     Case(
         name="acetylcholinesterase",
         description=(
-            "8,279 atoms, the largest in the corpus. It asks for 0.5 A and is "
-            "given coarser, because `max_points` caps the grid rather than the "
-            "atom count — which is why 8,000 atoms costs 15 s and not an hour."
+            "8,279 atoms. It asks for 0.5 A and is given coarser, because "
+            "`max_points` caps the grid rather than the atom count — which is "
+            "why 8,000 atoms costs 15 s and not an hour."
         ),
         source="apbs-examples/mache.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
         solvent=SolventModel(surface_model=SurfaceModel.SMOOTHED_MOLECULAR),
+        tier=CaseTier.FULL,
+    ),
+    Case(
+        name="serum-albumin",
+        description=(
+            "18,263 atoms over 1,186 residues at -30e, the largest in the "
+            "corpus and more than twice the next. Human serum albumin, PDB "
+            "1AO6, protonated by pdb2pqr at the AMBER force field; stored "
+            "gzipped because the text is 1.25 MB. Two deliberate choices. It "
+            "asks for **1.0 A** because 0.5 and 0.35 both resolve to the *same* "
+            "clamped 161^3 lattice on a solute this size, so a case at 0.5 A "
+            "would not be measuring 0.5 A and a refinement study across the two "
+            "would report a perfect zero — the trap section 12 records APBS "
+            "springing on the residue axis. And it is `molecular` rather than "
+            "`smoothed-molecular` so that debye and DelPhi C++ can answer it at "
+            "all: every other case above 5,000 atoms is on APBS's own averaging, "
+            "which left the top of the size range graded by a single backend."
+        ),
+        source="1ao6.pqr.gz",
+        grid=GridSpec(resolution=1.0, padding=10.0),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
         tier=CaseTier.FULL,
     ),
     Case(
