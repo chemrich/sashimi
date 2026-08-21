@@ -307,14 +307,20 @@ def test_delphi_reproduces_its_recorded_corpus_answer(binary, name):
     0.047% to 0.426% out, the Born ion's potential minimum 2.5%, grid origins
     differing in their last digits. That is not wrong: 0.4% is far tighter than
     the 2.3% between DelPhi and APBS. It is a different implementation of an
-    iterative solver, and 4,000x the tolerance a recording is held to.
+    iterative solver, and ~43x the 1e-4 a recording is held to.
+
+    Both figures are the *nineteen-case* bound. Re-measured over the whole
+    corpus on 2026-08-20, the band is 0.001-1.257% across the 35 cases both
+    flavours answer, and the worst of those is ~125x the tolerance. Either way
+    the conclusion is the same and the arithmetic is now right: the earlier
+    "4,000x" divided a percentage by a fraction and was wrong by 100x.
 
     So the flavours are not interchangeable *as sources of a recorded number*,
     while remaining interchangeable as backends. pyDelPhi keeps the behavioural
     tier above; it does not verify numbers another program produced.
     """
     if binary.flavour is not DelphiFlavour.CPP:
-        pytest.skip("pyDelPhi is 0.05-0.4% from the C++ build; it cannot verify its recordings")
+        pytest.skip("pyDelPhi is 0.001-1.257% from the C++ build; it cannot verify its recordings")
 
     case = next(c for c in MANIFEST if c.name == name)
     recorded = load_summary(case, DELPHI_DIRECTORY)

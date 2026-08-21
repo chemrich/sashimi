@@ -12,9 +12,17 @@ host contends the same way.
 Three choices follow from it, and each is the whole reason a line below exists:
 
 - **CPU time, not wall clock.** Other processes take wall-clock time away from a
-  run; they do not change how many CPU-seconds the work costs. On the same pair
-  that read as a 40% regression on wall clock, CPU time read 44.96 s against
-  42.04 s — the 6.5% that was really there.
+  run; they mostly do not change how many CPU-seconds the work costs — memory
+  and cache contention do inflate it, so this is a large improvement rather than
+  an immunity. On the same pair that read as a 40% regression on wall clock, CPU
+  time read 44.96 s against 42.04 s — the 6.5% that was really there. Measured
+  across two runs at load averages 4.7 and 5.9, CPU samples of the same solve
+  agree to under 2.5% where wall clock spread 1.4-2.7x.
+- **Children counted, because three of the five backends are subprocesses (apbs, delphi, tabipb).**
+  `time.process_time()` excludes them by definition, so timing APBS or DelPhi
+  with it alone silently measures nothing but this process's bookkeeping and
+  falls back to wall clock in practice. `resource.getrusage(RUSAGE_CHILDREN)`
+  supplies the rest — see `cpu_seconds`.
 - **Minimum of N, not a mean.** The minimum is the least-contaminated sample. A
   mean averages the contamination in, and a machine under variable load has no
   central tendency worth reporting.
@@ -37,20 +45,24 @@ import os
 import subprocess
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any
 
-from sashimi.debye.backend import DebyeSolver
+from sashimi import backends
 from sashimi.errors import SashimiError
 from sashimi.pqr import read_pqr
-from sashimi.protocol import FiniteDifferenceRequest, GridSpec, SolventModel, SurfaceModel
+from sashimi.protocol import GridSpec, SolventModel, SurfaceModel, System
 
 __all__ = [
     "CaseSpec",
     "Comparison",
     "Measurement",
+    "children_counted",
     "compare_against",
+    "cpu_seconds",
     "measure",
     "remote_snippet",
     "render",
@@ -69,6 +81,52 @@ DEFAULT_REPEATS = 3
 BASELINE_TIMEOUT = 3600
 
 
+@cache
+def _rusage() -> Any:
+    """The `resource` module, or None where there is not one.
+
+    POSIX-only, and `cli.py` imports this module unconditionally — so a
+    module-level `import resource` makes the whole `sashimi` command
+    unimportable on Windows, for a package whose entire proposition is that it
+    installs anywhere. Imported here instead, once, with `cpu_seconds` falling
+    back to `process_time()` when it is absent. That fallback is *wrong* for
+    subprocess backends, which is exactly why it says so out loud.
+    """
+    try:
+        import resource  # noqa: PLC0415 — POSIX-only, so it cannot be top-level
+    except ImportError:  # pragma: no cover - exercised only off POSIX
+        return None
+    return resource
+
+
+def children_counted() -> bool:
+    """Whether `cpu_seconds` can see subprocess backends on this platform."""
+    return _rusage() is not None
+
+
+def cpu_seconds() -> float:
+    """This process's CPU time plus every child it has reaped.
+
+    The half `time.process_time()` cannot see. APBS, DelPhi C++ and pyDelPhi are
+    all subprocesses, so a benchmark that omits `RUSAGE_CHILDREN` is a
+    wall-clock benchmark wearing a CPU-time label — which is what a first pass
+    at the cross-backend baseline turned out to be, reading the same APBS case
+    at 13.8 s and 32.9 s in two runs.
+
+    **Two preconditions, because the counter is process-wide.** A child only
+    contributes once it has been *reaped*, so a delta taken before the wait
+    returns reads zero; and any other child reaped inside the window is counted
+    too, so this is not safe across concurrent subprocess work. Both hold here:
+    the solvers run one binary at a time and `subprocess.run` waits.
+    """
+    module = _rusage()
+    if module is None:  # pragma: no cover - exercised only off POSIX
+        return time.process_time()
+    here = module.getrusage(module.RUSAGE_SELF)
+    reaped = module.getrusage(module.RUSAGE_CHILDREN)
+    return float(here.ru_utime + here.ru_stime + reaped.ru_utime + reaped.ru_stime)
+
+
 @dataclass(frozen=True)
 class CaseSpec:
     """What to solve, in the terms both sides of a comparison have to agree on.
@@ -83,6 +141,7 @@ class CaseSpec:
     resolution: float
     padding: float
     surface: SurfaceModel
+    backend: str = "debye"
 
 
 @dataclass(frozen=True)
@@ -104,8 +163,15 @@ class Measurement:
 
     @property
     def spread(self) -> float:
-        """Worst sample over best, as a ratio: how contaminated the run was."""
-        return max(self.samples) / min(self.samples)
+        """Worst sample over best, as a ratio: how contaminated the run was.
+
+        A zero best would be a measurement that failed rather than a fast one —
+        reachable where `cpu_seconds` has fallen back to `process_time()` and the
+        work happened in a child — so it reports infinity instead of dividing by
+        it.
+        """
+        best = min(self.samples)
+        return max(self.samples) / best if best > 0 else float("inf")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -127,8 +193,14 @@ class Comparison:
 
     @property
     def ratio(self) -> float:
-        """Baseline over candidate: above one is the candidate being faster."""
-        return self.baseline.best / self.candidate.best
+        """Baseline over candidate: above one is the candidate being faster.
+
+        Infinite rather than a `ZeroDivisionError` when the candidate measured
+        zero, which means the instrument missed the work rather than that the
+        work was free.
+        """
+        best = self.candidate.best
+        return self.baseline.best / best if best > 0 else float("inf")
 
     @property
     def identical(self) -> bool:
@@ -149,38 +221,64 @@ class Comparison:
 def measure[T](work: Callable[[], T], *, repeats: int, label: str) -> tuple[Measurement, T]:
     """Run `work` `repeats` times, keeping every CPU sample and the last result.
 
-    `time.process_time()` counts this process's user + system time and excludes
-    time the scheduler gave to something else, which is the entire point. It
-    does *not* count a child process's time, so anything that shells out has to
-    report its own — see `_remote_sample`.
+    `cpu_seconds` counts this process and its reaped children, so a subprocess
+    backend is measured rather than silently timed at zero. It excludes time the
+    scheduler gave to something else, which is the entire point.
+
+    **`--against` still has the far side report its own number, and not because
+    `RUSAGE_CHILDREN` cannot see it.** It can: the other checkout runs under
+    `subprocess.run`, which waits, so it is a reaped descendant like any other.
+    The reason is that measuring it from here would charge `uv run`'s dependency
+    resolution and a second interpreter's start-up into the sample. An earlier
+    draft of this docstring gave the wrong reason, and that is how the
+    comparison path kept `process_time()` through the very change that added
+    `cpu_seconds` — a wrong *why* is what let a wrong *what* survive review.
     """
     if repeats < 1:
         raise ValueError(f"repeats must be at least 1, got {repeats}")
     samples = []
     result: Any = None
     for _ in range(repeats):
-        started = time.process_time()
+        started = cpu_seconds()
         result = work()
-        samples.append(time.process_time() - started)
+        samples.append(cpu_seconds() - started)
     return Measurement(label=label, samples=tuple(samples)), result
 
 
 def solve_case(spec: CaseSpec) -> Callable[[], float]:
-    """A no-argument debye solve of one structure, returning its energy.
+    """A no-argument solve of one structure by one backend, returning its energy.
 
     The structure is read once, outside the returned closure: parsing a PQR is
     not what is being measured, and leaving it inside would put a few
     milliseconds of file I/O — which contends with everything else on the
     machine — inside every sample.
+
+    **Any registered backend, not only debye.** The instrument was written for
+    "did this change to debye help", and the cross-backend baseline in
+    ROADMAP.md section 12 then had to be produced by a script that lived nowhere
+    — twenty CPU numbers with no way to re-run them, which is the failure this
+    module's own docstring says it exists to prevent.
     """
-    structure = read_pqr(spec.path)
-    request = FiniteDifferenceRequest(
-        structure=structure,
+    solver, family = backends.solver_for(spec.backend)
+    # `request_for`, not a hardcoded `FiniteDifferenceRequest`. The registry
+    # returns the family for exactly this reason and the first draft threw it
+    # away, which made `--backend tabipb` die on a missing `mesh_density` and
+    # made `--backend gb` silently ignore `--resolution` — a resolution sweep
+    # that reported flat timings and identical energies with no warning.
+    request = System(
+        structure=read_pqr(spec.path),
         solvent=SolventModel(surface_model=spec.surface),
         grid=GridSpec(resolution=spec.resolution, padding=spec.padding),
+        want_energy=True,
         want_potential=False,
-    )
-    solver = DebyeSolver()
+    ).request_for(family)
+
+    # Binary discovery is lazy — `ApbsSolver.binary` shells out for a version and
+    # hashes the executable — and with children counted that lands in sample one.
+    # Touching the property is enough: every `discover_*` is `lru_cache`d. An
+    # earlier draft ran a whole extra `solve()` instead, which on the roadmap's
+    # own 147 s row meant four solves for `--repeats 3`.
+    _warm(solver)
 
     def work() -> float:
         energy = solver.solve(request).energy_kj_mol
@@ -201,8 +299,10 @@ def compare_against(
     """Interleave this tree against another checkout of the repo, one sample each.
 
     The other side runs as a subprocess because a revision cannot be imported
-    twice into one interpreter — which is also why its CPU time cannot be read
-    from here. `time.process_time()` in the child excludes the parent's work and
+    twice into one interpreter. Its CPU time *can* be read from here —
+    `RUSAGE_CHILDREN` counts any reaped descendant — but it is not, so that
+    `uv run`'s dependency resolution and a second interpreter's start-up stay
+    out of the sample. `time.process_time()` in the child excludes the parent's work and
     the interpreter's own start-up is charged before the timer starts, so the
     child reporting its own sample is both simpler and more accurate than
     `getrusage(RUSAGE_CHILDREN)` around the call.
@@ -218,9 +318,9 @@ def compare_against(
     energy_here = 0.0
     energy_there = 0.0
     for _ in range(repeats):
-        started = time.process_time()
+        started = cpu_seconds()
         energy_here = local()
-        here.append(time.process_time() - started)
+        here.append(cpu_seconds() - started)
         sample, energy_there = _remote_sample(checkout, spec)
         there.append(sample)
     return Comparison(
@@ -239,20 +339,54 @@ def compare_against(
 # protocol types, which have been there since M1.
 _REMOTE = """
 import json, time
-from sashimi.debye.backend import DebyeSolver
+try:
+    import resource
+except ImportError:
+    resource = None
+
+
+def cpu():
+    if resource is None:
+        return time.process_time()
+    a = resource.getrusage(resource.RUSAGE_SELF)
+    b = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return a.ru_utime + a.ru_stime + b.ru_utime + b.ru_stime
+
+
 from sashimi.pqr import read_pqr
 from sashimi.protocol import FiniteDifferenceRequest, GridSpec, SolventModel, SurfaceModel
+
 structure = read_pqr({structure!r})
-request = FiniteDifferenceRequest(
-    structure=structure,
-    solvent=SolventModel(surface_model=SurfaceModel({surface!r})),
-    grid=GridSpec(resolution={resolution!r}, padding={padding!r}),
-    want_potential=False,
-)
-solver = DebyeSolver()
-started = time.process_time()
+solvent = SolventModel(surface_model=SurfaceModel({surface!r}))
+grid = GridSpec(resolution={resolution!r}, padding={padding!r})
+
+if {backend!r} == "debye":
+    # The path every revision back to M1 can run. `sashimi.backends` arrived in
+    # PR #28 and `System.request_for` in PR #26, so reaching for either would
+    # make this snippet fail against exactly the older trees it exists to
+    # measure — and debye is what almost every comparison is about.
+    from sashimi.debye.backend import DebyeSolver
+    solver = DebyeSolver()
+    request = FiniteDifferenceRequest(
+        structure=structure, solvent=solvent, grid=grid,
+        want_energy=True, want_potential=False,
+    )
+else:
+    from sashimi.backends import solver_for
+    from sashimi.protocol import System
+    solver, family = solver_for({backend!r})
+    request = System(
+        structure=structure, solvent=solvent, grid=grid,
+        want_energy=True, want_potential=False,
+    ).request_for(family)
+
+try:
+    solver.binary
+except Exception:
+    pass
+started = cpu()
 energy = solver.solve(request).energy_kj_mol
-print(json.dumps({{"best": time.process_time() - started, "energy": energy}}))
+print(json.dumps({{"best": cpu() - started, "energy": energy}}))
 """
 
 
@@ -263,6 +397,7 @@ def remote_snippet(spec: CaseSpec) -> str:
         surface=spec.surface.value,
         resolution=spec.resolution,
         padding=spec.padding,
+        backend=spec.backend,
     )
 
 
@@ -271,9 +406,9 @@ def _remote_sample(checkout: Path, spec: CaseSpec) -> tuple[float, float]:
 
     `uv run --project` rather than this interpreter: the other checkout has its
     own lockfile, and the point of measuring it at all is that it is a different
-    revision. Its CPU time cannot be read from here — `time.process_time()`
-    excludes children — so the child times itself, which also keeps interpreter
-    start-up out of the sample.
+    revision. The child times itself — not because `RUSAGE_CHILDREN` could not
+    see it, which it could, but so that `uv run`'s resolution and a second
+    interpreter's start-up stay out of the sample.
     """
     if not (checkout / "pyproject.toml").is_file():
         raise SashimiError(f"{checkout} does not look like a sashimi checkout (no pyproject.toml)")
@@ -302,6 +437,16 @@ def _remote_sample(checkout: Path, spec: CaseSpec) -> tuple[float, float]:
     if report["energy"] is None:  # pragma: no cover - the request asks for energy
         raise SashimiError("the baseline checkout returned no energy")
     return float(report["best"]), float(report["energy"])
+
+
+def _warm(solver: object) -> None:
+    """Resolve a subprocess backend's binary before the clock starts.
+
+    Cheap and cached; a backend with nothing to discover has no such attribute
+    and needs no warming. Deliberately not a solve — see `solve_case`.
+    """
+    with suppress(AttributeError, SashimiError):
+        _ = solver.binary  # type: ignore[attr-defined]
 
 
 def _baseline_environment() -> dict[str, str]:

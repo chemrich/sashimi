@@ -607,7 +607,8 @@ than a local accident.
 out, the Born ion's potential minimum 2.5%, grid origins differing in their last
 digits. That is not a wrong answer — 0.4% is far tighter than the 2.3% between
 DelPhi and APBS, and it is the ordinary distance between two implementations of
-one iterative method. It is 4,000× the tolerance a *recording* is held to, which
+one iterative method. It is ~43× the 1e-4 a *recording* is held to — the
+whole-corpus bound is 1.257% and ~125×, measured 2026-08-20 — which
 is a different question from whether a backend is correct.
 
 So the corpus holds one C++ recording set, the re-solve test gates on the
@@ -3527,6 +3528,234 @@ now pin `SASHIMI_NO_NUMBA`. The failure was the check doing exactly its job.
 Rust via PyO3 remains the better long-term vehicle on size alone, and this
 does not foreclose it: the dispatch seam is where a second accelerator would
 land, and the bit-identity test is the gate it would have to pass.
+
+### Both DelPhi flavours, baselined — and the instrument extended to reach them
+
+**2026-08-20.** §12's item 2 deferred cross-flavour DelPhi agreement on
+2026-08-13, making the C++ build the touchstone on a 19-case spot check. This is
+that comparison over the whole corpus and the whole size range, with both
+flavours installed locally for the first time. **Every number was measured
+twice**, in separate runs at load averages 4.7 and 5.9, and every number is
+reproducible with `sashimi bench --backend`.
+
+#### The instrument reached one backend of four
+
+`time.process_time()` excludes child processes by definition. That was correct
+for `sashimi bench` as written — it only ever solved with debye, in-process — but
+APBS, DelPhi and TABI-PB are all subprocesses, so **the tool could not time
+three of the five backends at all**, and the first pass at this baseline fell
+back to wall clock without saying so. On wall clock the same APBS case read
+**13.8 s and 32.9 s** in two runs.
+
+`resource.getrusage(RUSAGE_CHILDREN)` is the missing half, and `bench.cpu_seconds`
+now adds it. Two preconditions, since the counter is process-wide: a child
+contributes only once **reaped**, and any other child reaped inside the window
+is counted too — so it is not safe across concurrent subprocess work. Both hold
+here. This does not contradict `_remote_sample`, which has the *other* checkout
+time itself: we can patch our own tree and not APBS.
+
+`sashimi bench --backend {apbs,delphi,debye,gb,tabipb}` is the result, so the
+tables below are re-runnable rather than the output of a script that lived
+nowhere — which is the failure `bench.py`'s own docstring says it exists to
+prevent, and which the first draft of this section committed.
+
+Spreads fell from **1.4–2.7× on wall clock to 1.00–1.07× on CPU**, and the two
+runs agree to 0.8% (C++), 2.4% (pyDelPhi) and 2.2% (debye). **CPU time is a large
+improvement here, not an immunity** — memory and cache contention still inflate
+it, and the two runs differ by 8.6% on APBS's 0.7 s rung, which is one of the
+endpoints anchoring its exponent. Treat exponents below as ±0.05, which is
+comfortably inside the gap the argument uses but not inside every gap.
+
+#### The ladder — CPU seconds, `molecular` at 1.0 Å
+
+Mean of two runs, each minimum-of-three, on this machine.
+
+| backend | CPU scaling | 59 aa | 161 aa | 382 aa | 538 aa | 1,156 aa |
+|---|---|---|---|---|---|---|
+| APBS | atoms^0.93 | 0.7 | 2.3 | 3.7 | 5.1 | **12.4** |
+| DelPhi C++ | atoms^1.56 | 0.4 | 1.4 | 5.7 | 9.1 | **43.2** |
+| pyDelPhi | atoms^0.87 | 2.0 | 3.7 | 8.0 | 10.6 | **27.3** |
+| debye, pure numpy | atoms^1.11 | 5.9 | 14.5 | 50.3 | 66.5 | **147.3** |
+| debye + `[fast]` | atoms^1.13 | 3.7 | 9.4 | 34.1 | 41.7 | **99.0** |
+
+Reproduce a row with `sashimi bench --backend <name> --structure <pqr>
+--resolution 1.0 --repeats 3`. Two of the five need an environment variable as
+well, because `--backend` names a *registry entry* and these rows are variants
+of one: the DelPhi flavour follows `SASHIMI_DELPHI_PATH` (unset for the C++
+build on PATH, set to `.pydelphi/bin/pydelphi-static` for pyDelPhi), and the
+debye rows follow `SASHIMI_NO_NUMBA` and whether `[fast]` is installed.
+
+**Both debye rows are given because the extra is opt-in**, so the first is what a
+default install does and the second is what someone who read the README gets.
+The compiled kernel is worth **1.47–1.60× across the ladder** — the toroidal
+family only, which is why it is not the ~4.7× a full port projects.
+
+**pyDelPhi overtakes the compiled C++ build at ~9,800 atoms, about 620
+residues**, and is **1.58× more efficient** at the top: 27.3 s against 43.2 s.
+Same program, Python with numba against C++, winning on CPU rather than by
+spending cores — its wall is only 1.11× under its CPU there, so it is barely
+threaded.
+
+**DelPhi C++ is the only backend measured whose exponent exceeds 1.2.** APBS
+0.93, pyDelPhi 0.87, debye 1.11–1.13 — so the compiled incumbent is the one with
+the scaling problem, which is the strongest form yet of this section's claim that
+implementation dominates language here. It also settles the vehicle question left
+open when the kernel shipped: **a numba solver beating C++ at protein scale is
+why numba is a legitimate implementation and not a placeholder for Rust.**
+
+*Where debye stands at 1,156 residues:* **3.4× DelPhi C++ and 11.8× APBS on the
+default install, 2.3× and 8.0× with `[fast]`.** Closing on the incumbent that
+scales worst; not on APBS.
+
+#### Cross-flavour agreement, over the whole corpus
+
+The flavours overlap on **exactly the 35 `molecular` cases**, and the arithmetic
+is clean: 100 total, 35 shared, 42 `smoothed-molecular` — APBS's own harmonic
+averaging, which **neither** DelPhi flavour implements — and 23 `van-der-waals`,
+which is the one genuine asymmetry, since pyDelPhi's `prbrad 0` crashes inside
+numba. Nothing failed; every exclusion is a refusal.
+
+| | deviation |
+|---|---|
+| median | **0.014%** |
+| mean | 0.135% |
+| max | **1.257%** — `ion-protein-complex-molecular` |
+| next | 0.450% `serum-albumin`, 0.426% `lysozyme-molecular` |
+
+**The worst case triples the 0.426% bound the 19-case spot check found, and it is
+not a size effect.** `ion-protein-complex` is 260 atoms. It is *not* the most
+charged solute in the corpus — `serum-albumin` is, at −30 e against +21.69 —
+but it is by far the most charged **per atom**: 0.0834 e/atom against 0.0016, a
+factor of **51**. Concentrated charge on few large spheres, in a united-atom
+structure with no hydrogens, is where two implementations of one iterative method
+diverge most. The largest solute, at seventy times the atoms, sits at 0.450%.
+
+This does not change the decision recorded in §7: **the flavours remain
+interchangeable as backends and not as sources of a recorded number.** But two
+things it says are now stale and are corrected with it. The bound is **1.257%
+over 35 cases**, not 0.426% over 19. And that bound is **~125× the 1e-4 a
+recording is held to — a bit over two orders of magnitude, not the "4,000×" §7
+and `tests/test_delphi_solver.py` both carried**, which came from dividing a
+percentage by a fraction.
+
+**The deferred cross-flavour test in item 2 above would fail as designed.** It
+specifies "three or four cheap shared cases … asserting agreement within 0.5%",
+and `ion-protein-complex-molecular` is a 260-atom shared case at 1.257% — exactly
+what "cheap" would select. Any such gate needs a per-case bound, or to exclude
+the high-charge-density case deliberately and say so.
+
+*Suite state, identical across both runs:* C++ **47 passed**; pyDelPhi **14
+passed, 33 skipped** — 27 corpus recordings it cannot verify, 5 M1b cases needing
+a van der Waals boundary, 1 guard reading a line only the C++ build prints. Each
+skip is a documented flavour limitation. **Separately and pre-existing: 23 of the
+58 C++ recordings are named by no per-push or on-demand list** — 21
+`van-der-waals`, `barnase-molecular`, and `serum-albumin`, which is the top rung
+of the ladder above. `corpus verify --backend delphi --tier full` reaches them;
+no `delphi`-marked test does. That is the same dead-weight failure
+`tests/test_delphi_solver.py` records having made once at M0, and it is open.
+
+### Quality where there is no reference: two invariants, across every backend
+
+**2026-08-20.** The baseline above measures speed carefully and grades quality
+by distance from APBS, which assumes the answer. The corpus cannot do better
+above a peptide, and the reason is worth stating as a number: **all 37
+closed-form energies and all 12 closed-form fields are one- or two-atom
+solutes** — Born ions and Kirkwood spheres, because those are the geometries a
+closed form exists for. **Thirty-two cases sit above 500 atoms and not one has
+any ground truth.** So the 10.4% spread at 1,156 residues says the solvers
+disagree and gives no way to say which is closer to right.
+
+What closes that is not a better reference. It is the identities the answer must
+satisfy whatever the answer is. `sashimi.invariants` adds two, and
+`tests/test_invariants.py` runs both across every registered backend.
+
+#### Charge scaling: an exact identity, on any solute
+
+The linearized equation is linear in the charge and the dielectric map does not
+depend on it, so scaling every partial charge by `lam` scales the energy by
+exactly `lam**2`. Not an approximation, and not family-specific — a
+boundary-element method and a Generalized Born radius both obey it.
+
+Measured at `lam = 2`: **APBS 0 to 2.4e-13, pyDelPhi 0 to 6.2e-8, TABI-PB
+2.5e-10, debye and `gb` exactly 0** — and **DelPhi C++ 3.0e-5**, which is not
+solver error but *printed precision*, since it reports two decimals in kT. The
+gate is 1e-4, three times the worst.
+
+**This is the check that would have caught the bug §7 records costing a year.**
+`format_pqr` wrote minimum-width fields, a four-character residue name shifted
+every column, and DelPhi solved on charges that were not in the file — returning
+−865,205 kJ/mol for acetate against APBS's −197. Any mis-assignment of charge
+breaks the square, on every structure, with no reference needed.
+
+#### Rigid-motion invariance: a discretization error bar at protein scale
+
+Solvation energy is a property of the solute, so translating or rotating it
+cannot change the answer. On a fixed lattice it does, and **that spread is the
+backend's discretization error** — available at any size, with no closed form.
+
+fas2 at 1.0 Å, twelve poses (proper rotations about the centroid plus
+sub-spacing translations, so grid phase moves and the boundary condition does
+not):
+
+| backend | range | **std** | split-half |
+|---|---|---|---|
+| `gb` | 0.0000% | **0.0000%** | — |
+| TABI-PB | 0.167% | **0.052%** | 0.028 / 0.072 |
+| DelPhi C++ | 1.304% | **0.410%** | 0.285 / 0.535 |
+| pyDelPhi | 1.326% | **0.412%** | 0.279 / 0.542 |
+| APBS | 2.601% | **0.764%** | 0.880 / 0.531 |
+| debye | 4.220% | **1.416%** | 1.135 / 1.561 |
+
+**`gb` is the control, and it is what makes the metric trustworthy.** An
+analytic method has no lattice to fall out of phase with, so its spread must be
+zero — measured 2.6e-16, one ulp from rotating coordinates, against 0.05–1.4%
+for everything that discretizes. Twelve orders of magnitude between the control
+and the signal.
+
+**Gate on the standard deviation, not the range.** The range is the range of a
+small sample and moves with the draw: debye read **3.01% and 0.60%** on two
+different five-pose draws of the same structure, which is why the first version
+of this measurement was reported wrong. Twelve poses split into halves agree to
+within a factor of 1.4.
+
+**Two independent confirmations that this measures the method.** The DelPhi
+flavours land at 0.410% and 0.412% — two implementations of one algorithm,
+agreeing on their own discretization error to three digits. And TABI-PB is
+eightfold better than the best finite-difference backend, which is what a
+boundary-element method should be: it has a surface mesh but no volumetric
+lattice.
+
+**debye is 1.8× the worst reference-tier backend and 3.9× the best** — on
+`ala-gly` at 0.5 Å, where the corrected sub-cell shift gives APBS 0.515%, DelPhi
+0.236% and debye 0.915%. *That is a real quality gap, and it is larger than the
+speed gap M7 closed.*
+
+**It is gated as a recorded value, not relationally, and that reverses what M1b
+and M4 chose.** A relational bar reads "no worse than N× the worst reference-tier
+backend installed", and here that bar **moves with the machine**: with APBS
+present the worst is 0.515% and debye passes at 3×; with only DelPhi the worst is
+0.236% and the same unchanged debye goes red on a contributor's checkout. A
+verdict that depends on which binaries someone happens to have is not a gate. The
+cross-backend comparison stays a measurement, recorded above.
+
+**The first thing these checks found was a backend defect, not a debye one.**
+TABI-PB solves `ala-gly` as it sits in the corpus and **aborts on every rotated
+pose of it** — `terminating due to uncaught exception`, exit −6, from the mesher
+rather than from sashimi. It is marked `xfail(strict=True)` in
+`tests/test_invariants.py`, so a TABI-PB release that fixes it turns the suite
+red and the marker comes out, rather than the xfail outliving the defect. Worth
+recording twice over: the first draft of that test caught `SashimiError` and
+reported the crash as "tabipb is unavailable here", so a real orientation
+dependence in a shipped backend showed up as a green skip. **Only
+`BackendUnavailable` may skip.**
+
+*A trap from writing these, recorded because it cost an hour.* Mutation-testing
+`posed` by changing `index == 0` to `index >= 0` produced a file of **identical
+length**, and the restore landed within the same mtime second — so Python's
+`.pyc` invalidation, which keys on (mtime, size), served stale bytecode and the
+"restored" tree kept failing. `inspect.getsource` reads the *file* and showed
+the correct source throughout, which is what made it look impossible. Clear
+`__pycache__` when a same-length mutation is reverted.
 
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 

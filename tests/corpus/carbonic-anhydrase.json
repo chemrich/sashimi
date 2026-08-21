@@ -1,6 +1,6 @@
 {
   "name": "carbonic-anhydrase",
-  "description": "2,482 atoms, the largest case; 13 s, which is why it is not standard.",
+  "description": "2,482 atoms, the largest case in this section \u2014 serum-albumin is seven times larger but full-tier; 13 s, which is why this one is not standard.",
   "source": "apbs-examples/hca.pqr",
   "tier": "full",
   "family": "finite-difference",

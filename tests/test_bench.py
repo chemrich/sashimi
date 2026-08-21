@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import math
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,7 @@ from sashimi.bench import (
     Comparison,
     Measurement,
     _baseline_environment,
+    cpu_seconds,
     remote_snippet,
     render_comparison,
     solve_case,
@@ -46,8 +49,11 @@ def _spec(
     resolution: float = 0.5,
     padding: float = 10.0,
     surface: SurfaceModel = SurfaceModel.MOLECULAR,
+    backend: str = "debye",
 ) -> CaseSpec:
-    return CaseSpec(path=path, resolution=resolution, padding=padding, surface=surface)
+    return CaseSpec(
+        path=path, resolution=resolution, padding=padding, surface=surface, backend=backend
+    )
 
 
 def _comparison(baseline: float, candidate: float, *, energies: tuple[float, float]) -> Comparison:
@@ -159,6 +165,114 @@ def test_a_repeat_count_below_one_is_refused(capsys):
     """`measure` guards it and so must the interleaved path, which has its own loop."""
     with pytest.raises(SystemExit, match="at least 1"):
         main(["bench", "--structure", str(ALA_GLY), "--repeats", "0"])
+
+
+def test_cpu_seconds_counts_a_reaped_child(tmp_path):
+    """The half `time.process_time()` cannot see, and the reason `--backend` works.
+
+    Three of the four backends are subprocesses, so a benchmark without
+    `RUSAGE_CHILDREN` reads their cost as this process's bookkeeping and nothing
+    else — a wall-clock benchmark wearing a CPU-time label. Checked against a
+    child that deliberately burns CPU rather than sleeping, since sleeping would
+    pass with or without the fix.
+    """
+    import subprocess  # noqa: PLC0415 — local to the one test that shells out
+
+    before_process, before_total = time.process_time(), cpu_seconds()
+    subprocess.run([sys.executable, "-c", "sum(i*i for i in range(4_000_000))"], check=True)
+    spent_here = time.process_time() - before_process
+    spent_total = cpu_seconds() - before_total
+
+    assert spent_total > 0.05, "the child's CPU time is not being counted at all"
+    assert spent_total > spent_here * 2, (
+        f"child CPU {spent_total:.3f}s barely exceeds this process's {spent_here:.3f}s, "
+        "so RUSAGE_CHILDREN is probably not contributing"
+    )
+
+
+@pytest.mark.parametrize("backend", ["debye", "gb", "tabipb", "apbs", "delphi"])
+def test_bench_times_any_registered_backend(backend: str, capsys):
+    """Not only debye, and not only the finite-difference family.
+
+    `tabipb` is here because leaving it out is what let the first draft ship
+    broken: `solve_case` threw away the family the registry hands back and built
+    a `FiniteDifferenceRequest` for everything, so `--backend tabipb` died on a
+    missing `mesh_density` and `--backend gb` silently ignored `--resolution`.
+    Both in-process backends happen to accept the wrong request type, so a list
+    of only those two could not fail.
+
+    `apbs` and `delphi` are here because they are the whole point: they are the
+    subprocess backends `time.process_time()` could not see, and every row of the
+    roadmap's ladder is a `--backend apbs` or `--backend delphi` run. A list
+    without them would ship a broken finite-difference dispatch green.
+    """
+    argv = ["bench", "--structure", str(ALA_GLY), "--backend", backend, "--repeats", "1", "--json"]
+    # `main` catches SashimiError itself and returns 2 — it does not raise — so a
+    # `try/except SashimiError` here would never fire and a machine without the
+    # binary would fail rather than skip. The first draft did exactly that.
+    code = main(argv)
+    if code == 2:
+        pytest.skip(f"{backend} is not available here: {capsys.readouterr().err.strip()}")
+    assert code == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["energy"] < 0
+    assert report["best"] > 0
+
+
+def test_the_grid_reaches_a_backend_that_uses_one():
+    """`--resolution` must change the answer, or the flag is decoration.
+
+    The dropped-family bug made `gb` ignore the grid entirely — two very
+    different resolutions returned an identical energy, so a resolution sweep
+    would report flat timings with no sign anything was wrong.
+    """
+    assert solve_case(_spec(resolution=1.0))() != solve_case(_spec(resolution=0.4))()
+
+
+def test_a_gridless_backend_is_not_handed_a_grid():
+    """The other half: `gb` discretizes nothing, so its answer must *not* move."""
+    coarse = solve_case(_spec(backend="gb", resolution=1.0))()
+    assert coarse == solve_case(_spec(backend="gb", resolution=0.4))()
+
+
+def test_the_backend_reaches_the_baseline_snippet_too():
+    """A comparison that solved with two different backends would be nonsense."""
+    snippet = remote_snippet(_spec(backend="gb"))
+    assert "'gb'" in snippet
+
+
+def test_the_debye_baseline_still_reaches_revisions_before_the_registry():
+    """`--against` exists to measure older trees, so it must not need new imports.
+
+    `sashimi.backends` arrived in PR #28 and `System.request_for` in PR #26.
+    A snippet that reaches for either dies with an ImportError against exactly
+    the revisions it was written to compare against — and debye is what almost
+    every comparison is about, so its path stays on `DebyeSolver` and
+    `FiniteDifferenceRequest`, which have been there since M1.
+    """
+    snippet = remote_snippet(_spec(backend="debye"))
+    assert "DebyeSolver" in snippet
+    assert "FiniteDifferenceRequest" in snippet
+
+
+def test_the_baseline_snippet_counts_its_own_children():
+    """The comparison path had the same blind spot the module was fixing.
+
+    `measure` was converted to `cpu_seconds` and `compare_against` was not, so
+    `--against` with a subprocess backend timed ~0.3% of the work: APBS read
+    0.0085 s against 2.95 s standalone, and two identical trees compared at
+    0.948 instead of ~1.000. Both sides need children counted — this one is the
+    far side, which does its own timing so that `uv run`'s resolution and a
+    second interpreter's start-up stay out of the sample.
+    """
+    snippet = remote_snippet(_spec(backend="apbs"))
+    assert "RUSAGE_CHILDREN" in snippet
+    assert "request_for(family)" in snippet
+    # And it resolves the binary before the clock starts, for the same reason
+    # `solve_case` does — discovery shells out and hashes the executable — but
+    # by touching the cached property rather than running a whole extra solve.
+    assert "solver.binary" in snippet
+    assert snippet.count("solver.solve(request)") == 1
 
 
 def test_the_bench_command_solves_the_structure_it_was_given(capsys):

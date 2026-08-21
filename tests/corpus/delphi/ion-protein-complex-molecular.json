@@ -1,6 +1,6 @@
 {
   "name": "ion-protein-complex-molecular",
-  "description": "260 atoms at +21.69 e on the shared surface: the most charged solute in the corpus, and a united-atom structure with no hydrogens at all, which is a second radius dialect (see `hca-molecular`).",
+  "description": "260 atoms at +21.69 e on the shared surface. The corpus's densest charge at 0.0834 e/atom \u2014 serum-albumin carries more in total at -30 e but 51x less per atom \u2014 and a united-atom structure with no hydrogens at all, which is a second radius dialect (see `hca-molecular`). Both properties are why it is the worst cross-flavour DelPhi case, at 1.257%.",
   "source": "apbs-examples/ion-protein-complex.pqr",
   "tier": "full",
   "family": "finite-difference",
