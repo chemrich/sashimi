@@ -13,6 +13,8 @@ import pytest
 from sashimi import backends
 from sashimi.apbs import discover
 from sashimi.apbs.options import ApbsOptions
+from sashimi.backends import get as get_backend
+from sashimi.backends import names as backend_names
 from sashimi.capabilities import (
     UNITS,
     BackendReport,
@@ -34,7 +36,19 @@ def substitute(monkeypatch, **replacements: BackendReport) -> None:
     that changes every caller's view at once. Patching the private report
     functions, which is what this used to do, only changed the ones that
     happened to import them.
+
+    **Every registered backend is replaced, named or not.** An unnamed one used
+    to keep reporting whatever this machine actually has, so a test constructing
+    a three-backend world silently got a fourth — which is exactly what happened
+    when `delphi-cpp` and `pydelphi` were registered and a comparability test
+    started intersecting a `van-der-waals` it had never asked for. Anything not
+    named is made unavailable, so the world a test builds is the whole world.
     """
+    for name in backends.names():
+        if name in replacements:
+            continue
+        replacements[name] = BackendReport(name, False, "finite-difference")
+
     for name, report in replacements.items():
         entry = backends.REGISTRY[name]
 
@@ -121,37 +135,43 @@ class TestCapabilities:
             for backend in caps["backends"]
             if backend["name"] not in ("gb", "debye")
         )
-        assert "brew install apbs" in caps["backends"][0]["detail"]
+        # Keyed by name, not by position. These were indexed `[0]`, `[1]`,
+        # `[2]` and broke the moment `delphi-cpp` and `pydelphi` were registered
+        # between them — a test that asserts registry *order* where it means
+        # registry *content*.
+        detail = {backend["name"]: backend["detail"] for backend in caps["backends"]}
+        assert "brew install apbs" in detail["apbs"]
         # Every backend must explain its own absence, not just the first one.
-        assert "compbio.clemson.edu" in caps["backends"][1]["detail"]
-        assert "Treecodes/TABI-PB" in caps["backends"][2]["detail"]
-        assert "2/5 backend" in caps["summary"]
+        assert "compbio.clemson.edu" in detail["delphi"]
+        assert "Treecodes/TABI-PB" in detail["tabipb"]
+        # Both pinned flavours explain themselves too, rather than inheriting
+        # the auto entry's message.
+        assert detail["delphi-cpp"]
+        assert detail["pydelphi"]
+        assert f"2/{len(caps['backends'])} backend" in caps["summary"]
 
     def test_reports_every_backend_with_its_solver_family(self):
         """The family is what tells a caller why TABI-PB answers different
         questions: a boundary-element solve has no volume to interpolate."""
         backends = describe_capabilities()["backends"]
 
-        assert [b["name"] for b in backends] == ["apbs", "delphi", "tabipb", "gb", "debye"]
+        assert [b["name"] for b in backends] == list(backend_names())
         assert [b["family"] for b in backends] == [
-            "finite-difference",
-            "finite-difference",
-            "boundary-element",
-            "analytic",
-            "finite-difference",
+            get_backend(b["name"]).family.value for b in backends
         ]
 
     def test_only_gb_reports_itself_as_an_approximation(self):
         """The tier is what stops a triage number being read as an answer."""
         tiers = {b["name"]: b["accuracy_tier"] for b in describe_capabilities()["backends"]}
 
-        assert tiers == {
-            "apbs": "reference",
-            "delphi": "reference",
-            "tabipb": "reference",
-            "gb": "approximate",
-            "debye": "reference",
-        }
+        # Named rather than exhaustive: the claim is that `gb` is the only
+        # approximation, which stays true as backends are added. An exhaustive
+        # dict would have to be edited every time one is, and the two DelPhi
+        # flavours would add nothing to it — they are the same solver.
+        assert tiers["gb"] == "approximate"
+        assert {name for name, tier in tiers.items() if tier == "approximate"} == {"gb"}
+        for name in ("apbs", "delphi", "delphi-cpp", "pydelphi", "tabipb", "debye"):
+            assert tiers[name] == "reference"
 
     def test_one_backend_is_comparable_with_nothing(self, monkeypatch):
         """A lone backend trivially shares every model with itself.

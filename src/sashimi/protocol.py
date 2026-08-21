@@ -46,6 +46,7 @@ __all__ = [
     "PQRData",
     "Potential",
     "PotentialGrid",
+    "Preference",
     "Provenance",
     "SolveRequest",
     "SolveResult",
@@ -415,6 +416,9 @@ class Provenance:
     binary_path: str | None = None
     binary_sha256: str | None = None
     resolved_parameters: Diagnostics = field(default_factory=dict)
+    # Why this backend and not another, when a `Preference` chose it. Empty for
+    # a caller who named the backend, because then there is nothing to explain.
+    selected_because: str = ""
     wall_seconds: float | None = None
     # What `SolveResult.energy_kj_mol` actually is. Optional only so that a
     # backend predating this field still constructs; `sashimi.validate` treats
@@ -481,6 +485,37 @@ class SolverFamily(StrEnum):
     # Born is the only member today, and it is a family rather than a flavour of
     # the other two because nothing about its request is discretized.
     ANALYTIC = "analytic"
+
+
+class Preference(StrEnum):
+    """What a caller wants optimised, when they would rather not name a solver.
+
+    Naming a backend is always allowed and always wins; this is for the caller
+    who knows what they want from the answer but not which program gives it.
+    It resolves against **what is installed and what the request needs**, so the
+    same preference means different things on different machines — and
+    `Provenance.selected_because` records which one it landed on and why.
+
+    Deliberately not called "accurate". Above a two-atom solute the corpus has
+    no ground truth (ROADMAP.md section 12), so nothing here can promise a
+    closer answer. `STABLE` names the property that *is* measured: how little
+    the answer moves when the solute is rigidly rotated, which is the
+    discretization error and nothing more.
+    """
+
+    FAST = "fast"
+    """Lowest CPU cost. APBS first: 12.4 s where pyDelPhi is 27.3 s at 1,156
+    residues, and it answers every surface model in the corpus."""
+
+    STABLE = "stable"
+    """Least sensitive to where the lattice falls. pyDelPhi first: measured
+    0.24-0.52% pose dispersion against APBS's 0.42-0.71% across three
+    resolutions on fas2, and on a coarser effective grid at every one of them.
+    It answers `molecular` only, so this falls through by surface model."""
+
+    PORTABLE = "portable"
+    """No install step at all. debye, which ships with sashimi and needs no
+    binary — the only option on linux-aarch64, where conda-forge has no APBS."""
 
 
 @dataclass(frozen=True)

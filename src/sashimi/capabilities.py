@@ -148,6 +148,10 @@ def describe_capabilities() -> dict[str, Any]:
         # caller cannot discover it from a result — the answer is identical
         # either way, only the wait changes.
         "acceleration": _describe_acceleration(),
+        # What each preference resolves to *here*, since it depends on what is
+        # installed and on the surface asked for. A caller cannot work this out
+        # from the backend list alone.
+        "preferences": _describe_preferences(),
         "not_supported": [
             "nonlinear Poisson-Boltzmann (representable in the request; no solver path yet)",
             "raw solver input passthrough (deliberately absent)",
@@ -159,6 +163,38 @@ def describe_capabilities() -> dict[str, Any]:
             + f"; potentials in {UNITS['potential']}, energies in {UNITS['energy']}."
         ),
     }
+
+
+def _describe_preferences() -> dict[str, Any]:
+    """Where `prefer=fast|stable|portable` lands on this machine, per surface.
+
+    Resolved rather than described, because the answer is a property of the
+    installation: `stable` means pyDelPhi where it is installed and the request
+    is `molecular`, and something else everywhere else.
+    """
+    from sashimi.backends import resolve  # noqa: PLC0415 — avoids an import cycle
+    from sashimi.errors import SashimiError  # noqa: PLC0415
+
+    table: dict[str, Any] = {}
+    for preference in ("fast", "stable", "portable"):
+        per_surface: dict[str, str] = {}
+        for surface in sorted(m.value for m in SurfaceModel):
+            try:
+                name, _why = resolve(preference, surface)
+            except SashimiError:
+                per_surface[surface] = "no installed backend can answer this"
+            else:
+                per_surface[surface] = name
+        table[preference] = per_surface
+    table["note"] = (
+        "`prefer` is a convenience for a caller who knows what they want from "
+        "the answer but not which solver gives it. Naming `backend` overrides "
+        "it. 'stable' is named for what is measured — how little the answer "
+        "moves when the solute is rotated — and not 'accurate', because above a "
+        "two-atom solute nothing here has a reference answer to be accurate "
+        "against."
+    )
+    return table
 
 
 def _describe_acceleration() -> dict[str, Any]:

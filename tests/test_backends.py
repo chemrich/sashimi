@@ -24,7 +24,12 @@ from sashimi.gb.options import SUPPORTED_SURFACES as GB_SURFACES
 from sashimi.protocol import AccuracyTier, SolventModel, SolverFamily
 from sashimi.tabipb.options import SUPPORTED_SURFACES as TABIPB_SURFACES
 
-EXPECTED = ("apbs", "delphi", "tabipb", "gb", "debye")
+# `delphi` resolves to whichever build is installed; `delphi-cpp` and
+# `pydelphi` pin the flavour, because the two differ in what they can answer
+# and a caller who needs van der Waals or needs no compiler has to be able to
+# say which one they mean. `tests/corpus/delphi/` stays recorded against the
+# auto entry.
+EXPECTED = ("apbs", "delphi", "delphi-cpp", "pydelphi", "tabipb", "gb", "debye")
 
 
 def test_the_registry_holds_every_shipped_backend():
@@ -107,9 +112,14 @@ def test_every_backend_can_answer_the_default_surface_model():
         "debye": DEBYE_SURFACES,
         **{f"delphi/{flavour.value}": models for flavour, models in DELPHI_SURFACES.items()},
     }
+    # The three DelPhi registry entries are the same two executables: `delphi`
+    # is whichever is installed, and the pinned pair are the flavours already
+    # enumerated above, so they are covered by `delphi/*` rather than listed
+    # again.
+    flavoured = {"delphi", "delphi-cpp", "pydelphi"}
     # Every registered backend appears above, so a fifth one cannot arrive
     # without either supporting the default or arguing here for narrowing it.
-    assert {name.split("/")[0] for name in declared} == set(backends.names())
+    assert {name.split("/")[0] for name in declared} | flavoured == set(backends.names())
 
     default = SolventModel().surface_model
     unsupported = sorted(name for name, models in declared.items() if default not in models)

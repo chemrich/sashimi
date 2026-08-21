@@ -3757,6 +3757,99 @@ length**, and the restore landed within the same mtime second — so Python's
 the correct source throughout, which is what made it look impossible. Clear
 `__pycache__` when a same-length mutation is reverted.
 
+### Decision: APBS is the fast option, pyDelPhi the stable one, and the caller picks
+
+**2026-08-21, Charlie's call.** The cross-flavour baseline made pyDelPhi look
+like a candidate to replace debye outright — faster than it, better discretized,
+and needing no compiled binary, which is debye's whole charter. It is not, and
+the reasons are worth recording because two of them are not about solver
+quality at all.
+
+#### The licensing question, and the assumption it rests on
+
+pyDelPhi is **AGPL-3.0-or-later** with no linking or additional-permission
+exception; sashimi and protean are both MIT. **DelPhi C++ carries no licence at
+all** — no `LICENSE`, nothing in its README, no headers in its source — which is
+a weaker footing than AGPL for anything redistributed, and it is the flavour
+`tests/corpus/delphi/` is recorded against. APBS is BSD-3-Clause. Neither DelPhi
+is on PyPI; pyDelPhi installs from a pinned git SHA into its own virtualenv.
+
+**The decision is taken on the stated assumption that protean is installed and
+run locally by its user**, who obtains any solver binary themselves. On that
+model sashimi conveys nothing: pyDelPhi is not a declared dependency, cannot be
+one, is never imported — verified, zero import sites — and is driven as a
+subprocess exactly as APBS is. `src/sashimi/delphi/__init__.py` already recorded
+that boundary as deliberate.
+
+**Written down because it is load-bearing.** If protean is ever containerised,
+bundled or hosted, this changes and the question has to be asked again. Two
+items were flagged for counsel rather than settled here: the corpus commits
+energies produced by the licence-less C++ build into an MIT repository, and
+"local only" needs to stay true.
+
+#### Why pyDelPhi does not replace debye
+
+**It needs a manual install step and debye does not.** That was always debye's
+actual charter — not "best solver" but "works with nothing extra" — and pyDelPhi
+does not have it. And if a user is doing a manual install anyway, APBS is the
+better thing to install: **twice as fast, BSD, on conda-forge, and it answers
+100 of the corpus's 100 cases where pyDelPhi answers 35.** pyDelPhi has no
+`van-der-waals` (`prbrad 0` crashes inside numba) and no `smoothed-molecular`.
+
+*One platform where that argument fails, and it is the one §9 already names.*
+conda-forge ships APBS 3.4.1 for `linux-64`, `osx-64`, `osx-arm64` and `win-64`
+— **not `linux-aarch64`**. There, pyDelPhi and debye are the only options.
+
+#### What pyDelPhi is better at, measured
+
+**A common lattice is unreachable between these two**, so the M1b technique does
+not apply: APBS resolves an *anisotropic* per-axis spacing and pyDelPhi a cubic
+one, and for a non-cubic solute they cannot coincide on all three axes at any
+padding. What is comparable is the trend against the effective spacing each
+actually solved on — and it is one-sided:
+
+| structure | asked | APBS eff. h | APBS | pyDelPhi eff. h | pyDelPhi |
+|---|---|---|---|---|---|
+| fas2 | 0.7 Å | 0.564 | 0.420% | 0.692 | **0.241%** |
+| fas2 | 1.0 Å | 0.846 | 0.706% | 0.982 | **0.447%** |
+| fas2 | 1.4 Å | 0.846 | 0.699% | 1.383 | **0.524%** |
+| hca | 0.7 Å | 0.557 | 0.425% | 0.699 | **0.226%** |
+| hca | 1.0 Å | 0.742 | 0.635% | 0.986 | **0.151%** |
+| hca | 1.4 Å | 1.113 | 1.068% | 1.373 | **0.659%** |
+
+**pyDelPhi is more pose-stable in all six, by 1.3× to 4.2×, and in every one it
+is solving on the *coarser* grid** — the harder condition, since a finer lattice
+should discretize better. The first draft of this comparison was a single
+measurement at one resolution with an unexamined confound; it survived being
+measured properly, which is not something this milestone can say of every claim
+it has made.
+
+#### What shipped
+
+**The flavours are addressable.** `delphi` still means "whichever build is
+installed" and is what `tests/corpus/delphi/` is recorded against; `delphi-cpp`
+and `pydelphi` pin it. A registry entry that cannot say which executable it
+means cannot be chosen on purpose, and the two are not interchangeable —
+`delphi-cpp` answers `van-der-waals`, `pydelphi` needs no compiler.
+
+**`Preference` — `fast` / `stable` / `portable` — resolves against what is
+installed *and* what the request needs.** The surface-awareness is not a detail:
+`stable` on a `van-der-waals` request falls through to `delphi-cpp`, because
+handing two thirds of requests to a backend that refuses them would be worse
+than not having the preference. `sashimi_capabilities` reports the whole
+resolution table for the machine it is on, and the result carries
+`selected_because`, so a caller who asked for `stable` and got APBS can see it
+was the surface model and not an absent install.
+
+**Naming: `stable`, deliberately not `accurate`.** Above a two-atom solute this
+corpus has no ground truth — all 37 closed forms are Born ions and Kirkwood
+spheres — so nothing here can promise a closer answer. What is measured is how
+little the answer moves when the solute is rotated. `tests/test_preferences.py`
+asserts the name, because the wrong one is a claim we cannot support.
+
+**Nothing changed defaults.** `apbs` is still the default backend and preferences
+are opt-in; naming a backend always overrides one.
+
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 
 **Done 2026-08-16, at Charlie's direction, in its own PR as planned.** The three
