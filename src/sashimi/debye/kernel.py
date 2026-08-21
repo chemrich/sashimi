@@ -1,22 +1,34 @@
-"""The optional compiled kernel for the rim loop, and the reason it is optional.
+"""The optional compiled kernels for the three surface families, and why they are optional.
 
-`surface.py` classifies points against the solvent-excluded surface, and that is
-86-92% of a debye solve. The numpy implementation there is the reference: it
-defines the answer, it runs everywhere, and it is what the corpus is recorded
-against. This module is a second implementation of its hottest loop, compiled by
-numba, selected at run time when numba is installed.
+`surface.py` classifies points against the solvent-excluded surface, and it does
+it in three families — a probe on one atom, on two, on three. This module is a
+second implementation of all three, compiled by numba, selected at run time when
+numba is installed. The numpy implementations there stay the reference: they
+define the answer, they run everywhere, and they are what the corpus is recorded
+against.
 
-**Measured worth, on the structures ROADMAP.md section 12 grades at.** Against
-the numpy rim loop, masks bit-identical at every multigrid level:
+**Measured worth per family**, on the finest lattice at 1.0 A, masks
+bit-identical at every multigrid level:
 
-    actin-monomer,  382 residues    8.2x on the finest level, 6.8x overall
-    serum-albumin, 1,156 residues   9.5x on the finest level, 7.0x overall
+    family      fas2, 59 aa    actin-monomer, 382 aa   serum-albumin, 1,156 aa
+    radial          25.4x              28.1x                   28.4x
+    toroidal         9.7x               9.6x                    9.0x
+    vertex          17.9x              16.2x                   17.2x
 
-`parallel=True` was measured and is not used: it bought 7.0x against 6.8x
-single-threaded, which is nothing, and it would have made a library take four
-cores without being asked. The gain here is compiled code, not concurrency —
-the same conclusion the threading experiment in section 12 reached from the
-other direction.
+**And what that is worth on a whole solve, which is much less**: 1.92x on fas2,
+1.81x on actin-monomer, 1.73x on serum-albumin (149.33 s to 86.09 s of CPU), with
+the energies identical to the last digit. The gap between the two tables is the
+finding M7's port ended on, and ROADMAP.md section 12 records it: by the time
+these three loops are compiled, they are 13% of a solve. The **one-time**
+reduced-surface construction they read from — `_neighbours`, `_rims`,
+`_probe_seats`, none of them compiled — is 55%, and it is built once per solve
+rather than once per lattice, so no per-lattice speed-up touches it.
+
+`parallel=True` was measured on the rim loop and is not used: it bought 7.0x
+against 6.8x single-threaded, which is nothing, and it would have made a library
+take four cores without being asked. The gain here is compiled code, not
+concurrency — the same conclusion the threading experiment in section 12 reached
+from the other direction.
 
 **Why it is an extra and not a dependency.** numba brings llvmlite, and the two
 are ~145 MB installed. sashimi's whole proposition is that it installs anywhere
@@ -25,12 +37,23 @@ backend is not a trade to make on a caller's behalf. Callers who solve one small
 structure should not pay it; callers doing real electrostatics on proteins
 should, and `sashimi_capabilities` and the README both say so.
 
-**The reference implementation stays authoritative.** This kernel is required to
-be *bit*-identical, not close: `decided` feeds a boolean or, so a node claimed by
-any rim is the node claimed by the first, and nothing downstream depends on
-which. `tests/test_debye_kernel.py` asserts that on real geometry, and CI runs
-the numpy path on two of its three legs and this one on the third. A kernel that
-disagreed would be a bug in this file, never a new answer.
+**The reference implementation stays authoritative.** These kernels are required
+to be *bit*-identical, not close: every family writes into a boolean or, so a
+node claimed by any feature is the node claimed by the first, and nothing
+downstream depends on which. `tests/test_debye_kernel.py` asserts that per family
+on real geometry, and CI runs the numpy path on two of its three legs and these
+on the third. A kernel that disagreed would be a bug in this file, never a new
+answer.
+
+**One honest limit on that claim.** The bar is exact equality, and the fixtures
+reach it: a control mutation that stops the radial family marking anything
+reddens five tests. But three *subtle* mutations — the two boundary-equality
+flips, and hoisting `radius / length` out of the radial projection, which is
+exactly the association trap the rim kernel below documents — move not one node
+across 614,476 undecided nodes on two proteins at two resolutions. So the
+floating-point discipline in these loops is a precaution that no fixture here
+demonstrates the need for. It is kept because the cost is a comment and the
+failure it prevents is silent, not because it has been caught failing.
 """
 
 from __future__ import annotations
@@ -45,7 +68,13 @@ import numpy as np
 if TYPE_CHECKING:
     from sashimi.protocol import FloatArray
 
-__all__ = ["available", "decide_rims", "why_unavailable"]
+__all__ = [
+    "available",
+    "decide_radial",
+    "decide_rims",
+    "decide_seated",
+    "why_unavailable",
+]
 
 # An escape hatch for measurement and for a caller who has numba installed for
 # something else and does not want it used here. Checked every call rather than
@@ -139,8 +168,8 @@ def why_unavailable() -> str | None:
         return (
             "numba is not installed, so debye is solving on the pure-numpy "
             "surface path. Installing `sashimi-electro[fast]` makes the surface "
-            "classification about 7x faster, which is most of a solve — at the "
-            "cost of roughly 145 MB, since numba brings llvmlite with it"
+            "classification 9-28x faster, which is about 1.8x on a whole solve "
+            "— at the cost of roughly 145 MB, since numba brings llvmlite with it"
         )
     return None
 
@@ -299,4 +328,220 @@ def decide_rims(  # noqa: PLR0917 — mirrors the reference loop's inputs
         np.ascontiguousarray(coords),
         np.ascontiguousarray(inflated),
         decided,
+    )
+
+
+@cache
+def _compiled_radial() -> Any:
+    """Build the radial-family kernel once. Same laziness as `_compiled`."""
+    from numba import njit  # noqa: PLC0415 — the whole point is that this is lazy
+
+    @njit(cache=True, fastmath=False, nogil=True)
+    def kernel(  # type: ignore[no-untyped-def]  # noqa: PLR0917, PLR0912
+        first_axis,
+        second_axis,
+        third_axis,
+        undecided,
+        reachable,
+        coords,
+        inflated,
+        test_flat,
+        test_offset,
+        test_count,
+        degenerate,
+    ):  # pragma: no cover - compiled; exercised through `decide_radial`
+        """One atom per iteration, over the nodes inside its accessible sphere.
+
+        The reference walks the same atoms and windows the lattice per atom with
+        two `searchsorted` calls an axis, then builds a candidate point cloud,
+        pushes it out and broadcasts it against the atom's neighbours. Every one
+        of those is an array the size of the window, and the window on a protein
+        at 1.0 Å holds a few hundred nodes — so the arithmetic is small and the
+        allocation is not. Here the window is three index ranges and the pushed
+        point never exists outside three registers.
+        """
+        atoms = coords.shape[0]
+        for atom in range(atoms):
+            radius = inflated[atom]
+            if radius <= 0.0:
+                continue
+            cx, cy, cz = coords[atom, 0], coords[atom, 1], coords[atom, 2]
+            lo0 = np.searchsorted(first_axis, cx - radius, "left")
+            hi0 = np.searchsorted(first_axis, cx + radius, "right")
+            if lo0 >= hi0:
+                continue
+            lo1 = np.searchsorted(second_axis, cy - radius, "left")
+            hi1 = np.searchsorted(second_axis, cy + radius, "right")
+            if lo1 >= hi1:
+                continue
+            lo2 = np.searchsorted(third_axis, cz - radius, "left")
+            hi2 = np.searchsorted(third_axis, cz + radius, "right")
+            if lo2 >= hi2:
+                continue
+
+            first_blocker = test_offset[atom]
+            last_blocker = first_blocker + test_count[atom]
+            for i in range(lo0, hi0):
+                ox = first_axis[i] - cx
+                for j in range(lo1, hi1):
+                    oy = second_axis[j] - cy
+                    for k in range(lo2, hi2):
+                        if not undecided[i, j, k] or reachable[i, j, k]:
+                            continue
+                        oz = third_axis[k] - cz
+                        length = np.sqrt(ox * ox + oy * oy + oz * oz)
+                        # A node on the atom's own centre has no radial
+                        # direction. It cannot be a shell node unless the atom
+                        # has zero radius, and it is skipped rather than
+                        # guarded against, exactly as the reference does.
+                        if length <= degenerate:
+                            continue
+                        # `centre + radius * offset / distance`, associated as
+                        # numpy associates it in `_radially_reachable`: the
+                        # multiply happens before the divide. The rim kernel
+                        # above records why that is arranged rather than hoped
+                        # for — a candidate landing within an ulp of a
+                        # blocker's radius decides a node either way.
+                        px = cx + radius * ox / length
+                        py = cy + radius * oy / length
+                        pz = cz + radius * oz / length
+                        legal = True
+                        for b in range(first_blocker, last_blocker):
+                            other = test_flat[b]
+                            ax = px - coords[other, 0]
+                            ay = py - coords[other, 1]
+                            az = pz - coords[other, 2]
+                            if ax * ax + ay * ay + az * az < inflated[other] * inflated[other]:
+                                legal = False
+                                break
+                        if legal:
+                            reachable[i, j, k] = True
+
+    return kernel
+
+
+@cache
+def _compiled_seated() -> Any:
+    """Build the vertex-family kernel once. Same laziness as `_compiled`."""
+    from numba import njit  # noqa: PLC0415 — the whole point is that this is lazy
+
+    @njit(cache=True, fastmath=False, nogil=True)
+    def kernel(  # type: ignore[no-untyped-def]  # noqa: PLR0917
+        points,
+        order,
+        starts,
+        stops,
+        codes,
+        low_key,
+        high_key,
+        strides,
+        bin_origin,
+        cell,
+        seats,
+        radius,
+        hit,
+    ):  # pragma: no cover - compiled; exercised through `decide_seated`
+        """One node per iteration, against the seats binned around it.
+
+        The mirror image of the rim kernel's walk: there the nodes were binned
+        and each rim swept them, here the seats are binned and each node asks
+        its own bin and the twenty-six around it. That is the reference's
+        arrangement too — `_within` bins the centres — and it is kept because
+        the seats are the smaller set on a protein and are built once for every
+        lattice that asks.
+        """
+        squared = radius * radius
+        for node in range(points.shape[0]):
+            px, py, pz = points[node, 0], points[node, 1], points[node, 2]
+            key0 = int(np.floor((px - bin_origin[0]) / cell))
+            key1 = int(np.floor((py - bin_origin[1]) / cell))
+            key2 = int(np.floor((pz - bin_origin[2]) / cell))
+            lo0 = max(key0 - 1, low_key[0])
+            hi0 = min(key0 + 1, high_key[0])
+            lo1 = max(key1 - 1, low_key[1])
+            hi1 = min(key1 + 1, high_key[1])
+            lo2 = max(key2 - 1, low_key[2])
+            hi2 = min(key2 + 1, high_key[2])
+            if lo0 > hi0 or lo1 > hi1 or lo2 > hi2:
+                continue
+            found = False
+            for i in range(lo0, hi0 + 1):
+                for j in range(lo1, hi1 + 1):
+                    for k in range(lo2, hi2 + 1):
+                        code = (
+                            (i - low_key[0]) * strides[0]
+                            + (j - low_key[1]) * strides[1]
+                            + (k - low_key[2]) * strides[2]
+                        )
+                        at = np.searchsorted(codes, code)
+                        if at >= codes.shape[0] or codes[at] != code:
+                            continue
+                        for slot in range(starts[at], stops[at]):
+                            seat = order[slot]
+                            dx = px - seats[seat, 0]
+                            dy = py - seats[seat, 1]
+                            dz = pz - seats[seat, 2]
+                            if dx * dx + dy * dy + dz * dz <= squared:
+                                found = True
+                                break
+                        if found:
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+            if found:
+                hit[node] = True
+
+    return kernel
+
+
+def decide_radial(  # noqa: PLR0917 — mirrors the reference loop's inputs
+    axes: list[FloatArray],
+    coords: FloatArray,
+    inflated: FloatArray,
+    testable: tuple[np.ndarray, np.ndarray, np.ndarray],
+    undecided: np.ndarray,
+    reachable: np.ndarray,
+    degenerate: float,
+) -> None:
+    """Mark every node some atom's own sphere reaches. Mutates `reachable`."""
+    test_flat, test_offset, test_count = testable
+    _compiled_radial()(
+        np.ascontiguousarray(axes[0]),
+        np.ascontiguousarray(axes[1]),
+        np.ascontiguousarray(axes[2]),
+        undecided,
+        reachable,
+        np.ascontiguousarray(coords),
+        np.ascontiguousarray(inflated),
+        test_flat,
+        test_offset,
+        test_count,
+        float(degenerate),
+    )
+
+
+def decide_seated(
+    points: FloatArray,
+    bins: Any,
+    seats: FloatArray,
+    radius: float,
+    hit: np.ndarray,
+) -> None:
+    """Mark every node within `radius` of a seat. Mutates `hit`."""
+    _compiled_seated()(
+        np.ascontiguousarray(points),
+        bins.order,
+        bins.starts,
+        bins.stops,
+        bins.codes,
+        bins.low_key,
+        bins.high_key,
+        bins.strides,
+        bins.bin_origin,
+        bins.cell,
+        np.ascontiguousarray(seats),
+        float(radius),
+        hit,
     )

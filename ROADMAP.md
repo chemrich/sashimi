@@ -3493,6 +3493,12 @@ and beating `coulombic` by 6× at the top of the range. That is the number a por
 has to be worth; it is a projection and the last four in this section were wrong,
 so it is to be re-measured per family and not assumed.
 
+*It was wrong too, and by the largest margin of the five — the port measured
+**1.73×**, 86 s rather than 34 s. The families were never 92%: the profile that
+said so charged three one-time builders to the families that first touched them.
+"The port is finished, and it says the port was the wrong target" below has the
+exclusive re-measurement.*
+
 **What the spike did not settle was what to ship**, and the answer taken on
 2026-08-19 is: **both, with the caller choosing.** `sashimi-electro[fast]` is an
 optional extra carrying numba; `sashimi.debye.kernel` holds the compiled rim
@@ -3899,6 +3905,129 @@ call to it with `selected, {}`, which reverts the entire change, left the suite
 green. **A helper test is not a wiring test.** The stub now records the backend
 *list* each solve was handed, and all three mutations redden. See
 [[sashimi-guards-that-guard-nothing]].
+
+### The port is finished, and it says the port was the wrong target
+
+**2026-08-21.** The remaining two surface families — `_radially_reachable` and
+`_vertex_reachable` — are compiled, so all three are. They are bit-identical per
+family and end to end, and the milestone the port was opened to hit is **missed
+by a factor of two and a half**: the projection was ~4.7× on a whole solve, the
+measurement is **1.73×**.
+
+The gap is the finding, and it was available before any code was written. It is
+the **fifth** wrong projection in this milestone, so the pattern is worth naming
+rather than the number: *every one of them projected a whole-solve time from a
+profile taken before the previous optimisation landed.*
+
+#### What the port bought, measured
+
+Per family, on the finest lattice at 1.0 Å, minimum of three CPU samples, masks
+identical node for node:
+
+| family | fas2, 59 aa | actin-monomer, 382 aa | serum albumin, 1,156 aa |
+|---|---|---|---|
+| radial | **25.4×** | **28.1×** | **28.4×** |
+| toroidal *(M7)* | 9.7× | 9.6× | 9.0× |
+| vertex | **17.9×** | **16.2×** | **17.2×** |
+
+The two new ones beat the rim loop by 2–3×, and for the reason M7 already
+recorded from the other side: the rim loop was *batched* numpy before it was
+compiled, so its call overhead had been paid down once already. The radial
+family never was — it ran a windowed sub-box copy and a broadcast per atom, and
+18,242 atoms is 18,242 of each.
+
+Whole solves, CPU seconds, energies identical to the last digit:
+
+| structure | pure numpy | M7 (rim only) | all three | overall |
+|---|---|---|---|---|
+| fas2, 59 aa | 5.94 | — | 3.10 | 1.92× |
+| actin-monomer, 382 aa | 54.70 | — | 30.16 | 1.81× |
+| serum albumin, 1,156 aa | 149.33 | 113.12 | **86.09** | **1.73×** |
+
+So the two families added 1.31× on top of the rim loop's 1.32×, and the whole
+extra is now worth 1.73× at the top of the working range rather than the 4.7×
+the spike projected. **1,156 residues is 86 s, not the ~34 s forecast** — still
+between DelPhi C++ (53.8 s) and protean's `coulombic` (201.4 s), and still the
+only no-binary option in that pair that solves the Poisson-Boltzmann equation.
+
+#### Where the time is now, and why nobody saw it
+
+Profiled at 1,156 residues with all three families compiled — 86.00 s, sixteen
+lattices, one geometry:
+
+| stage | s | share | built |
+|---|---|---|---|
+| `_probe_seats` | 23.73 | **27.6%** | once per solve |
+| `_neighbours` | 12.54 | **14.6%** | once per solve |
+| `_rims` | 10.86 | **12.6%** | once per solve |
+| multigrid solve and assembly | ~23 | ~26.8% | — |
+| `_toroidally_reachable` | 8.82 | 10.3% | per lattice |
+| `inside_union_of_spheres` | 6.12 | 7.1% | per lattice |
+| `_radially_reachable` | 0.57 | 0.7% | per lattice |
+| `_vertex_reachable` | 0.19 | 0.2% | per lattice |
+
+**The one-time reduced-surface construction is 55% of a solve and none of it is
+compiled.** The three families the port was aimed at are **13%** together.
+
+It was invisible because of how the split was taken. The M7 profile attributed
+cost to `_vertex_reachable` and `_toroidally_reachable`, and both of those
+*call* the one-time builders on their first invocation through a
+`cached_property` — so `_probe_seats`' 23.7 s was reported inside the vertex
+family's 18.6%, and `_rims` inside toroidal's 56%. The roadmap then read
+"`_vertex_reachable` is the next-largest target" off a number that was **92%
+somebody else's work**: the vertex family proper is 0.2%.
+
+**The general form, which is not specific to this profiler.** A cached lazy
+build inside a hot function is charged to the *first caller*, and the first
+caller is chosen by call order rather than by cost. Any wall-clock or CPU
+attribution that is not exclusive of callees will report a one-time cost as a
+per-iteration one. Build the geometry before the timing window, or measure
+exclusively — the exclusive re-measurement here took ten minutes and would have
+redirected two milestones.
+
+#### One honest limit on the bit-identity gate
+
+The gate is exact equality per family, and it is real: a control mutation
+stopping the radial family marking anything reddens five tests. But three
+*subtle* mutations move **not one node** across 614,476 undecided nodes on two
+proteins at two resolutions — the two boundary-equality flips (`<` for `<=` on a
+blocker radius, on a seat radius) and, more interestingly, **hoisting
+`radius / length` out of the radial projection**, which is precisely the
+floating-point association trap M7 records the rim kernel's review catching.
+
+So that discipline is a precaution no fixture here demonstrates the need for. It
+is kept — the cost is a comment and the failure it prevents is silent — but the
+roadmap should not go on citing it as a caught bug. Same shape as the M1b
+correction: a rule that read as evidence was a rule that had never been
+measured.
+
+#### What is next, in evidence order
+
+1. **`_probe_seats`, 27.6%.** A Python loop over 18,242 atoms, each doing
+   `triu_indices` over ~60 neighbours, a sorted-key membership test, a batched
+   trilateration and a legality broadcast — roughly forty numpy calls per atom
+   for a few dozen floating-point operations of geometry. The same disease the
+   radial family had, and the radial family came back 28×.
+2. **`_neighbours`, 14.6%.** A `np.linalg.norm` per candidate pair inside a
+   triple-nested Python loop, about nine million of them at this size.
+3. **`_rims`, 12.6%.** ~550,000 pair iterations of ~15 numpy calls each.
+4. **The multigrid solve, ~27%**, which is the floor none of this touches and
+   which becomes the largest single item the moment items 1–3 land.
+
+Items 1–3 are 55% and are all one-time, so unlike everything in M7 they do not
+depend on lattice count or resolution. **Projecting from the 9–28× the compiled
+families measured, 86 s would land near 45 s** — and that projection is the
+sixth in this section, so it is to be measured per builder and believed
+afterwards.
+
+**Two things make items 1–3 harder than the families were, and both are about
+what the kernel returns.** The families write booleans into a mask, so a node
+claimed by any feature is the node claimed by the first and association only has
+to be *arranged*, never proved. These builders return **float geometry** — rim
+circles and seat coordinates — that later stages compare against radii, so a
+last-bit difference is a different surface. And their outputs are ragged and
+sized by the answer, which in numba means either a counting pass or a growable
+buffer where the numpy version had `list.append`.
 
 ### The order changed: functionality before shipping
 
