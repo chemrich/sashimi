@@ -2,8 +2,33 @@
 
 *Thinly sliced Poisson: a maintained wrapper around APBS for biomolecular electrostatics.*
 
-Distributed as **`sashimi-electro`**; imported as **`sashimi`**. The plain
-`sashimi` name on PyPI belongs to an unrelated, dormant library.
+> [!WARNING]
+> **This is a work in progress. It is not ready to be used, and it is not
+> ready to be depended on.**
+>
+> The repository is public so the work can be *read*, not so it can be
+> installed. Concretely:
+>
+> - **Nothing is released.** There is no package on PyPI, no version number
+>   that means anything, no changelog and no support.
+> - **Interfaces change without notice.** There is no deprecation period and no
+>   compatibility promise between any two commits.
+> - **The numbers in here are research notes, not validated results.** They are
+>   measured and they are recorded honestly — including the ones that turned out
+>   to be wrong, which are left in with their corrections — but none of it has
+>   been reviewed by anyone but its author.
+> - **Whole phases of [ROADMAP.md](ROADMAP.md) are unbuilt**, and the shipped
+>   protocol knowingly diverges from the target in §4.1.
+>
+> **Do not use this for science you intend to publish**, and do not build
+> anything on top of it yet. If it is useful to you anyway, treat it as a
+> starting point you have adopted rather than a dependency you can expect to be
+> maintained for you.
+
+The name it will be distributed under is **`sashimi-electro`**, imported as
+**`sashimi`** — the plain `sashimi` name on PyPI belongs to an unrelated,
+dormant library. Neither is published yet; **install it by cloning this
+repository**, as below.
 
 Computes electrostatic potential maps and polar solvation energies from charged
 structures, using the [APBS](https://www.poissonboltzmann.org/) 3.4.1 binary
@@ -81,7 +106,7 @@ times faster with `sashimi-electro[fast]`, and you probably want it if you are
 working on proteins rather than peptides.**
 
 ```sh
-uv sync --all-extras                 # or: pip install 'sashimi-electro[fast]'
+uv sync --all-extras
 ```
 
 **It is an extra rather than a dependency because it is large: ~145 MB**, since
