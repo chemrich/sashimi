@@ -314,3 +314,121 @@ def test_the_ragged_table_round_trips_every_atoms_neighbours():
     for index, testable in enumerate(surface.spheres.testable):
         start = int(offset[index])
         assert np.array_equal(flat[start : start + int(count[index])], testable)
+
+
+def _both_ways(monkeypatch, build):
+    """One builder's output down both paths, on one structure's geometry.
+
+    The builders take a `_Spheres`, and `_Spheres` is itself built by one of
+    them — so the bundle is made once on the reference path and handed to both
+    halves. Otherwise the compiled `_rims` would be graded against neighbour
+    lists the compiled `_neighbours` produced, and a shared error in the two
+    would cancel instead of showing.
+    """
+    with monkeypatch.context() as patched:
+        patched.setenv(kernel.DISABLE, "true")
+        reference = build()
+    with monkeypatch.context() as patched:
+        patched.delenv(kernel.DISABLE, raising=False)
+        assert kernel.available(), "the compiled half of this comparison is not compiled"
+        compiled = build()
+    return reference, compiled
+
+
+@needs_numba
+@pytest.mark.parametrize("structure", [PEPTIDE, "tests/data/apbs-examples/fas2.pqr"])
+def test_the_compiled_neighbour_search_agrees_element_for_element(structure: str, monkeypatch):
+    """Not "the same set" — the same lists, in the same order.
+
+    The kernel walks the twenty-seven bins in the reference's order and each bin
+    in ascending atom index precisely so this can be an equality rather than a
+    set comparison. Order does not reach an answer, but a test that can say
+    `==` catches an off-by-one that a set comparison would absorb.
+    """
+    pqr = read_pqr(structure)
+    inflated = pqr.radii + SolventModel(surface_model=SurfaceModel.MOLECULAR).surface_radius
+    reference, compiled = _both_ways(
+        monkeypatch, lambda: surface_module._neighbours(pqr.coords, inflated)
+    )
+    assert sum(len(near) for near in reference) > 0, "no atom overlaps another in this fixture"
+    assert reference == compiled
+
+
+@needs_numba
+@pytest.mark.parametrize("structure", [PEPTIDE, "tests/data/apbs-examples/fas2.pqr"])
+def test_the_compiled_rims_are_identical_to_the_last_bit(structure: str, monkeypatch):
+    """Geometry, not a verdict — so `array_equal`, never `allclose`.
+
+    A rim circle is compared against atom radii by three later stages, so one
+    ulp on a radius is a different surface rather than a rounding. This test
+    found two real divergences, both `x ** 2` on a scalar resolving to the
+    platform's `pow` rather than to a multiplication; `_rim` records what that
+    was worth.
+    """
+    pqr = read_pqr(structure)
+    spheres = surface_module._Spheres.around(
+        pqr, SolventModel(surface_model=SurfaceModel.MOLECULAR).surface_radius
+    )
+    reference, compiled = _both_ways(monkeypatch, lambda: surface_module._rims(spheres))
+    assert len(reference) > 0, "no two spheres meet in this fixture"
+    assert len(reference) == len(compiled)
+    for (origin, normal, radius, blockers), other in zip(reference, compiled, strict=True):
+        assert np.array_equal(origin, other[0])
+        assert np.array_equal(normal, other[1])
+        assert radius == other[2]
+        assert np.array_equal(blockers, other[3])
+
+
+@needs_numba
+@pytest.mark.parametrize("structure", [PEPTIDE, "tests/data/apbs-examples/fas2.pqr"])
+def test_the_compiled_seats_are_identical_to_the_last_bit(structure: str, monkeypatch):
+    """Same bar as the rims, and the same reason.
+
+    The seats reach an answer through `_within`, which reduces with `any`, so
+    their *order* cannot matter — but the kernel reproduces it anyway, because
+    an ordered comparison is a stronger test than an unordered one and the cost
+    was sweeping the triple loop once per mirror image.
+    """
+    pqr = read_pqr(structure)
+    spheres = surface_module._Spheres.around(
+        pqr, SolventModel(surface_model=SurfaceModel.MOLECULAR).surface_radius
+    )
+    reference, compiled = _both_ways(monkeypatch, lambda: surface_module._probe_seats(spheres))
+    assert len(reference) > 0, "no probe seats against three atoms in this fixture"
+    assert np.array_equal(reference, compiled)
+
+
+def test_the_rim_does_not_square_a_scalar_with_pow():
+    """The defect behind the two rim divergences, pinned as an invariant.
+
+    `x ** 2` on a scalar — Python float or numpy float64 — is a call to the
+    platform's `pow`, and this platform's is off by an ulp for some inputs;
+    `x * x` is correctly rounded by IEEE 754. An *array* `** 2` is safe, since
+    numpy fast-paths it to `np.square`. So `_rim` spells its squares as
+    multiplications, and this recomputes its radius that way to catch a
+    reintroduced `**`.
+
+    **Honest about its own reach**: on a platform whose `pow` *is* correctly
+    rounded the two spellings agree and this passes either way. It is written
+    as the invariant rather than as the platform quirk for exactly that reason —
+    asserting `x ** 2 != x * x` would be asserting somebody's libm, and would
+    redden CI the day that libm improved.
+    """
+    pqr = read_pqr(PEPTIDE)
+    probe = SolventModel(surface_model=SurfaceModel.MOLECULAR).surface_radius
+    coords, inflated = pqr.coords, pqr.radii + probe
+    spheres = surface_module._Spheres.around(pqr, probe)
+
+    checked = 0
+    for i in range(len(coords)):
+        for j in spheres.neighbours[i]:
+            ring = surface_module._rim(coords, inflated, i, int(j))
+            if ring is None:
+                continue
+            separation = float(np.linalg.norm(coords[j] - coords[i]))
+            along = (
+                separation * separation + inflated[i] * inflated[i] - inflated[j] * inflated[j]
+            ) / (2.0 * separation)
+            assert ring[2] == float(np.sqrt(inflated[i] * inflated[i] - along * along))
+            checked += 1
+    assert checked > 0, "no rim survived, so nothing was checked"

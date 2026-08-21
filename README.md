@@ -76,8 +76,8 @@ with an active conda environment as a fallback.
 
 ### If you are doing real electrostatics with `debye`, install the extra
 
-**`debye` — the built-in solver that needs no binary at all — is roughly twice
-as fast with `sashimi-electro[fast]`, and you probably want it if you are
+**`debye` — the built-in solver that needs no binary at all — is three to four
+times faster with `sashimi-electro[fast]`, and you probably want it if you are
 working on proteins rather than peptides.**
 
 ```sh
@@ -90,25 +90,28 @@ combined. That is a real cost on a laptop, in a container image and in CI, and
 it is not a decision to make on your behalf when many callers solve one small
 structure and never notice the difference.
 
-What it buys, and where. Most of a `debye` solve is classifying grid points
-against the solvent-excluded surface, and the extra swaps the three loops that
-do it for compiled ones — measured at **9x, 17x and 28x** on those loops
-themselves. Whole solves gain much less, because the reduced surface those loops
-read from is built in pure numpy and is not compiled: measured on this machine,
-CPU seconds at 1.0 Å,
+What it buys, and where. Nearly all of a `debye` solve is geometry — building
+the solvent-excluded surface and then classifying grid points against it — and
+the extra swaps six loops for compiled ones: the three classification families
+(9x, 17x, 28x) and the three construction steps that feed them (6-10x on the
+probe seats, ~12x on the rims, and 93-116x on the neighbour search, which was a
+numpy call per candidate atom pair). Measured on this machine, CPU seconds at
+1.0 Å, interleaved and best of three:
 
 | structure | pure numpy | with the extra | |
 |---|---|---|---|
-| fas2, 59 residues | 5.94 s | 3.10 s | 1.92x |
-| actin monomer, 382 residues | 54.70 s | 30.16 s | 1.81x |
-| serum albumin, 1,156 residues | 149.33 s | 86.09 s | **1.73x** |
+| fas2, 59 residues | 5.82 s | 1.39 s | 4.19x |
+| actin monomer, 382 residues | 62.52 s | 18.86 s | 3.31x |
+| serum albumin, 1,156 residues | 155.21 s | 45.99 s | **3.37x** |
 
-*An earlier version of this section said a 1,156-residue solve went from about
-two and a half minutes to about half a minute. That was a projection from the
-per-loop speed-up and it did not hold — the measurement above replaces it.*
+*Two earlier versions of this section overstated it and then understated it. It
+first said a 1,156-residue solve went from two and a half minutes to about half
+a minute, which was a projection from a per-loop speed-up rather than a
+measurement; correcting that gave 1.73x, which was true of a build where only
+the classification loops were compiled. The table above is the current one.*
 
 It changes nothing else: **the energies are bit-identical either way**, which
-`tests/test_debye_kernel.py` asserts per family on real geometry rather than
+`tests/test_debye_kernel.py` asserts loop by loop on real geometry rather than
 assuming, and CI runs the pure-numpy path on two of its three legs and the
 compiled one on the third.
 

@@ -213,11 +213,10 @@ def _describe_acceleration() -> dict[str, Any]:
         "compiled_surface_kernel": kernel.available(),
         "applies_to": "debye",
         "worth": (
-            "9-28x on the three surface-classification loops, which is 1.7-1.9x "
-            "on a whole solve: measured 1.81x on a 382-residue protein and 1.73x "
-            "on a 1,156-residue one (149 s to 86 s of CPU), with energies "
-            "bit-identical either way. The rest is the reduced-surface "
-            "construction, which is not compiled"
+            "9-116x on the six loops that build and query the solvent-excluded "
+            "surface, which is 3.3-4.2x on a whole solve: measured 3.31x on a "
+            "382-residue protein and 3.37x on a 1,156-residue one (155 s to 46 s "
+            "of CPU), with energies bit-identical either way"
         ),
         "install": "pip install 'sashimi-electro[fast]'",
         "cost": "~145 MB, since numba brings llvmlite",
