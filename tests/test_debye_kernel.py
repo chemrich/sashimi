@@ -50,6 +50,13 @@ def _masks(structure: str, monkeypatch, resolution: float = 0.5) -> tuple[np.nda
     kernel off — would otherwise lose it for the rest of the pytest process the
     first time this ran, and every later test would silently switch paths
     against their explicit instruction.
+
+    **Both halves set the variable, and the compiled half checks it took.** The
+    first version only forced the reference half and let the other inherit the
+    environment — so for exactly that developer, with numba installed and
+    `SASHIMI_NO_NUMBA` exported, both halves ran the numpy path and every
+    comparison in this file passed by comparing a run to itself. A check that
+    cannot fail, in the file whose entire purpose is one check.
     """
     pqr = read_pqr(structure)
     solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
@@ -58,7 +65,11 @@ def _masks(structure: str, monkeypatch, resolution: float = 0.5) -> tuple[np.nda
     with monkeypatch.context() as patched:
         patched.setenv(kernel.DISABLE, "true")
         reference = ReducedSurface(pqr, solvent).inside(axes)
-    return reference, ReducedSurface(pqr, solvent).inside(axes)
+    with monkeypatch.context() as patched:
+        patched.delenv(kernel.DISABLE, raising=False)
+        assert kernel.available(), "the compiled half of this comparison is not compiled"
+        compiled = ReducedSurface(pqr, solvent).inside(axes)
+    return reference, compiled
 
 
 def test_the_environment_agrees_with_itself(monkeypatch):
@@ -108,7 +119,11 @@ def test_disabling_it_yields_the_reference_path(monkeypatch):
     assert kernel.DISABLE in str(kernel.why_unavailable())
 
 
-def test_an_absent_kernel_explains_itself_and_a_present_one_says_nothing():
+def test_an_absent_kernel_explains_itself_and_a_present_one_says_nothing(monkeypatch):
+    """`delenv` first: the README documents exporting `SASHIMI_NO_NUMBA`, and a
+    developer who has taken that advice would otherwise fail this assertion for
+    doing what they were told."""
+    monkeypatch.delenv(kernel.DISABLE, raising=False)
     if HAVE_NUMBA:
         assert kernel.why_unavailable() is None
     else:
@@ -178,7 +193,10 @@ def test_the_compiled_energy_is_identical_to_the_last_digit(monkeypatch):
     with monkeypatch.context() as patched:
         patched.setenv(kernel.DISABLE, "true")
         reference = DebyeSolver().solve(request).energy_kj_mol
-    compiled = DebyeSolver().solve(request).energy_kj_mol
+    with monkeypatch.context() as patched:
+        patched.delenv(kernel.DISABLE, raising=False)
+        assert kernel.available(), "the compiled half of this comparison is not compiled"
+        compiled = DebyeSolver().solve(request).energy_kj_mol
     assert reference is not None
     assert repr(compiled) == repr(reference)
 
@@ -194,3 +212,105 @@ def test_the_blocker_table_round_trips_every_rim():
     for index, (*_, blockers) in enumerate(surface.rims):
         start = int(offset[index])
         assert np.array_equal(flat[start : start + int(count[index])], blockers)
+
+
+def _per_family(
+    structure: str, monkeypatch, resolution: float
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Each family's mask down both paths, on one lattice and one geometry.
+
+    The families are chained rather than run independently, because that is how
+    `inside()` runs them: each is asked only about the nodes its predecessors
+    left undecided. Grading one on the whole shell would grade it on a node set
+    the solver never hands it — and the vertex family in particular exists for
+    the junctions the other two cannot reach, so on the full shell it would be
+    asked mostly about nodes that are already decided.
+    """
+    pqr = read_pqr(structure)
+    surface = ReducedSurface(pqr, SolventModel(surface_model=SurfaceModel.MOLECULAR))
+    axes = axis_coordinates(size_grid(pqr, GridSpec(resolution=resolution)))
+    union = surface_module.inside_union_of_spheres
+    undecided = union(axes, pqr.coords, pqr.radii + surface.probe) & ~union(
+        axes, pqr.coords, pqr.radii
+    )
+
+    families = {
+        "radial": lambda still: surface_module._radially_reachable(axes, surface.spheres, still),
+        "toroidal": lambda still: surface_module._toroidally_reachable(axes, surface, still),
+        "vertex": lambda still: surface_module._vertex_reachable(axes, surface, still),
+    }
+    out = {}
+    still = undecided
+    for name, family in families.items():
+        with monkeypatch.context() as patched:
+            patched.setenv(kernel.DISABLE, "true")
+            reference = family(still)
+        with monkeypatch.context() as patched:
+            patched.delenv(kernel.DISABLE, raising=False)
+            assert kernel.available(), "the compiled half of this comparison is not compiled"
+            out[name] = (reference, family(still))
+        still = still & ~reference
+    return out
+
+
+@needs_numba
+@pytest.mark.parametrize("family", ["radial", "toroidal", "vertex"])
+def test_every_compiled_family_is_identical_on_a_protein(family: str, monkeypatch):
+    """All three families are compiled now, so all three are held to the same bar.
+
+    The count assertion is not decoration. Two of these families decide a few
+    hundred nodes where the first decides tens of thousands, and a comparison of
+    two empty masks passes for the wrong reason — which is this repository's most
+    frequent defect and the reason the vertex family is chained onto the other
+    two above rather than run on the whole shell.
+    """
+    reference, compiled = _per_family(
+        "tests/data/apbs-examples/fas2.pqr", monkeypatch, resolution=1.0
+    )[family]
+    assert reference.sum() > 0, f"the {family} family decided nothing, so this compares two empties"
+    assert np.array_equal(reference, compiled)
+
+
+@needs_numba
+def test_the_compiled_energy_is_identical_on_a_protein(monkeypatch):
+    """The peptide reaches every family; only a protein reaches them at scale.
+
+    `fas2` has 906 atoms against the dipeptide's 20, and the families divide its
+    shell 4,732 / 1,928 / 446 — so all three carry weight here and a kernel that
+    agreed on the peptide by deciding nothing would show up.
+    """
+    from sashimi.debye import DebyeSolver  # noqa: PLC0415 — keeps import cost local
+    from sashimi.protocol import FiniteDifferenceRequest  # noqa: PLC0415
+
+    request = FiniteDifferenceRequest(
+        structure=read_pqr("tests/data/apbs-examples/fas2.pqr"),
+        solvent=SolventModel(surface_model=SurfaceModel.MOLECULAR),
+        grid=GridSpec(resolution=1.0),
+        want_potential=False,
+    )
+    with monkeypatch.context() as patched:
+        patched.setenv(kernel.DISABLE, "true")
+        reference = DebyeSolver().solve(request).energy_kj_mol
+    with monkeypatch.context() as patched:
+        patched.delenv(kernel.DISABLE, raising=False)
+        assert kernel.available(), "the compiled half of this comparison is not compiled"
+        compiled = DebyeSolver().solve(request).energy_kj_mol
+    assert reference is not None
+    assert repr(compiled) == repr(reference)
+
+
+def test_the_ragged_table_round_trips_every_atoms_neighbours():
+    """The CSR the radial kernel indexes, which is `_blocker_table`'s generalisation.
+
+    Same failure mode as the rim table and a wider blast radius: an off-by-one
+    here gives an atom somebody else's blockers, and the surface comes out
+    subtly wrong everywhere rather than visibly wrong somewhere.
+    """
+    pqr = read_pqr(PEPTIDE)
+    surface = ReducedSurface(pqr, SolventModel(surface_model=SurfaceModel.MOLECULAR))
+    flat, offset, count = surface_module._ragged_table(surface.spheres.testable)
+    assert len(offset) == len(count) == len(surface.spheres.testable)
+    assert int(count.sum()) == len(flat)
+    for index, testable in enumerate(surface.spheres.testable):
+        start = int(offset[index])
+        assert np.array_equal(flat[start : start + int(count[index])], testable)

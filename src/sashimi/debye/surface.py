@@ -285,6 +285,19 @@ class _Spheres:
     # families.
     testable: list[np.ndarray]
 
+    @cached_property
+    def testable_table(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """`testable` flattened, for the compiled kernels that cannot index a list.
+
+        Built once per structure rather than once per lattice. `inside()` runs
+        sixteen times on a protein solve — once per multigrid level per state —
+        and rebuilding this inside it would put back a Python loop over every
+        atom per lattice, which is the exact cost the kernel it feeds exists to
+        remove. Measured at 18,242 atoms: 8.6 ms a call, so 0.14 s of an 86 s
+        solve. Small, and it is the same mistake one level up.
+        """
+        return _ragged_table(self.testable)
+
     @classmethod
     def around(cls, structure: PQRData, probe: float) -> _Spheres:
         inflated = structure.radii + probe
@@ -355,18 +368,25 @@ def _ragged(lengths: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return segment, np.arange(total, dtype=np.int64) - np.repeat(starts, lengths)
 
 
+def _ragged_table(pieces: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A list of variable-length index arrays as flat values, offsets and counts.
+
+    Counts run 0 to 74 on a protein, so this cannot be rectangular. Flat plus
+    offsets is the form the compiled kernels index directly — the alternative is
+    a list of arrays, which numba reflects at a cost per call that is the whole
+    thing those kernels exist to remove.
+    """
+    count = np.array([len(piece) for piece in pieces], dtype=np.int64)
+    arrays = [np.asarray(piece, dtype=np.int64) for piece in pieces]
+    flat = np.concatenate(arrays) if arrays else np.zeros(0, dtype=np.int64)
+    return flat, np.cumsum(count) - count, count
+
+
 def _blocker_table(
     rims: list[tuple[FloatArray, FloatArray, float, np.ndarray]],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Each rim's blocking atoms, flattened, because every rim has a different set.
-
-    Counts run 0 to 74 on a protein, so this cannot be rectangular. Flat plus
-    offsets is the form the compiled kernel indexes directly.
-    """
-    count = np.array([len(blockers) for *_, blockers in rims], dtype=np.int64)
-    pieces = [np.asarray(blockers, dtype=np.int64) for *_, blockers in rims]
-    flat = np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.int64)
-    return flat, np.cumsum(count) - count, count
+    """Each rim's blocking atoms, flattened, because every rim has a different set."""
+    return _ragged_table([blockers for *_, blockers in rims])
 
 
 def _batches(weights: np.ndarray, limit: int) -> list[tuple[int, int]]:
@@ -672,6 +692,23 @@ def _radially_reachable(
     """
     coords, inflated = spheres.coords, spheres.inflated
     reachable = np.zeros_like(undecided)
+
+    # The compiled path, when `sashimi-electro[fast]` is installed. Same
+    # contract as the rim loop below: it answers the identical question and
+    # `tests/test_debye_kernel.py` holds it to a bit-identical mask, so the
+    # branch is a speed choice and nothing else.
+    if kernel.available():
+        kernel.decide_radial(
+            axes,
+            coords,
+            inflated,
+            spheres.testable_table,
+            undecided,
+            reachable,
+            DEGENERATE,
+        )
+        return reachable
+
     for index, (centre, radius) in enumerate(zip(coords, inflated, strict=True)):
         if radius <= 0.0:
             continue
@@ -1105,6 +1142,16 @@ def _within(points: FloatArray, centres: FloatArray, radius: float) -> np.ndarra
     shell against a hundred thousand seats, where the pairing is quadratic.
     """
     bins = _Bins(centres, radius)
+
+    # The compiled path, when `sashimi-electro[fast]` is installed. It walks the
+    # same bins one point at a time — the gather below is what buys the numpy
+    # version its speed and what the kernel does not need, since nothing is
+    # materialised per bin.
+    if kernel.available():
+        hit = np.zeros(len(points), dtype=bool)
+        kernel.decide_seated(points, bins, centres, radius, hit)
+        return hit
+
     keys = bins.keys_of(points)
     order = np.lexsort((keys[:, 2], keys[:, 1], keys[:, 0]))
     ordered = keys[order]

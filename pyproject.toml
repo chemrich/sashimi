@@ -38,9 +38,9 @@ dependencies = [
 # The compiled surface kernel. Deliberately an extra rather than a dependency:
 # numba brings llvmlite and the two are ~145 MB installed, against a package
 # whose proposition is that it installs anywhere with nothing to fetch by hand.
-# It makes the debye backend's surface classification ~7x faster, which is most
-# of a solve, so anyone doing protein electrostatics with `debye` wants it — see
-# README "A faster debye" and `sashimi_capabilities`.
+# It makes the debye backend's surface-classification loops 9-28x faster, which
+# is ~1.8x on a whole solve, so anyone doing protein electrostatics with `debye`
+# wants it — see README "A faster debye" and `sashimi_capabilities`.
 fast = ["numba>=0.61"]
 
 [dependency-groups]
