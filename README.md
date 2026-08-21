@@ -382,7 +382,17 @@ on, and every part of it is a reaction to a measurement that lied:
 ```sh
 sashimi bench --structure tests/data/apbs-examples/fas2.pqr
 sashimi bench --structure tests/data/apbs-examples/fas2.pqr --against ../sashimi-main
+sashimi bench --structure tests/data/apbs-examples/fas2.pqr --backend apbs
 ```
+
+**`--backend` times any installed solver**, not only `debye`, and CPU time
+includes subprocesses — `time.process_time()` cannot see a child, so timing APBS
+or DelPhi without `getrusage(RUSAGE_CHILDREN)` measures nothing but this
+process's bookkeeping. That is how every backend row in ROADMAP.md §12 is
+produced. Two caveats it will tell you about: `--resolution` means nothing to
+`gb`, which discretizes nothing, or to `tabipb`, whose cost knob is mesh
+density; and on a platform without POSIX `resource` the command warns that
+subprocess time is not being counted.
 
 **Wall clock cannot measure this.** Interleaved on one machine, alternating
 between two revisions of the same case, *identical* code read 61.8 / 79.1 /

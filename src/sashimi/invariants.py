@@ -37,15 +37,16 @@ measuring what it claims to.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
 
 import numpy as np
 
-from sashimi.protocol import FloatArray, PQRData, Solver, SolverFamily, System
+from sashimi.protocol import FloatArray, PQRData, System
+from sashimi.validate import Backend
 
 __all__ = [
     "MIN_POSES",
     "POSE_SEED",
+    "POSE_SHIFT_CELLS",
     "ChargeScaling",
     "PoseSpread",
     "grade_charge_scaling",
@@ -59,11 +60,15 @@ __all__ = [
 # number unreproducible.
 POSE_SEED = 20260820
 
-# Sub-spacing, so the solute lands in a different place *within* a cell without
-# moving far enough to change which part of the box it occupies. Grid phase is
-# what is being probed; a large translation would also change the boundary
-# condition and confound the two.
-POSE_SHIFT_A = 0.5
+# The translation, as a fraction of the grid spacing rather than in angstroms.
+#
+# It has to be sub-spacing: grid phase is what is being probed, and a shift long
+# enough to move the solute within the box would change the boundary condition
+# too and confound the two. A fixed 0.5 A was the first draft and was only
+# sub-spacing at one resolution — at the 0.5 A the tests use it spans two whole
+# cells, and at the corpus's 0.35 A cases nearly three. Scaled by the spacing it
+# means the same thing everywhere the metric is quoted.
+POSE_SHIFT_CELLS = 0.5
 
 # One pose is the original and a spread needs something to spread against.
 MIN_POSES = 2
@@ -79,21 +84,27 @@ def scaled(structure: PQRData, factor: float) -> PQRData:
     return replace(structure, charges=structure.charges * factor)
 
 
-def posed(structure: PQRData, index: int, *, seed: int = POSE_SEED) -> PQRData:
+def posed(structure: PQRData, index: int, *, spacing: float, seed: int = POSE_SEED) -> PQRData:
     """The same solute rigidly moved: pose 0 is the original, the rest are turned.
 
-    A proper rotation about the centroid plus a sub-spacing translation. The
-    rotation comes from a QR factorisation with its determinant forced to +1 —
-    a reflection would be a different molecule, and for a chiral solute a
-    different answer.
+    A proper rotation about the centroid plus a translation of up to half a grid
+    cell. `spacing` is required rather than defaulted because the translation is
+    only meaningful relative to it — see `POSE_SHIFT_CELLS`.
+
+    **The rotation's determinant is forced to +1 and that is not cosmetic.** A
+    QR factorisation returns an orthogonal matrix, which is a rotation *or* a
+    reflection; a reflection is a different molecule, and for a chiral solute a
+    different answer. `tests/test_invariants.py` asserts the determinant rather
+    than only checking distances, because every distance survives a reflection.
     """
     if index == 0:
         return structure
     rng = np.random.default_rng(seed + index)
     turn, _ = np.linalg.qr(rng.standard_normal((3, 3)))
     turn = turn * np.sign(np.linalg.det(turn))
+    reach = POSE_SHIFT_CELLS * spacing
     centre = structure.coords.mean(axis=0)
-    shift = rng.uniform(-POSE_SHIFT_A, POSE_SHIFT_A, 3)
+    shift = rng.uniform(-reach, reach, 3)
     moved: FloatArray = (structure.coords - centre) @ turn.T + centre + shift
     return replace(structure, coords=moved)
 
@@ -154,39 +165,38 @@ class PoseSpread:
         return float(np.std(self.energies, ddof=1) / abs(self.mean))
 
 
-def grade_charge_scaling(
-    solver: Solver[Any], family: SolverFamily, system: System, *, factor: float = 2.0
-) -> ChargeScaling:
+def grade_charge_scaling(backend: Backend, system: System, *, factor: float = 2.0) -> ChargeScaling:
     """Solve once as given and once with every charge scaled; compare to `lam**2`."""
-    reference = _energy(solver, family, system)
+    reference = _energy(backend, system)
     scaled_system = replace(system, structure=scaled(system.structure, factor))
     return ChargeScaling(
-        backend=_label(solver),
+        backend=backend.name,
         factor=factor,
         reference_energy=reference,
-        scaled_energy=_energy(solver, family, scaled_system),
+        scaled_energy=_energy(backend, scaled_system),
     )
 
 
-def grade_pose_spread(
-    solver: Solver[Any], family: SolverFamily, system: System, *, poses: int = 5
-) -> PoseSpread:
-    """Solve the same solute in several rigid poses and report the spread."""
+def grade_pose_spread(backend: Backend, system: System, *, poses: int = 5) -> PoseSpread:
+    """Solve the same solute in several rigid poses and report the spread.
+
+    The translation scales with the grid, so a boundary-element backend — which
+    has no grid — is posed against the spacing the system nominally carries. Its
+    answer should barely move either way; TABI-PB reads 0.052% where the
+    finite-difference backends read 0.4% to 1.4%.
+    """
     if poses < MIN_POSES:
         raise ValueError(f"a spread needs at least {MIN_POSES} poses, got {poses}")
+    spacing = float(system.grid.resolution)
     energies = [
-        _energy(solver, family, replace(system, structure=posed(system.structure, index)))
-        for index in range(poses)
+        _energy(backend, replace(system, structure=posed(system.structure, i, spacing=spacing)))
+        for i in range(poses)
     ]
-    return PoseSpread(backend=_label(solver), energies=tuple(energies))
+    return PoseSpread(backend=backend.name, energies=tuple(energies))
 
 
-def _energy(solver: Solver[Any], family: SolverFamily, system: System) -> float:
-    result = solver.solve(system.request_for(family))
+def _energy(backend: Backend, system: System) -> float:
+    result = backend.solver.solve(system.request_for(backend.family))
     if result.energy_kj_mol is None:  # pragma: no cover - every case asks for energy
-        raise ValueError(f"{_label(solver)} returned no energy")
+        raise ValueError(f"{backend.name} returned no energy")
     return float(result.energy_kj_mol)
-
-
-def _label(solver: Solver[Any]) -> str:
-    return str(getattr(solver, "label", type(solver).__name__))

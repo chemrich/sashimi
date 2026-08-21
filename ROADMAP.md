@@ -3725,12 +3725,29 @@ eightfold better than the best finite-difference backend, which is what a
 boundary-element method should be: it has a surface mesh but no volumetric
 lattice.
 
-**debye is 1.85× the worst reference-tier backend and 3.5× the best.** The gate
-is relational at 3× the worst — the shape M1b and M4 both landed on, carrying no
-constant of its own — and it skips rather than passes when nothing else is
-installed, since a bar with nothing to compare against is the check that cannot
-fail. *This is a real quality gap and it is larger than the speed gap M7
-closed.* It is also the first number the project has that says so.
+**debye is 1.8× the worst reference-tier backend and 3.9× the best** — on
+`ala-gly` at 0.5 Å, where the corrected sub-cell shift gives APBS 0.515%, DelPhi
+0.236% and debye 0.915%. *That is a real quality gap, and it is larger than the
+speed gap M7 closed.*
+
+**It is gated as a recorded value, not relationally, and that reverses what M1b
+and M4 chose.** A relational bar reads "no worse than N× the worst reference-tier
+backend installed", and here that bar **moves with the machine**: with APBS
+present the worst is 0.515% and debye passes at 3×; with only DelPhi the worst is
+0.236% and the same unchanged debye goes red on a contributor's checkout. A
+verdict that depends on which binaries someone happens to have is not a gate. The
+cross-backend comparison stays a measurement, recorded above.
+
+**The first thing these checks found was a backend defect, not a debye one.**
+TABI-PB solves `ala-gly` as it sits in the corpus and **aborts on every rotated
+pose of it** — `terminating due to uncaught exception`, exit −6, from the mesher
+rather than from sashimi. It is marked `xfail(strict=True)` in
+`tests/test_invariants.py`, so a TABI-PB release that fixes it turns the suite
+red and the marker comes out, rather than the xfail outliving the defect. Worth
+recording twice over: the first draft of that test caught `SashimiError` and
+reported the crash as "tabipb is unavailable here", so a real orientation
+dependence in a shipped backend showed up as a green skip. **Only
+`BackendUnavailable` may skip.**
 
 *A trap from writing these, recorded because it cost an hour.* Mutation-testing
 `posed` by changing `index == 0` to `index >= 0` produced a file of **identical

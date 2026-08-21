@@ -582,6 +582,13 @@ def _bench(args: argparse.Namespace) -> int:
         surface=SurfaceModel(args.surface),
         backend=args.backend,
     )
+    if not bench.children_counted():
+        print(
+            "warning: this platform has no `resource` module, so CPU time cannot "
+            "include subprocesses. Figures for apbs, delphi and tabipb will be "
+            "the parent's bookkeeping only.",
+            file=sys.stderr,
+        )
     work = bench.solve_case(spec)
 
     if args.against is None:
@@ -703,7 +710,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     benchmark = subcommands.add_parser(
         "bench",
-        help="CPU-time measurement of a debye solve",
+        help="CPU-time measurement of one backend's solve",
         description=bench.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -717,6 +724,9 @@ def build_parser() -> argparse.ArgumentParser:
             "children, so a subprocess backend is measured rather than read as zero"
         ),
     )
+    # Named for the finite-difference backends. `gb` ignores it because it
+    # discretizes nothing, and `tabipb` because its cost knob is mesh density —
+    # `_bench` says so rather than letting a sweep report flat timings.
     benchmark.add_argument("--resolution", type=float, default=GridSpec().resolution)
     benchmark.add_argument("--padding", type=float, default=GridSpec().padding)
     benchmark.add_argument(

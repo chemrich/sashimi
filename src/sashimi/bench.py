@@ -45,6 +45,7 @@ import os
 import subprocess
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -162,8 +163,15 @@ class Measurement:
 
     @property
     def spread(self) -> float:
-        """Worst sample over best, as a ratio: how contaminated the run was."""
-        return max(self.samples) / min(self.samples)
+        """Worst sample over best, as a ratio: how contaminated the run was.
+
+        A zero best would be a measurement that failed rather than a fast one —
+        reachable where `cpu_seconds` has fallen back to `process_time()` and the
+        work happened in a child — so it reports infinity instead of dividing by
+        it.
+        """
+        best = min(self.samples)
+        return max(self.samples) / best if best > 0 else float("inf")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -185,8 +193,14 @@ class Comparison:
 
     @property
     def ratio(self) -> float:
-        """Baseline over candidate: above one is the candidate being faster."""
-        return self.baseline.best / self.candidate.best
+        """Baseline over candidate: above one is the candidate being faster.
+
+        Infinite rather than a `ZeroDivisionError` when the candidate measured
+        zero, which means the instrument missed the work rather than that the
+        work was free.
+        """
+        best = self.candidate.best
+        return self.baseline.best / best if best > 0 else float("inf")
 
     @property
     def identical(self) -> bool:
@@ -259,10 +273,12 @@ def solve_case(spec: CaseSpec) -> Callable[[], float]:
         want_potential=False,
     ).request_for(family)
 
-    # Binary discovery is lazy — `ApbsSolver.binary` shells out for a version
-    # and hashes the executable on first use — and with children now counted
-    # that lands in sample one. Pay it here, where the PQR parsing already is.
-    solver.solve(request)
+    # Binary discovery is lazy — `ApbsSolver.binary` shells out for a version and
+    # hashes the executable — and with children counted that lands in sample one.
+    # Touching the property is enough: every `discover_*` is `lru_cache`d. An
+    # earlier draft ran a whole extra `solve()` instead, which on the roadmap's
+    # own 147 s row meant four solves for `--repeats 3`.
+    _warm(solver)
 
     def work() -> float:
         energy = solver.solve(request).energy_kj_mol
@@ -283,8 +299,10 @@ def compare_against(
     """Interleave this tree against another checkout of the repo, one sample each.
 
     The other side runs as a subprocess because a revision cannot be imported
-    twice into one interpreter — which is also why its CPU time cannot be read
-    from here. `time.process_time()` in the child excludes the parent's work and
+    twice into one interpreter. Its CPU time *can* be read from here —
+    `RUSAGE_CHILDREN` counts any reaped descendant — but it is not, so that
+    `uv run`'s dependency resolution and a second interpreter's start-up stay
+    out of the sample. `time.process_time()` in the child excludes the parent's work and
     the interpreter's own start-up is charged before the timer starts, so the
     child reporting its own sample is both simpler and more accurate than
     `getrusage(RUSAGE_CHILDREN)` around the call.
@@ -325,9 +343,6 @@ try:
     import resource
 except ImportError:
     resource = None
-from sashimi.backends import solver_for
-from sashimi.pqr import read_pqr
-from sashimi.protocol import GridSpec, SolventModel, SurfaceModel, System
 
 
 def cpu():
@@ -338,15 +353,37 @@ def cpu():
     return a.ru_utime + a.ru_stime + b.ru_utime + b.ru_stime
 
 
-solver, family = solver_for({backend!r})
-request = System(
-    structure=read_pqr({structure!r}),
-    solvent=SolventModel(surface_model=SurfaceModel({surface!r})),
-    grid=GridSpec(resolution={resolution!r}, padding={padding!r}),
-    want_energy=True,
-    want_potential=False,
-).request_for(family)
-solver.solve(request)
+from sashimi.pqr import read_pqr
+from sashimi.protocol import FiniteDifferenceRequest, GridSpec, SolventModel, SurfaceModel
+
+structure = read_pqr({structure!r})
+solvent = SolventModel(surface_model=SurfaceModel({surface!r}))
+grid = GridSpec(resolution={resolution!r}, padding={padding!r})
+
+if {backend!r} == "debye":
+    # The path every revision back to M1 can run. `sashimi.backends` arrived in
+    # PR #28 and `System.request_for` in PR #26, so reaching for either would
+    # make this snippet fail against exactly the older trees it exists to
+    # measure — and debye is what almost every comparison is about.
+    from sashimi.debye.backend import DebyeSolver
+    solver = DebyeSolver()
+    request = FiniteDifferenceRequest(
+        structure=structure, solvent=solvent, grid=grid,
+        want_energy=True, want_potential=False,
+    )
+else:
+    from sashimi.backends import solver_for
+    from sashimi.protocol import System
+    solver, family = solver_for({backend!r})
+    request = System(
+        structure=structure, solvent=solvent, grid=grid,
+        want_energy=True, want_potential=False,
+    ).request_for(family)
+
+try:
+    solver.binary
+except Exception:
+    pass
 started = cpu()
 energy = solver.solve(request).energy_kj_mol
 print(json.dumps({{"best": cpu() - started, "energy": energy}}))
@@ -369,9 +406,9 @@ def _remote_sample(checkout: Path, spec: CaseSpec) -> tuple[float, float]:
 
     `uv run --project` rather than this interpreter: the other checkout has its
     own lockfile, and the point of measuring it at all is that it is a different
-    revision. Its CPU time cannot be read from here — `time.process_time()`
-    excludes children — so the child times itself, which also keeps interpreter
-    start-up out of the sample.
+    revision. The child times itself — not because `RUSAGE_CHILDREN` could not
+    see it, which it could, but so that `uv run`'s resolution and a second
+    interpreter's start-up stay out of the sample.
     """
     if not (checkout / "pyproject.toml").is_file():
         raise SashimiError(f"{checkout} does not look like a sashimi checkout (no pyproject.toml)")
@@ -400,6 +437,16 @@ def _remote_sample(checkout: Path, spec: CaseSpec) -> tuple[float, float]:
     if report["energy"] is None:  # pragma: no cover - the request asks for energy
         raise SashimiError("the baseline checkout returned no energy")
     return float(report["best"]), float(report["energy"])
+
+
+def _warm(solver: object) -> None:
+    """Resolve a subprocess backend's binary before the clock starts.
+
+    Cheap and cached; a backend with nothing to discover has no such attribute
+    and needs no warming. Deliberately not a solve — see `solve_case`.
+    """
+    with suppress(AttributeError, SashimiError):
+        _ = solver.binary  # type: ignore[attr-defined]
 
 
 def _baseline_environment() -> dict[str, str]:
