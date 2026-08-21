@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import math
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,7 @@ from sashimi.bench import (
     Comparison,
     Measurement,
     _baseline_environment,
+    cpu_seconds,
     remote_snippet,
     render_comparison,
     solve_case,
@@ -46,8 +49,11 @@ def _spec(
     resolution: float = 0.5,
     padding: float = 10.0,
     surface: SurfaceModel = SurfaceModel.MOLECULAR,
+    backend: str = "debye",
 ) -> CaseSpec:
-    return CaseSpec(path=path, resolution=resolution, padding=padding, surface=surface)
+    return CaseSpec(
+        path=path, resolution=resolution, padding=padding, surface=surface, backend=backend
+    )
 
 
 def _comparison(baseline: float, candidate: float, *, energies: tuple[float, float]) -> Comparison:
@@ -159,6 +165,55 @@ def test_a_repeat_count_below_one_is_refused(capsys):
     """`measure` guards it and so must the interleaved path, which has its own loop."""
     with pytest.raises(SystemExit, match="at least 1"):
         main(["bench", "--structure", str(ALA_GLY), "--repeats", "0"])
+
+
+def test_cpu_seconds_counts_a_reaped_child(tmp_path):
+    """The half `time.process_time()` cannot see, and the reason `--backend` works.
+
+    Three of the four backends are subprocesses, so a benchmark without
+    `RUSAGE_CHILDREN` reads their cost as this process's bookkeeping and nothing
+    else — a wall-clock benchmark wearing a CPU-time label. Checked against a
+    child that deliberately burns CPU rather than sleeping, since sleeping would
+    pass with or without the fix.
+    """
+    import subprocess  # noqa: PLC0415 — local to the one test that shells out
+
+    before_process, before_total = time.process_time(), cpu_seconds()
+    subprocess.run([sys.executable, "-c", "sum(i*i for i in range(4_000_000))"], check=True)
+    spent_here = time.process_time() - before_process
+    spent_total = cpu_seconds() - before_total
+
+    assert spent_total > 0.05, "the child's CPU time is not being counted at all"
+    assert spent_total > spent_here * 2, (
+        f"child CPU {spent_total:.3f}s barely exceeds this process's {spent_here:.3f}s, "
+        "so RUSAGE_CHILDREN is probably not contributing"
+    )
+
+
+@pytest.mark.parametrize("backend", ["debye", "gb"])
+def test_bench_times_any_registered_backend(backend: str, capsys):
+    """Not only debye. The cross-backend baseline in ROADMAP section 12 was
+    produced by a script that lived nowhere, which is the failure this module
+    exists to prevent — so the instrument has to reach the other backends.
+
+    `gb` is the second one here because it needs no binary, so this asserts the
+    dispatch on every machine rather than only where APBS is installed.
+    """
+    assert (
+        main(
+            ["bench", "--structure", str(ALA_GLY), "--backend", backend, "--repeats", "1", "--json"]
+        )
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["energy"] < 0
+    assert report["best"] > 0
+
+
+def test_the_backend_reaches_the_baseline_snippet_too():
+    """A comparison that solved with two different backends would be nonsense."""
+    snippet = remote_snippet(_spec(backend="gb"))
+    assert "'gb'" in snippet
 
 
 def test_the_bench_command_solves_the_structure_it_was_given(capsys):

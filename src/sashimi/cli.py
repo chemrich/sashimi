@@ -580,6 +580,7 @@ def _bench(args: argparse.Namespace) -> int:
         resolution=args.resolution,
         padding=args.padding,
         surface=SurfaceModel(args.surface),
+        backend=args.backend,
     )
     work = bench.solve_case(spec)
 
@@ -707,6 +708,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     benchmark.add_argument("--structure", required=True, help="PQR file to solve")
+    benchmark.add_argument(
+        "--backend",
+        choices=sorted(BACKEND_NAMES),
+        default="debye",
+        help=(
+            "which solver to time (default: debye). CPU time counts reaped "
+            "children, so a subprocess backend is measured rather than read as zero"
+        ),
+    )
     benchmark.add_argument("--resolution", type=float, default=GridSpec().resolution)
     benchmark.add_argument("--padding", type=float, default=GridSpec().padding)
     benchmark.add_argument(

@@ -1643,8 +1643,12 @@ MANIFEST: tuple[Case, ...] = (
     Case(
         name="ion-protein-complex",
         description=(
-            "260 atoms carrying +21.69 e — by far the most charged solute here, "
-            "and small enough that the charge is not spread thin."
+            "260 atoms carrying +21.69 e. Not the corpus's largest total charge "
+            "since serum-albumin arrived at -30 e, but by far the densest: "
+            "0.083 e/atom against 0.0016, a factor of 52, on a united-atom "
+            "structure with no hydrogens. That is why it is the worst "
+            "cross-flavour DelPhi case in the corpus at 1.257% — see "
+            "ROADMAP.md section 12."
         ),
         source="apbs-examples/ion-protein-complex.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
@@ -1904,9 +1908,12 @@ MANIFEST: tuple[Case, ...] = (
     Case(
         name="ion-protein-complex-molecular",
         description=(
-            "260 atoms at +21.69 e on the shared surface: the most charged "
-            "solute in the corpus, and a united-atom structure with no hydrogens "
-            "at all, which is a second radius dialect (see `hca-molecular`)."
+            "260 atoms at +21.69 e on the shared surface. The corpus's densest "
+            "charge at 0.083 e/atom — serum-albumin carries more in total at "
+            "-30 e but 52x less per atom — and a united-atom structure with no "
+            "hydrogens at all, which is a second radius dialect (see "
+            "`hca-molecular`). Both properties are why it is the worst "
+            "cross-flavour DelPhi case, at 1.257%."
         ),
         source="apbs-examples/ion-protein-complex.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
