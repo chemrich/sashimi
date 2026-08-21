@@ -4029,6 +4029,118 @@ last-bit difference is a different surface. And their outputs are ragged and
 sized by the answer, which in numba means either a counting pass or a growable
 buffer where the numpy version had `list.append`.
 
+### The one-time build, compiled — and a square that was not one
+
+**2026-08-21, the block after the port.** The three builders the port's
+re-measurement pointed at are compiled: `_neighbours`, `_rims` and
+`_probe_seats`, 55% of a solve between them and none of it touched before.
+
+| builder | share, before | speed-up | how identity is checked |
+|---|---|---|---|
+| `_probe_seats` | 27.6% | 6.0× / 10.2× | `array_equal` on the seat coordinates |
+| `_neighbours` | 14.6% | **93× / 116×** | the neighbour lists, element for element |
+| `_rims` | 12.6% | ~12× | origins, normals, radii and blocker sets |
+
+*(Two structures per row where two were measured: fas2 at 59 residues and
+actin-monomer at 382.)*
+
+**End to end**, CPU seconds at 1.0 Å, interleaved and best of three, energies
+identical to the last digit:
+
+| structure | pure numpy | with the extra | ratio | ratio after the port alone |
+|---|---|---|---|---|
+| fas2, 59 aa | 5.82 | 1.39 | **4.19×** | 1.92× |
+| actin-monomer, 382 aa | 62.52 | 18.86 | **3.31×** | 1.81× |
+| serum albumin, 1,156 aa | 155.21 | **45.99** | **3.37×** | 1.73× |
+
+**The projection held this time, and that is worth recording after five that did
+not.** The port's section closed by saying "projecting from the 9–28× the
+compiled families measured, 86 s would land near 45 s". It is 45.99 s. What
+changed is not the arithmetic but what it was taken from: the earlier five all
+extrapolated a whole-solve time from a profile that predated the previous
+optimisation, and this one extrapolated from an *exclusive* profile of the tree
+it was projecting about.
+
+`_neighbours` is the outlier for a reason worth keeping:
+it was a `np.linalg.norm` **per candidate pair** inside a triple-nested Python
+loop — about nine million numpy calls at 18,242 atoms for three subtractions of
+arithmetic each. Nothing about it was vectorised, so nothing about it had been
+paid down. `_probe_seats` is at the other end because its numpy version was
+already batched per atom *and* because the kernel walks its triple loop twice.
+
+#### The finding: a scalar `** 2` is not a multiplication
+
+`_rims` would not come out identical. Twelve of 11,380 rim circles differed in
+the last bit — three origins and nine radii — and the cause is not in the
+kernel:
+
+**`x ** 2` on a scalar is a call to the platform's `pow`, and this platform's
+`pow` is not correctly rounded.** It disagrees with `x * x` for **26 of 27,799**
+atom separations on fas2 and for 38 of the same set's `along` values. A
+multiplication is correctly rounded by IEEE 754, so `x * x` is the *more
+accurate* spelling; `pow` is the one that was shipping. numba lowers `** 2` to
+a multiplication and has no way to reproduce libm, so no amount of care in the
+kernel could have matched the reference.
+
+Three properties of this are worth separating, because they point in different
+directions:
+
+- **It is not a numba fact.** `_rim`'s output — and therefore every recorded
+  corpus energy that passes through a rim — depended on whose libm ran it. The
+  corpus asserts exact values and CI runs Linux where these numbers were taken
+  on macOS, so this was a live portability hazard that the port merely
+  *exposed*. Two libms agreeing to date is not the same as a number being
+  well defined.
+- **The array case is safe**, and that is why this survived. numpy fast-paths
+  `array ** 2` to `np.square`, which is the multiplication. Every other square
+  in `surface.py` is on an array; the three in `_rim` were the only scalars.
+- **The fix changes a recorded answer or it does not, and that had to be
+  measured rather than argued.** `corpus verify --backend debye --tier full` on
+  the pure-numpy path: **all 58 cases reproduce.** The ulp never reaches a
+  recorded digit. Had one moved, it would have been a result change to bring to
+  Charlie rather than a recording to regenerate.
+
+The guard against a reintroduced `**` is written as the *invariant* — `_rim`'s
+radius equals the explicitly-multiplied formula — and not as
+`assert x ** 2 != x * x`, which would be asserting somebody's libm and would
+redden CI the day that libm improved.
+
+#### Two mistakes inside the kernels, both caught before they ran
+
+- **An out-of-bounds write that only the last rim could reach.** The first draft
+  of the rim kernel wrote each blocker straight to `blocker_flat[blocker_offset[kept]
+  + found]` as it found them — but a rim can be found *swallowed* after some of
+  its blockers are known, and a swallowed pair that follows the last kept rim
+  indexes `blocker_offset` one past its end. Compiled, with bounds checking off,
+  that is a silent write into whatever follows. Blockers go through a scratch
+  buffer and are copied on success.
+- **A frame raised from the wrong atom.** `_probe_seats` sorts each atom's
+  neighbours before pairing them, and the sort is load-bearing rather than
+  tidy: it decides which of the three atoms the trilateration frame is built
+  from. The kernel first walked the bin-order list, which produces the same two
+  seats mathematically and different ones in the last bits. `_Spheres` now
+  carries a `sorted_testable_table` for exactly this.
+
+Both are the same class as the `PAIR_BATCH` lesson: **the thing to be afraid of
+in this module is not a wrong formula, it is a right formula fed from the wrong
+index.**
+
+#### Where the time is now
+
+At 1,156 residues the solve is 46 s, and the shape has inverted again. Geometry
+was 92% before any of this and the multigrid solve was 11%; the solve is now the
+largest single item in a debye run, and `inside_union_of_spheres` — a numpy
+loop nobody has looked at, marking each sphere over its own index window — is
+next. Neither is a call-overhead problem, so neither is another numba port:
+**the remaining levers are algorithmic.** debye still has no focusing, which is
+where APBS's near-linear exponent comes from.
+
+**And the quality gap is now much larger than the speed gap.** debye's pose
+dispersion is 1.416% against APBS's 0.764% at protein scale — unchanged by any
+of this, because every kernel here is bit-identical by construction. Two blocks
+of work have gone into speed and the discretization lever named at M1c is still
+unspent.
+
 ### The order changed: functionality before shipping
 
 **2026-08-12, at Charlie's direction.** sashimi was born out of early protean

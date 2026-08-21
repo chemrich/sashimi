@@ -286,6 +286,22 @@ class _Spheres:
     testable: list[np.ndarray]
 
     @cached_property
+    def sorted_testable_table(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """`testable`, sorted within each atom, for the compiled seat kernel.
+
+        `_probe_seats` sorts each atom's neighbours before pairing them, and the
+        sort is load-bearing rather than tidy: it fixes which atom of a triple
+        the trilateration frame is raised from. Built here so the kernel is
+        handed the same order the reference computes for itself.
+        """
+        return _ragged_table([np.sort(near) for near in self.testable])
+
+    @cached_property
+    def neighbour_table(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """`neighbours` flattened, for the compiled kernels that cannot index a list."""
+        return _ragged_table([np.asarray(near, dtype=np.int64) for near in self.neighbours])
+
+    @cached_property
     def testable_table(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """`testable` flattened, for the compiled kernels that cannot index a list.
 
@@ -329,6 +345,27 @@ def _neighbours(coords: FloatArray, inflated: FloatArray) -> list[list[int]]:
         return lists
     origin = coords[live].min(axis=0)
     keys = np.floor((coords - origin) / cell).astype(np.int64)
+
+    # The compiled path, when `sashimi-electro[fast]` is installed. It walks the
+    # same twenty-seven bins in the same order and applies the same test, so the
+    # lists come back element for element identical — which is what
+    # `tests/test_debye_kernel.py` asserts rather than comparing them as sets.
+    #
+    # `_Bins` over the live atoms alone gives the reference's own origin and
+    # membership: its `_origin` is `points.min(axis=0)`, and the points here are
+    # exactly `coords[live]`. Its slots address that subset, so they are mapped
+    # back to atom numbers before the kernel sees them.
+    if kernel.available():
+        alive = np.asarray(live, dtype=np.int64)
+        bin_index = _Bins(coords[alive], cell)
+        flat, offset, counts = kernel.neighbour_lists(
+            coords, inflated, keys, bin_index, alive[bin_index.order]
+        )
+        for index in live:
+            start = int(offset[index])
+            lists[index] = flat[start : start + int(counts[index])].tolist()
+        return lists
+
     bins: dict[tuple[int, int, int], list[int]] = {}
     for index in live:
         bins.setdefault(tuple(int(v) for v in keys[index]), []).append(index)  # type: ignore[arg-type]
@@ -899,6 +936,22 @@ def _rims(spheres: _Spheres) -> list[tuple[FloatArray, FloatArray, float, np.nda
     all of them away in `_legal`.
     """
     coords, inflated, neighbours = spheres.coords, spheres.inflated, spheres.neighbours
+
+    # The compiled path, when `sashimi-electro[fast]` is installed. Unlike the
+    # family kernels this one returns *geometry* — a circle three later stages
+    # compare against radii — so bit-identity has to be proved rather than
+    # arranged, and `tests/test_debye_kernel.py` compares the origins, normals
+    # and radii with `array_equal`.
+    if kernel.available():
+        origins, normals, ring_radii, offsets, counts, blocker_flat = kernel.enumerate_rims(
+            coords, inflated, spheres.neighbour_table, spheres.testable_table, DEGENERATE
+        )
+        return [
+            (origins[index], normals[index], float(ring_radii[index]),
+             blocker_flat[offsets[index] : offsets[index] + counts[index]])
+            for index in range(len(ring_radii))
+        ]  # fmt: skip
+
     rims = []
     for i in range(len(coords)):
         if inflated[i] <= 0.0:
@@ -965,8 +1018,20 @@ def _rim(
     if separation <= abs(inflated[i] - inflated[j]):
         return None  # one sphere swallows the other; there is no rim
     normal = axis_vector / separation
-    along = (separation**2 + inflated[i] ** 2 - inflated[j] ** 2) / (2.0 * separation)
-    squared = inflated[i] ** 2 - along**2
+    # **Every square here is written as a multiplication, and that is not a
+    # style choice.** `x ** 2` on a *scalar* — Python float or numpy float64
+    # alike — is a call to the platform's `pow`, and this platform's `pow` is
+    # not correctly rounded: measured on fas2, it disagrees with `x * x` by one
+    # ulp for 26 of 27,799 separations and 38 of the same set's `along` values.
+    # A multiplication is correctly rounded by IEEE 754, so this is the more
+    # accurate spelling as well as the reproducible one — the rim radii of a
+    # recorded corpus energy should not depend on whose libm ran it. (An
+    # *array* `** 2` is safe: numpy fast-paths it to `np.square`, which is the
+    # multiplication. Every other square in this module is on an array.)
+    along = (separation * separation + inflated[i] * inflated[i] - inflated[j] * inflated[j]) / (
+        2.0 * separation
+    )
+    squared = inflated[i] * inflated[i] - along * along
     if squared <= 0.0:
         return None
     return coords[i] + along * normal, normal, float(np.sqrt(squared))
@@ -1025,6 +1090,15 @@ def _probe_seats(spheres: _Spheres) -> FloatArray:
     coords, inflated, neighbours = spheres.coords, spheres.inflated, spheres.neighbours
     count = len(coords)
     overlapping = _overlapping_pairs(neighbours, inflated, count)
+
+    # The compiled path, when `sashimi-electro[fast]` is installed. Geometry
+    # again rather than a verdict, so `tests/test_debye_kernel.py` compares the
+    # seat coordinates with `array_equal`.
+    if kernel.available():
+        return kernel.probe_seats(
+            coords, inflated, spheres.sorted_testable_table, overlapping, DEGENERATE
+        )
+
     seats = []
 
     for i in range(count):

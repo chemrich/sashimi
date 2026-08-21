@@ -1,28 +1,38 @@
-"""The optional compiled kernels for the three surface families, and why they are optional.
+"""The optional compiled kernels for debye's surface geometry, and why they are optional.
 
-`surface.py` classifies points against the solvent-excluded surface, and it does
-it in three families — a probe on one atom, on two, on three. This module is a
-second implementation of all three, compiled by numba, selected at run time when
-numba is installed. The numpy implementations there stay the reference: they
-define the answer, they run everywhere, and they are what the corpus is recorded
-against.
+`surface.py` builds the solvent-excluded surface and then classifies grid points
+against it, and that is nearly all of a debye solve. This module is a second
+implementation of the six loops it does that in, compiled by numba, selected at
+run time when numba is installed. The numpy implementations there stay the
+reference: they define the answer, they run everywhere, and they are what the
+corpus is recorded against.
 
-**Measured worth per family**, on the finest lattice at 1.0 A, masks
-bit-identical at every multigrid level:
+**Measured worth, loop by loop**, at 1.0 A, interleaved and best of three:
 
-    family      fas2, 59 aa    actin-monomer, 382 aa   serum-albumin, 1,156 aa
-    radial          25.4x              28.1x                   28.4x
-    toroidal         9.7x               9.6x                    9.0x
-    vertex          17.9x              16.2x                   17.2x
+    built once per solve            fas2, 59 aa   actin, 382 aa   albumin, 1,156 aa
+      _neighbours                       87x           116x              94x
+      _rims                              12x           --                --
+      _probe_seats                        6.0x         10.2x             --
 
-**And what that is worth on a whole solve, which is much less**: 1.92x on fas2,
-1.81x on actin-monomer, 1.73x on serum-albumin (149.33 s to 86.09 s of CPU), with
-the energies identical to the last digit. The gap between the two tables is the
-finding M7's port ended on, and ROADMAP.md section 12 records it: by the time
-these three loops are compiled, they are 13% of a solve. The **one-time**
-reduced-surface construction they read from — `_neighbours`, `_rims`,
-`_probe_seats`, none of them compiled — is 55%, and it is built once per solve
-rather than once per lattice, so no per-lattice speed-up touches it.
+    per lattice, sixteen a solve
+      _radially_reachable                25.4x         28.1x             28.4x
+      _toroidally_reachable               9.7x          9.6x              9.0x
+      _vertex_reachable                  17.9x         16.2x             17.2x
+
+**And what that is worth on a whole solve**, CPU seconds, energies identical to
+the last digit:
+
+    fas2, 59 aa            5.82 -> 1.39 s     4.19x
+    actin-monomer, 382 aa 62.52 -> 18.86 s    3.31x
+    serum albumin, 1,156  155.21 -> 45.99 s   3.37x
+
+**The two halves of that table were compiled in the wrong order, and the record
+says so.** M7 compiled the classification families first, on a profile that
+charged the one-time builders to whichever family read them through a
+`cached_property` — so `_probe_seats`, the largest single item in a solve, was
+reported as part of a family that is 0.2% of one. Compiling all three families
+was worth 1.73x; compiling the three builders they read from took the same solve
+from 86 s to 46 s. ROADMAP.md section 12 has the exclusive re-measurement.
 
 `parallel=True` was measured on the rim loop and is not used: it bought 7.0x
 against 6.8x single-threaded, which is nothing, and it would have made a library
@@ -38,16 +48,26 @@ structure should not pay it; callers doing real electrostatics on proteins
 should, and `sashimi_capabilities` and the README both say so.
 
 **The reference implementation stays authoritative.** These kernels are required
-to be *bit*-identical, not close: every family writes into a boolean or, so a
-node claimed by any feature is the node claimed by the first, and nothing
-downstream depends on which. `tests/test_debye_kernel.py` asserts that per family
-on real geometry, and CI runs the numpy path on two of its three legs and these
-on the third. A kernel that disagreed would be a bug in this file, never a new
-answer.
+to be *bit*-identical, not close, and the bar means two different things for the
+two halves. A classification family writes into a boolean or, so a node claimed
+by any feature is the node claimed by the first and the floating-point
+association only has to be *arranged* to match. A builder returns **geometry** —
+rim circles, seat coordinates — that later stages compare against radii, so one
+ulp there is a different surface and the association has to be *proved*.
+`tests/test_debye_kernel.py` asserts both loop by loop on real geometry, and CI
+runs the numpy path on two of its three legs and these on the third.
 
-**One honest limit on that claim.** The bar is exact equality, and the fixtures
-reach it: a control mutation that stops the radial family marking anything
-reddens five tests. But three *subtle* mutations — the two boundary-equality
+**That distinction found a defect in the reference, not in a kernel.** `x ** 2`
+on a scalar is a call to the platform's `pow`, which here is not correctly
+rounded — so `_rim` was computing a square that `x * x` gets right and that no
+compiled kernel could reproduce. See `surface._rim`. Every recorded corpus
+energy passing through a rim depended on whose libm ran it; all 58 cases
+reproduce with the multiplication.
+
+**One honest limit on the classification half of that claim.** The bar is exact
+equality, and the fixtures reach it: a control mutation that stops the radial
+family marking anything reddens five tests. But three *subtle* mutations — the
+two boundary-equality
 flips, and hoisting `radius / length` out of the radial projection, which is
 exactly the association trap the rim kernel below documents — move not one node
 across 614,476 undecided nodes on two proteins at two resolutions. So the
@@ -65,6 +85,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from sashimi.protocol import DIMENSIONS
+
 if TYPE_CHECKING:
     from sashimi.protocol import FloatArray
 
@@ -73,6 +95,9 @@ __all__ = [
     "decide_radial",
     "decide_rims",
     "decide_seated",
+    "enumerate_rims",
+    "neighbour_lists",
+    "probe_seats",
     "why_unavailable",
 ]
 
@@ -545,3 +570,492 @@ def decide_seated(
         float(radius),
         hit,
     )
+
+
+@cache
+def _compiled_neighbours() -> Any:
+    """Build the neighbour-search kernel once. Same laziness as `_compiled`."""
+    from numba import njit  # noqa: PLC0415 — the whole point is that this is lazy
+
+    @njit(cache=True, fastmath=False, nogil=True)
+    def kernel(  # type: ignore[no-untyped-def]  # noqa: PLR0917, PLR0912
+        coords,
+        inflated,
+        keys,
+        order,
+        starts,
+        stops,
+        codes,
+        low_key,
+        high_key,
+        strides,
+        counting,
+        offset,
+        flat,
+    ):  # pragma: no cover - compiled; exercised through `neighbour_lists`
+        """Which atoms overlap which, in the reference's own order.
+
+        **Two passes over one loop body, and the flag is why.** The output is
+        ragged and its size is the answer — 1.3 million entries at 18,242 atoms —
+        so it cannot be preallocated from anything cheaper than the search
+        itself. Counting first and filling second runs the distance test twice;
+        a worst-case buffer would be the atoms in twenty-seven bins for every
+        atom, which is 114 MB against the 10 MB the answer needs. The test is a
+        subtract, a square and a compare, and the alternative was measured in
+        `PAIR_BATCH`'s comment: memory is the axis that bites here, not
+        arithmetic.
+
+        **The twenty-seven offsets are walked in the reference's order and each
+        bin in ascending atom index**, which makes the two paths comparable
+        element by element rather than as sets. Nothing downstream depends on
+        the order — every consumer either sorts or reduces with `all`/`any` —
+        but a test that can say `array_equal` is a better test than one that has
+        to say "same set", and the cost of arranging it is a stable sort that
+        was happening anyway.
+        """
+        total = 0
+        for atom in range(coords.shape[0]):
+            if inflated[atom] <= 0.0:
+                continue
+            cx, cy, cz = coords[atom, 0], coords[atom, 1], coords[atom, 2]
+            reach = inflated[atom]
+            found = 0
+            at_atom = 0 if counting else offset[atom]
+            for di in range(-1, 2):
+                first = keys[atom, 0] + di
+                if first < low_key[0] or first > high_key[0]:
+                    continue
+                for dj in range(-1, 2):
+                    second = keys[atom, 1] + dj
+                    if second < low_key[1] or second > high_key[1]:
+                        continue
+                    for dk in range(-1, 2):
+                        third = keys[atom, 2] + dk
+                        # Clipped to the occupied extent before encoding, not
+                        # after. The encoding is injective only inside it: a key
+                        # one past the top of the second axis encodes to exactly
+                        # the code of `(first + 1, low, low)`, so an unclipped
+                        # walk would find a bin that is nowhere near the atom and
+                        # hand it somebody else's neighbours.
+                        if third < low_key[2] or third > high_key[2]:
+                            continue
+                        code = (
+                            (first - low_key[0]) * strides[0]
+                            + (second - low_key[1]) * strides[1]
+                            + (third - low_key[2]) * strides[2]
+                        )
+                        at = np.searchsorted(codes, code)
+                        if at >= codes.shape[0] or codes[at] != code:
+                            continue
+                        for slot in range(starts[at], stops[at]):
+                            other = order[slot]
+                            if other == atom:
+                                continue
+                            dx = coords[other, 0] - cx
+                            dy = coords[other, 1] - cy
+                            dz = coords[other, 2] - cz
+                            # `np.linalg.norm` of a three-vector, compared
+                            # against a sum of radii — kept as a square root
+                            # rather than folded into a squared comparison,
+                            # because the two disagree in the last bit and the
+                            # reference is the one with the root in it.
+                            if np.sqrt(dx * dx + dy * dy + dz * dz) < reach + inflated[other]:
+                                if not counting:
+                                    flat[at_atom + found] = other
+                                found += 1
+            if counting:
+                offset[atom] = found
+            total += found
+        return total
+
+    return kernel
+
+
+def neighbour_lists(
+    coords: FloatArray,
+    inflated: FloatArray,
+    keys: np.ndarray,
+    bins: Any,
+    order: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Every atom's overlapping neighbours, as flat values, offsets and counts.
+
+    `order` is the bin index's slots mapped back to atom numbers: the bins are
+    built over the live atoms alone, exactly as the reference builds its dict,
+    so a slot addresses that subset and not the structure.
+    """
+    compiled = _compiled_neighbours()
+
+    def pass_over(counting: bool, out: np.ndarray, flat: np.ndarray) -> int:
+        return int(
+            compiled(
+                np.ascontiguousarray(coords),
+                np.ascontiguousarray(inflated),
+                keys,
+                order,
+                bins.starts,
+                bins.stops,
+                bins.codes,
+                bins.low_key,
+                bins.high_key,
+                bins.strides,
+                counting,
+                out,
+                flat,
+            )
+        )
+
+    count = np.zeros(len(coords), dtype=np.int64)
+    total = pass_over(True, count, np.zeros(0, dtype=np.int64))
+    offset = np.cumsum(count) - count
+    flat = np.zeros(total, dtype=np.int64)
+    pass_over(False, offset, flat)
+    return flat, offset, count
+
+
+@cache
+def _compiled_rims() -> Any:  # noqa: PLR0915
+    """Build the rim-enumeration kernel once. Same laziness as `_compiled`."""
+    from numba import njit  # noqa: PLC0415 — the whole point is that this is lazy
+
+    @njit(cache=True, fastmath=False, nogil=True)
+    def kernel(  # type: ignore[no-untyped-def]  # noqa: PLR0917, PLR0915, PLR0912
+        coords,
+        inflated,
+        neighbour_flat,
+        neighbour_offset,
+        neighbour_count,
+        test_flat,
+        test_offset,
+        test_count,
+        degenerate,
+        counting,
+        blocker_count,
+        origins,
+        normals,
+        ring_radii,
+        blocker_offset,
+        blocker_flat,
+        scratch,
+    ):  # pragma: no cover - compiled; exercised through `enumerate_rims`
+        """Where two accessible spheres meet, and which third atoms reach it.
+
+        **The first kernel here whose output is geometry rather than a verdict.**
+        Every loop compiled before this one wrote into a boolean or, where a
+        node claimed by any feature is the node claimed by the first — so the
+        floating-point association only had to be *arranged* to match, never
+        proved. A rim circle is compared against radii by three later stages, so
+        a last-bit difference in one is a different surface. Every expression
+        below is therefore written in the reference's own order, and
+        `tests/test_debye_kernel.py` compares the arrays with `array_equal`
+        rather than `allclose`.
+
+        Two passes for the same reason `neighbour_lists` takes two: the blocker
+        set per rim is the answer and cannot be preallocated. A worst-case
+        buffer is 704 MB at 18,242 atoms against the 2 MB the answer needs.
+        """
+        atoms = coords.shape[0]
+        kept = 0
+        blockers_total = 0
+        for i in range(atoms):
+            if inflated[i] <= 0.0:
+                continue
+            first_neighbour = neighbour_offset[i]
+            first_test = test_offset[i]
+            last_test = first_test + test_count[i]
+            for slot in range(first_neighbour, first_neighbour + neighbour_count[i]):
+                j = neighbour_flat[slot]
+                if j <= i or inflated[j] <= 0.0:
+                    continue
+
+                # `_rim`: the circle where the two accessible spheres meet.
+                vx = coords[j, 0] - coords[i, 0]
+                vy = coords[j, 1] - coords[i, 1]
+                vz = coords[j, 2] - coords[i, 2]
+                separation = np.sqrt(vx * vx + vy * vy + vz * vz)
+                if separation >= inflated[i] + inflated[j] or separation <= degenerate:
+                    continue
+                if separation <= abs(inflated[i] - inflated[j]):
+                    continue  # one sphere swallows the other; there is no rim
+                nx, ny, nz = vx / separation, vy / separation, vz / separation
+                along = (
+                    separation * separation + inflated[i] * inflated[i] - inflated[j] * inflated[j]
+                ) / (2.0 * separation)
+                squared = inflated[i] * inflated[i] - along * along
+                if squared <= 0.0:
+                    continue
+                ring = np.sqrt(squared)
+                ox = coords[i, 0] + along * nx
+                oy = coords[i, 1] + along * ny
+                oz = coords[i, 2] + along * nz
+
+                # `_blockers`: which third atoms can cover part of this rim, and
+                # whether one covers all of it. Both tests are the closed form
+                # for a circle's nearest and farthest point from a sphere centre.
+                swallowed = False
+                found = 0
+                for probe_slot in range(first_test, last_test):
+                    other = test_flat[probe_slot]
+                    if other == j:
+                        continue
+                    gx = coords[other, 0] - ox
+                    gy = coords[other, 1] - oy
+                    gz = coords[other, 2] - oz
+                    axial = gx * nx + gy * ny + gz * nz
+                    rx = gx - axial * nx
+                    ry = gy - axial * ny
+                    rz = gz - axial * nz
+                    radial = np.sqrt(rx * rx + ry * ry + rz * rz)
+                    limit = inflated[other] * inflated[other]
+                    axial_squared = axial * axial
+                    far = radial + ring
+                    if axial_squared + far * far <= limit:
+                        swallowed = True
+                        break
+                    near = radial - ring
+                    if axial_squared + near * near < limit:
+                        # Into scratch, never straight into the output. A rim
+                        # can still be found swallowed *after* some of its
+                        # blockers are known, and writing those at
+                        # `blocker_offset[kept]` reads that array one past its
+                        # end when the swallowed pair happens to follow the last
+                        # rim that is kept — an out-of-bounds write in compiled
+                        # code with bounds checking off, which is the failure
+                        # mode this file can least afford.
+                        scratch[found] = other
+                        found += 1
+                if swallowed:
+                    continue
+
+                if counting:
+                    blocker_count[kept] = found
+                else:
+                    base = blocker_offset[kept]
+                    for entry in range(found):
+                        blocker_flat[base + entry] = scratch[entry]
+                    origins[kept, 0] = ox
+                    origins[kept, 1] = oy
+                    origins[kept, 2] = oz
+                    normals[kept, 0] = nx
+                    normals[kept, 1] = ny
+                    normals[kept, 2] = nz
+                    ring_radii[kept] = ring
+                kept += 1
+                blockers_total += found
+        return kept if counting else blockers_total
+
+    return kernel
+
+
+def enumerate_rims(
+    coords: FloatArray,
+    inflated: FloatArray,
+    neighbours: tuple[np.ndarray, np.ndarray, np.ndarray],
+    testable: tuple[np.ndarray, np.ndarray, np.ndarray],
+    degenerate: float,
+) -> tuple[FloatArray, FloatArray, FloatArray, np.ndarray, np.ndarray, np.ndarray]:
+    """Every reachable rim: origins, normals, radii, and each one's blocking atoms."""
+    neighbour_flat, neighbour_offset, neighbour_count = neighbours
+    test_flat, test_offset, test_count = testable
+    compiled = _compiled_rims()
+    pairs = int(neighbour_count.sum())
+    scratch = np.zeros(int(test_count.max()) + 1 if len(test_count) else 1, dtype=np.int64)
+    nothing = np.zeros(0, dtype=np.float64)
+    nothing_2d = np.zeros((0, DIMENSIONS), dtype=np.float64)
+
+    blocker_count = np.zeros(pairs, dtype=np.int64)
+    rims = compiled(
+        coords, inflated,
+        neighbour_flat, neighbour_offset, neighbour_count,
+        test_flat, test_offset, test_count,
+        degenerate, True,
+        blocker_count,
+        nothing_2d, nothing_2d, nothing, np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64),
+        scratch,
+    )  # fmt: skip
+
+    blocker_count = blocker_count[:rims]
+    blocker_offset = np.cumsum(blocker_count) - blocker_count
+    origins = np.zeros((rims, DIMENSIONS), dtype=np.float64)
+    normals = np.zeros((rims, DIMENSIONS), dtype=np.float64)
+    ring_radii = np.zeros(rims, dtype=np.float64)
+    blocker_flat = np.zeros(int(blocker_count.sum()), dtype=np.int64)
+    compiled(
+        coords, inflated,
+        neighbour_flat, neighbour_offset, neighbour_count,
+        test_flat, test_offset, test_count,
+        degenerate, False,
+        blocker_count,
+        origins, normals, ring_radii, blocker_offset, blocker_flat,
+        scratch,
+    )  # fmt: skip
+    return origins, normals, ring_radii, blocker_offset, blocker_count, blocker_flat
+
+
+@cache
+def _compiled_seats() -> Any:  # noqa: PLR0915
+    """Build the probe-seat kernel once. Same laziness as `_compiled`."""
+    from numba import njit  # noqa: PLC0415 — the whole point is that this is lazy
+
+    @njit(cache=True, fastmath=False, nogil=True)
+    def kernel(  # type: ignore[no-untyped-def]  # noqa: PLR0917, PLR0915, PLR0912
+        coords,
+        inflated,
+        test_flat,
+        test_offset,
+        test_count,
+        overlapping,
+        atom_count,
+        degenerate,
+        counting,
+        per_atom,
+        offset,
+        seats,
+    ):  # pragma: no cover - compiled; exercised through `probe_seats`
+        """A probe seated against three atoms and overlapping none.
+
+        The reference raises each triple under its *smallest* member and asks
+        every one of that atom's higher-numbered neighbour pairs, so the loop
+        here is the same: atom, then the upper triangle of its sorted
+        neighbours, then the closed-form trilateration.
+
+        **Emission order matches the reference's, which took a second look.**
+        `_tangency_points` returns both mirror images as one array — every
+        `+z` seat and then every `-z` seat — and `points[legal]` preserves that,
+        so an atom contributes its `+z` seats in triple order followed by its
+        `-z` seats. A kernel emitting the two seats of a triple together would
+        be answer-identical, because `_within` reduces with `any`, and would
+        make the arrays impossible to compare with `array_equal`. Two sweeps of
+        the triple loop, one per mirror, is the cost of a comparable test.
+        """
+        total = 0
+        for atom in range(coords.shape[0]):
+            if inflated[atom] <= 0.0:
+                continue
+            first_test = test_offset[atom]
+            last_test = first_test + test_count[atom]
+            r1 = inflated[atom]
+            p1x, p1y, p1z = coords[atom, 0], coords[atom, 1], coords[atom, 2]
+            found = 0
+            base = 0 if counting else offset[atom]
+
+            for mirror in range(2):
+                for first in range(first_test, last_test):
+                    j = test_flat[first]
+                    if j <= atom:
+                        continue
+                    for second in range(first + 1, last_test):
+                        k = test_flat[second]
+                        if k <= atom:
+                            continue
+                        # The third pair has to overlap too, or the three
+                        # spheres leave no seat. Binary search of the same
+                        # sorted key array the reference builds, whose keys are
+                        # `low * count + high` — `k > j` here because
+                        # `test_flat` arrives sorted per atom, which is also why
+                        # the trilateration frame below is built from the same
+                        # atom the reference builds it from.
+                        wanted = j * atom_count + k
+                        at = np.searchsorted(overlapping, wanted)
+                        if at >= overlapping.shape[0] or overlapping[at] != wanted:
+                            continue
+
+                        # `_tangency_points`, one triple at a time.
+                        ex0 = coords[j, 0] - p1x
+                        ex1 = coords[j, 1] - p1y
+                        ex2 = coords[j, 2] - p1z
+                        span = np.sqrt(ex0 * ex0 + ex1 * ex1 + ex2 * ex2)
+                        if span <= degenerate:
+                            continue
+                        ex0, ex1, ex2 = ex0 / span, ex1 / span, ex2 / span
+                        t0 = coords[k, 0] - p1x
+                        t1 = coords[k, 1] - p1y
+                        t2 = coords[k, 2] - p1z
+                        along = ex0 * t0 + ex1 * t1 + ex2 * t2
+                        ey0 = t0 - along * ex0
+                        ey1 = t1 - along * ex1
+                        ey2 = t2 - along * ex2
+                        height = np.sqrt(ey0 * ey0 + ey1 * ey1 + ey2 * ey2)
+                        if height <= degenerate:
+                            continue
+                        ey0, ey1, ey2 = ey0 / height, ey1 / height, ey2 / height
+                        ez0 = ex1 * ey2 - ex2 * ey1
+                        ez1 = ex2 * ey0 - ex0 * ey2
+                        ez2 = ex0 * ey1 - ex1 * ey0
+                        r2, r3 = inflated[j], inflated[k]
+                        x = (r1 * r1 - r2 * r2 + span * span) / (2.0 * span)
+                        y = (
+                            r1 * r1 - r3 * r3 + along * along + height * height - 2.0 * along * x
+                        ) / (2.0 * height)
+                        squared = r1 * r1 - x * x - y * y
+                        if squared <= 0.0:
+                            continue
+                        z = np.sqrt(squared)
+                        if mirror == 1:
+                            z = -z
+                        sx = p1x + x * ex0 + y * ey0 + z * ez0
+                        sy = p1y + x * ex1 + y * ey1 + z * ez1
+                        sz = p1z + x * ex2 + y * ey2 + z * ez2
+
+                        # `_legal`, with `j` and `k` exempt: a seat lies at
+                        # exactly `R` from the atoms it was built from, and a
+                        # comparison against the very sphere a point lies on
+                        # rejects it about half the time.
+                        allowed = True
+                        for slot in range(first_test, last_test):
+                            other = test_flat[slot]
+                            if other == j or other == k:  # noqa: PLR1714, SIM109
+                                continue
+                            gx = sx - coords[other, 0]
+                            gy = sy - coords[other, 1]
+                            gz = sz - coords[other, 2]
+                            if gx * gx + gy * gy + gz * gz < inflated[other] * inflated[other]:
+                                allowed = False
+                                break
+                        if not allowed:
+                            continue
+                        if not counting:
+                            seats[base + found, 0] = sx
+                            seats[base + found, 1] = sy
+                            seats[base + found, 2] = sz
+                        found += 1
+            if counting:
+                per_atom[atom] = found
+            total += found
+        return total
+
+    return kernel
+
+
+def probe_seats(
+    coords: FloatArray,
+    inflated: FloatArray,
+    testable: tuple[np.ndarray, np.ndarray, np.ndarray],
+    overlapping: np.ndarray,
+    degenerate: float,
+) -> FloatArray:
+    """Every legal probe seat, in the reference's order.
+
+    `testable` must be sorted within each atom, which is what the reference's
+    own `np.sort` gives it. The order is not cosmetic: it decides which of the
+    three atoms the trilateration frame is built from, and a frame built from
+    the other one produces the same two points to within a rounding rather than
+    to the last bit.
+    """
+    test_flat, test_offset, test_count = testable
+    compiled = _compiled_seats()
+    atoms = len(coords)
+    nothing = np.zeros((0, DIMENSIONS), dtype=np.float64)
+    per_atom = np.zeros(atoms, dtype=np.int64)
+    counted = compiled(
+        coords, inflated, test_flat, test_offset, test_count,
+        overlapping, atoms, degenerate, True, per_atom, np.zeros(atoms, dtype=np.int64), nothing,
+    )  # fmt: skip
+    total = int(counted)
+    offset = np.cumsum(per_atom) - per_atom
+    seats = np.zeros((total, DIMENSIONS), dtype=np.float64)
+    compiled(
+        coords, inflated, test_flat, test_offset, test_count,
+        overlapping, atoms, degenerate, False, per_atom, offset, seats,
+    )  # fmt: skip
+    return seats
