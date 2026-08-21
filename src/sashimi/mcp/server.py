@@ -28,6 +28,7 @@ from pydantic import Field
 from sashimi.analysis import potential_extrema, potential_in_sphere, residue_potentials
 from sashimi.artifacts import content_address, describe_cleanup, map_path
 from sashimi.backends import get as get_backend
+from sashimi.backends import resolve as resolve_preference
 from sashimi.capabilities import describe_capabilities, validate_request
 from sashimi.dx import read_dx
 from sashimi.errors import SashimiError
@@ -214,6 +215,20 @@ def sashimi_solve(
             )
         ),
     ] = "apbs",
+    prefer: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Pick the backend by what you want optimised instead of by "
+                "name: 'fast' (lowest CPU), 'stable' (least sensitive to where "
+                "the lattice falls), or 'portable' (no install step). Resolves "
+                "against what is installed *and* what surface_model needs, so "
+                "'stable' falls through to another solver for a surface "
+                "pyDelPhi cannot build. The result reports which backend ran "
+                "and why. Naming `backend` explicitly overrides this."
+            )
+        ),
+    ] = None,
     output_dx: Annotated[
         str | None,
         Field(
@@ -258,6 +273,16 @@ def sashimi_solve(
         pqr = read_pqr(source)
     except (OSError, ValueError) as exc:
         raise ToolError(f"could not read PQR {source}: {exc}") from exc
+
+    selected_because = ""
+    if prefer is not None:
+        # An explicit `backend` wins: a preference is a convenience for a caller
+        # who knows what they want from the answer, never something that
+        # second-guesses one who named the solver.
+        try:
+            backend, selected_because = resolve_preference(prefer, surface_model)
+        except SashimiError as exc:
+            raise _fail(exc) from exc
 
     try:
         entry = get_backend(backend)
@@ -324,6 +349,11 @@ def sashimi_solve(
         "resolved_parameters": result.provenance.resolved_parameters,
         "diagnostics": result.diagnostics,
     }
+    if selected_because:
+        # Why this backend and not another. A caller who asked for `stable` and
+        # got APBS should not have to guess that pyDelPhi was skipped for the
+        # surface model rather than for being absent.
+        response["selected_because"] = selected_because
 
     potential = result.potential
     if isinstance(potential, PotentialGrid):

@@ -141,23 +141,24 @@ def _apbs_report() -> BackendReport:
     )
 
 
-def _delphi_report() -> BackendReport:
-    """DelPhi's state, and which of its two executables was found.
+def _delphi_report(name: str = "delphi", flavour: Any = None) -> BackendReport:
+    """DelPhi's state, and which of its two executables answered.
 
-    Reported as one backend rather than two, because a caller asks "can I run
-    DelPhi", but the flavour is carried in `extras` and in the supported
-    surface models — which genuinely differ between them, so a single answer to
-    "which surfaces does DelPhi support" would be wrong.
+    `delphi` still means "whichever build is installed" and reports the flavour
+    it resolved to in `extras`. `delphi-cpp` and `pydelphi` pin it, because the
+    two are not interchangeable in what they can answer: the C++ build does
+    `van-der-waals` and pyDelPhi crashes on `prbrad 0`, so a single answer to
+    "which surfaces does DelPhi support" would be wrong for one of them.
     """
     from sashimi.delphi.discover import discover_delphi  # noqa: PLC0415
     from sashimi.delphi.options import SUPPORTED_SURFACES, UNVALIDATED_SURFACES  # noqa: PLC0415
 
     equations = tuple(e.value for e in IMPLEMENTED_EQUATIONS)
     try:
-        binary = discover_delphi()
+        binary = discover_delphi(flavour)
     except BackendUnavailable as exc:
         return BackendReport(
-            name="delphi",
+            name=name,
             available=False,
             family="finite-difference",
             detail=str(exc),
@@ -166,7 +167,7 @@ def _delphi_report() -> BackendReport:
 
     supported = SUPPORTED_SURFACES[binary.flavour]
     return BackendReport(
-        name="delphi",
+        name=name,
         available=True,
         family="finite-difference",
         version=binary.version,
@@ -182,6 +183,18 @@ def _delphi_report() -> BackendReport:
             "energy_term": "corrected reaction field; excludes the mobile-ion osmotic term",
         },
     )
+
+
+def _delphi_cpp_report() -> BackendReport:
+    from sashimi.delphi.discover import DelphiFlavour  # noqa: PLC0415
+
+    return _delphi_report("delphi-cpp", DelphiFlavour.CPP)
+
+
+def _pydelphi_report() -> BackendReport:
+    from sashimi.delphi.discover import DelphiFlavour  # noqa: PLC0415
+
+    return _delphi_report("pydelphi", DelphiFlavour.PYDELPHI)
 
 
 def _tabipb_report() -> BackendReport:
@@ -318,6 +331,20 @@ def _build_delphi() -> Solver[Any]:
     return DelphiSolver()
 
 
+def _build_delphi_cpp() -> Solver[Any]:
+    from sashimi.delphi import DelphiSolver  # noqa: PLC0415
+    from sashimi.delphi.discover import DelphiFlavour  # noqa: PLC0415
+
+    return DelphiSolver(flavour=DelphiFlavour.CPP)
+
+
+def _build_pydelphi() -> Solver[Any]:
+    from sashimi.delphi import DelphiSolver  # noqa: PLC0415
+    from sashimi.delphi.discover import DelphiFlavour  # noqa: PLC0415
+
+    return DelphiSolver(flavour=DelphiFlavour.PYDELPHI)
+
+
 def _build_tabipb() -> Solver[Any]:
     from sashimi.tabipb import TabipbSolver  # noqa: PLC0415
 
@@ -443,6 +470,23 @@ REGISTRY: dict[str, BackendEntry] = {
         _delphi_report,
         size_grid=_delphi_size_grid,
     ),
+    # The two flavours, addressable. `delphi` above stays the auto-resolving
+    # entry and is what `tests/corpus/delphi/` is recorded against, so naming
+    # these adds choices without moving a recording.
+    "delphi-cpp": BackendEntry(
+        "delphi-cpp",
+        SolverFamily.FINITE_DIFFERENCE,
+        _build_delphi_cpp,
+        _delphi_cpp_report,
+        size_grid=_delphi_size_grid,
+    ),
+    "pydelphi": BackendEntry(
+        "pydelphi",
+        SolverFamily.FINITE_DIFFERENCE,
+        _build_pydelphi,
+        _pydelphi_report,
+        size_grid=_delphi_size_grid,
+    ),
     "tabipb": BackendEntry(
         "tabipb",
         SolverFamily.BOUNDARY_ELEMENT,
@@ -493,6 +537,56 @@ def solver_for(name: str) -> tuple[Solver[Any], SolverFamily]:
 def reports() -> list[BackendReport]:
     """Every backend's self-description, in registry order."""
     return [REGISTRY[name].report() for name in names()]
+
+
+# What each preference tries, in order. Every entry is a fallback, not a
+# promise: the resolver skips any backend that is not installed *or* cannot
+# answer the surface model asked for, which is not a detail — pyDelPhi answers
+# 35 of the corpus's 100 cases, because it has no `van-der-waals` (`prbrad 0`
+# crashes inside numba) and no `smoothed-molecular`. A resolver that checked
+# only availability would hand `STABLE` requests to a backend that refuses two
+# thirds of them.
+_PREFERENCE_ORDER: dict[str, tuple[str, ...]] = {
+    "fast": ("apbs", "delphi-cpp", "pydelphi", "debye"),
+    "stable": ("pydelphi", "delphi-cpp", "apbs", "debye"),
+    "portable": ("debye", "gb"),
+}
+
+
+def resolve(preference: str, surface: str) -> tuple[str, str]:
+    """The backend a preference lands on here, and one sentence saying why.
+
+    Returns `(name, because)`. The reason is not decoration: a caller who asked
+    for `stable` and got APBS needs to see that pyDelPhi was skipped for lacking
+    `van-der-waals` rather than wonder whether the preference did anything. It
+    goes into `Provenance.selected_because`.
+    """
+    order = _PREFERENCE_ORDER.get(preference)
+    if order is None:
+        raise InputError(
+            f"unknown preference {preference!r}. Known: {', '.join(sorted(_PREFERENCE_ORDER))}."
+        )
+
+    by_name = {report.name: report for report in reports()}
+    skipped: list[str] = []
+    for name in order:
+        report = by_name.get(name)
+        if report is None or not report.available:  # pragma: no cover - registry is fixed
+            skipped.append(f"{name} is not installed")
+            continue
+        if surface not in report.surface_models:
+            skipped.append(f"{name} does not do {surface}")
+            continue
+        why = f"{preference!r} preference chose {name} for a {surface} surface"
+        if skipped:
+            why += f"; skipped {', '.join(skipped)}"
+        return name, why
+
+    raise InputError(
+        f"no installed backend can answer a {surface!r} surface for the "
+        f"{preference!r} preference. Tried: {', '.join(skipped)}. "
+        "`sashimi_capabilities` reports what this installation has."
+    )
 
 
 def available_names() -> list[str]:

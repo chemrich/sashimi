@@ -668,8 +668,16 @@ def test_an_analytic_reference_records_how_it_was_derived():
 # anything fails `test_every_cross_backend_recording_answers_a_manifest_case`
 # on its empty directory instead of quietly sitting outside every check here,
 # and the mapping cannot disagree with the one `sashimi corpus build` writes to.
+# `delphi-cpp` and `pydelphi` are the same two executables `delphi` resolves to,
+# registered so a caller can pin the flavour. They record nothing of their own:
+# `tests/corpus/delphi/` stays C++-only, as section 7 decided, and a recording
+# filed under a flavour name would be the same numbers in a second place.
+FLAVOUR_ALIASES = frozenset({"delphi-cpp", "pydelphi"})
+
 CROSS_BACKEND_DIRECTORIES = {
-    name: corpus_dir_for(name) for name in backends.names() if name != ROOT_BACKEND
+    name: corpus_dir_for(name)
+    for name in backends.names()
+    if name != ROOT_BACKEND and name not in FLAVOUR_ALIASES
 }
 
 # TABI-PB against APBS on every case both recorded. Measured 2026-08-12.

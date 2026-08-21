@@ -153,8 +153,10 @@ def _probe_version(path: Path, flavour: DelphiFlavour) -> str | None:
     return match.group(1) if match else None
 
 
-@lru_cache(maxsize=8)
-def _discover_cached(_explicit: str | None, _path: str | None) -> DelphiBinary:
+@lru_cache(maxsize=16)
+def _discover_cached(
+    _explicit: str | None, _path: str | None, wanted: DelphiFlavour | None
+) -> DelphiBinary:
     """Arguments are cache keys only; `_candidates` reads the environment itself."""
     tried: list[str] = []
     for candidate in _candidates():
@@ -162,6 +164,9 @@ def _discover_cached(_explicit: str | None, _path: str | None) -> DelphiBinary:
             tried.append(f"{candidate} (missing or not executable)")
             continue
         flavour = classify(candidate)
+        if wanted is not None and flavour is not wanted:
+            tried.append(f"{candidate} (is {flavour}, not {wanted})")
+            continue
         version = _probe_version(candidate, flavour)
         if version is None:
             tried.append(f"{candidate} (did not report a DelPhi version)")
@@ -169,11 +174,21 @@ def _discover_cached(_explicit: str | None, _path: str | None) -> DelphiBinary:
         return DelphiBinary(path=candidate.resolve(), version=version, flavour=flavour)
 
     detail = "\n  ".join(tried) if tried else "no candidate paths"
-    raise DelphiNotFound(
-        f"No usable DelPhi executable found. Tried:\n  {detail}\n\n{_INSTALL_HINT}"
-    )
+    which = f"a {wanted} executable" if wanted else "a usable DelPhi executable"
+    raise DelphiNotFound(f"Found no {which}. Tried:\n  {detail}\n\n{_INSTALL_HINT}")
 
 
-def discover_delphi() -> DelphiBinary:
-    """Locate DelPhi. Cached per (SASHIMI_DELPHI_PATH, PATH)."""
-    return _discover_cached(os.environ.get("SASHIMI_DELPHI_PATH"), os.environ.get("PATH"))
+def discover_delphi(flavour: DelphiFlavour | None = None) -> DelphiBinary:
+    """Locate DelPhi, optionally insisting on one flavour.
+
+    **The flavour argument is what makes the two addressable.** Without it,
+    `delphi` means "whichever build discovery happens to find", which is right
+    for a caller who just wants DelPhi and wrong for one who wants pyDelPhi
+    *specifically* — and the two differ in what they can answer: the C++ build
+    does `van-der-waals` where pyDelPhi crashes on `prbrad 0`, and only pyDelPhi
+    installs without a compiler. A registry entry that cannot say which one it
+    means cannot be chosen on purpose.
+
+    Cached per (SASHIMI_DELPHI_PATH, PATH, flavour).
+    """
+    return _discover_cached(os.environ.get("SASHIMI_DELPHI_PATH"), os.environ.get("PATH"), flavour)

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from sashimi.delphi.discover import DelphiBinary, discover_delphi
+from sashimi.delphi.discover import DelphiBinary, DelphiFlavour, discover_delphi
 from sashimi.delphi.grid import size_grid
 from sashimi.delphi.input import build_input, resolved_parameters
 from sashimi.delphi.options import DelphiOptions, check_equation
@@ -44,12 +44,17 @@ class DelphiSolver:
 
     options: DelphiOptions = field(default_factory=DelphiOptions)
     timeout: float = DEFAULT_TIMEOUT
+    # None means "whichever build is installed", which is what `delphi` has
+    # always meant. The registry's `delphi-cpp` and `pydelphi` entries pin it,
+    # so a caller can ask for the flavour whose capabilities they need rather
+    # than the one discovery happens to find first.
+    flavour: DelphiFlavour | None = None
     _binary: DelphiBinary | None = field(default=None, repr=False)
 
     @property
     def binary(self) -> DelphiBinary:
         if self._binary is None:
-            self._binary = discover_delphi()
+            self._binary = discover_delphi(self.flavour)
         return self._binary
 
     def solve(self, request: FiniteDifferenceRequest) -> SolveResult:

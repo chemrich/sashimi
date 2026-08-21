@@ -373,6 +373,30 @@ refused, and says why.
 Energies are compared directly, potentials by sampling both maps at the same
 physical coordinates, since two backends never produce the same grid.
 
+### Choosing a backend by what you want, not by name
+
+`sashimi_solve` takes `prefer` as well as `backend`, for the caller who knows
+what they want from the answer but not which program gives it:
+
+| | leads with | why |
+|---|---|---|
+| `fast` | APBS | 12.4 s where pyDelPhi is 27.3 s at 1,156 residues, and it answers every surface model |
+| `stable` | pyDelPhi | least sensitive to where the lattice falls — 0.15–0.52% under rigid rotation against APBS's 0.42–1.07%, measured on a *coarser* grid in every comparison |
+| `portable` | debye | ships with sashimi, no install step; the only option on `linux-aarch64`, where conda-forge has no APBS |
+
+**It resolves against what is installed *and* what the request needs.** pyDelPhi
+has no van der Waals boundary, so `prefer="stable"` on one falls through to
+DelPhi C++ and the result says so in `selected_because`. Naming `backend`
+explicitly always wins. `sashimi_capabilities` prints the whole table for the
+machine it is on.
+
+**`stable`, not `accurate`** — above a two-atom solute nothing here has a
+reference answer, so what is measured is how little the answer moves when the
+solute is rotated, which is discretization noise and not distance from truth.
+
+The two DelPhi builds are separately addressable as `delphi-cpp` and `pydelphi`;
+`delphi` still means whichever one is installed.
+
 ### Measuring a change to the solver
 
 `debye` runs in this process, so it is the one backend whose speed is sashimi's
