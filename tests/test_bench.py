@@ -34,6 +34,7 @@ from sashimi.bench import (
     solve_case,
 )
 from sashimi.cli import main
+from sashimi.errors import SashimiError
 from sashimi.protocol import SurfaceModel
 
 ALA_GLY = Path("tests/data/ala-gly.pqr")
@@ -190,30 +191,69 @@ def test_cpu_seconds_counts_a_reaped_child(tmp_path):
     )
 
 
-@pytest.mark.parametrize("backend", ["debye", "gb"])
+@pytest.mark.parametrize("backend", ["debye", "gb", "tabipb"])
 def test_bench_times_any_registered_backend(backend: str, capsys):
-    """Not only debye. The cross-backend baseline in ROADMAP section 12 was
-    produced by a script that lived nowhere, which is the failure this module
-    exists to prevent — so the instrument has to reach the other backends.
+    """Not only debye, and not only the finite-difference family.
 
-    `gb` is the second one here because it needs no binary, so this asserts the
-    dispatch on every machine rather than only where APBS is installed.
+    `tabipb` is here because leaving it out is what let the first draft ship
+    broken: `solve_case` threw away the family the registry hands back and built
+    a `FiniteDifferenceRequest` for everything, so `--backend tabipb` died on a
+    missing `mesh_density` and `--backend gb` silently ignored `--resolution`.
+    Both in-process backends happen to accept the wrong request type, so a list
+    of only those two could not fail.
+
+    The crash was in *dispatch*, before discovery, so this catches it without a
+    mesher installed — an unavailable binary skips rather than passes.
     """
-    assert (
-        main(
-            ["bench", "--structure", str(ALA_GLY), "--backend", backend, "--repeats", "1", "--json"]
-        )
-        == 0
-    )
+    argv = ["bench", "--structure", str(ALA_GLY), "--backend", backend, "--repeats", "1", "--json"]
+    try:
+        code = main(argv)
+    except SashimiError as exc:  # a missing binary is not this test's business
+        pytest.skip(f"{backend} is not installed here: {exc}")
+    assert code == 0
     report = json.loads(capsys.readouterr().out)
     assert report["energy"] < 0
     assert report["best"] > 0
+
+
+def test_the_grid_reaches_a_backend_that_uses_one():
+    """`--resolution` must change the answer, or the flag is decoration.
+
+    The dropped-family bug made `gb` ignore the grid entirely — two very
+    different resolutions returned an identical energy, so a resolution sweep
+    would report flat timings with no sign anything was wrong.
+    """
+    assert solve_case(_spec(resolution=1.0))() != solve_case(_spec(resolution=0.4))()
+
+
+def test_a_gridless_backend_is_not_handed_a_grid():
+    """The other half: `gb` discretizes nothing, so its answer must *not* move."""
+    coarse = solve_case(_spec(backend="gb", resolution=1.0))()
+    assert coarse == solve_case(_spec(backend="gb", resolution=0.4))()
 
 
 def test_the_backend_reaches_the_baseline_snippet_too():
     """A comparison that solved with two different backends would be nonsense."""
     snippet = remote_snippet(_spec(backend="gb"))
     assert "'gb'" in snippet
+
+
+def test_the_baseline_snippet_counts_its_own_children():
+    """The comparison path had the same blind spot the module was fixing.
+
+    `measure` was converted to `cpu_seconds` and `compare_against` was not, so
+    `--against` with a subprocess backend timed ~0.3% of the work: APBS read
+    0.0085 s against 2.95 s standalone, and two identical trees compared at
+    0.948 instead of ~1.000. Both sides need children counted — this one is the
+    far side, which does its own timing so that `uv run`'s resolution and a
+    second interpreter's start-up stay out of the sample.
+    """
+    snippet = remote_snippet(_spec(backend="apbs"))
+    assert "RUSAGE_CHILDREN" in snippet
+    assert "request_for(family)" in snippet
+    # And it solves once before timing, for the same reason `solve_case` does:
+    # binary discovery shells out and hashes the executable.
+    assert snippet.count("solver.solve(request)") == 2
 
 
 def test_the_bench_command_solves_the_structure_it_was_given(capsys):

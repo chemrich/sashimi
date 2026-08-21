@@ -1,6 +1,6 @@
 {
   "name": "barstar",
-  "description": "1,403 atoms at -5e: the most negatively charged case here.",
+  "description": "1,403 atoms at -5e. The most negatively charged case here until serum-albumin arrived at -30 e; still the most negative of the structures small enough for the standard tier.",
   "source": "apbs-examples/barstar.pqr",
   "tier": "standard",
   "family": "finite-difference",

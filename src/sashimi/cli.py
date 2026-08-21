@@ -564,7 +564,7 @@ def _validate(args: argparse.Namespace) -> int:
 
 
 def _bench(args: argparse.Namespace) -> int:
-    """CPU-time measurement of a debye solve, optionally against another checkout.
+    """CPU-time measurement of one backend's solve, optionally against another checkout.
 
     Lives here rather than in `sashimi.bench` because writing to stdout is what
     a command-line entry point is for and what every other module is linted out

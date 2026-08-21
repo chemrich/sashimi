@@ -607,7 +607,8 @@ than a local accident.
 out, the Born ion's potential minimum 2.5%, grid origins differing in their last
 digits. That is not a wrong answer — 0.4% is far tighter than the 2.3% between
 DelPhi and APBS, and it is the ordinary distance between two implementations of
-one iterative method. It is ~43× the tolerance a *recording* is held to, which
+one iterative method. It is ~43× the 1e-4 a *recording* is held to — the
+whole-corpus bound is 1.257% and ~125×, measured 2026-08-20 — which
 is a different question from whether a backend is correct.
 
 So the corpus holds one C++ recording set, the re-solve test gates on the
@@ -3541,8 +3542,8 @@ reproducible with `sashimi bench --backend`.
 
 `time.process_time()` excludes child processes by definition. That was correct
 for `sashimi bench` as written — it only ever solved with debye, in-process — but
-APBS, DelPhi C++ and pyDelPhi are all subprocesses, so **the tool could not time
-three of the four backends at all**, and the first pass at this baseline fell
+APBS, DelPhi and TABI-PB are all subprocesses, so **the tool could not time
+three of the five backends at all**, and the first pass at this baseline fell
 back to wall clock without saying so. On wall clock the same APBS case read
 **13.8 s and 32.9 s** in two runs.
 
@@ -3577,8 +3578,12 @@ Mean of two runs, each minimum-of-three, on this machine.
 | debye, pure numpy | atoms^1.11 | 5.9 | 14.5 | 50.3 | 66.5 | **147.3** |
 | debye + `[fast]` | atoms^1.13 | 3.7 | 9.4 | 34.1 | 41.7 | **99.0** |
 
-Reproduce any row with
-`sashimi bench --backend <name> --structure <pqr> --resolution 1.0 --repeats 3`.
+Reproduce a row with `sashimi bench --backend <name> --structure <pqr>
+--resolution 1.0 --repeats 3`. Two of the five need an environment variable as
+well, because `--backend` names a *registry entry* and these rows are variants
+of one: the DelPhi flavour follows `SASHIMI_DELPHI_PATH` (unset for the C++
+build on PATH, set to `.pydelphi/bin/pydelphi-static` for pyDelPhi), and the
+debye rows follow `SASHIMI_NO_NUMBA` and whether `[fast]` is installed.
 
 **Both debye rows are given because the extra is opt-in**, so the first is what a
 default install does and the second is what someone who read the README gets.
@@ -3620,8 +3625,8 @@ numba. Nothing failed; every exclusion is a refusal.
 **The worst case triples the 0.426% bound the 19-case spot check found, and it is
 not a size effect.** `ion-protein-complex` is 260 atoms. It is *not* the most
 charged solute in the corpus — `serum-albumin` is, at −30 e against +21.69 —
-but it is by far the most charged **per atom**: 0.083 e/atom against 0.0016, a
-factor of **52**. Concentrated charge on few large spheres, in a united-atom
+but it is by far the most charged **per atom**: 0.0834 e/atom against 0.0016, a
+factor of **51**. Concentrated charge on few large spheres, in a united-atom
 structure with no hydrogens, is where two implementations of one iterative method
 diverge most. The largest solute, at seventy times the atoms, sits at 0.450%.
 
@@ -3648,6 +3653,92 @@ skip is a documented flavour limitation. **Separately and pre-existing: 23 of th
 of the ladder above. `corpus verify --backend delphi --tier full` reaches them;
 no `delphi`-marked test does. That is the same dead-weight failure
 `tests/test_delphi_solver.py` records having made once at M0, and it is open.
+
+### Quality where there is no reference: two invariants, across every backend
+
+**2026-08-20.** The baseline above measures speed carefully and grades quality
+by distance from APBS, which assumes the answer. The corpus cannot do better
+above a peptide, and the reason is worth stating as a number: **all 37
+closed-form energies and all 12 closed-form fields are one- or two-atom
+solutes** — Born ions and Kirkwood spheres, because those are the geometries a
+closed form exists for. **Thirty-two cases sit above 500 atoms and not one has
+any ground truth.** So the 10.4% spread at 1,156 residues says the solvers
+disagree and gives no way to say which is closer to right.
+
+What closes that is not a better reference. It is the identities the answer must
+satisfy whatever the answer is. `sashimi.invariants` adds two, and
+`tests/test_invariants.py` runs both across every registered backend.
+
+#### Charge scaling: an exact identity, on any solute
+
+The linearized equation is linear in the charge and the dielectric map does not
+depend on it, so scaling every partial charge by `lam` scales the energy by
+exactly `lam**2`. Not an approximation, and not family-specific — a
+boundary-element method and a Generalized Born radius both obey it.
+
+Measured at `lam = 2`: **APBS 0 to 2.4e-13, pyDelPhi 0 to 6.2e-8, TABI-PB
+2.5e-10, debye and `gb` exactly 0** — and **DelPhi C++ 3.0e-5**, which is not
+solver error but *printed precision*, since it reports two decimals in kT. The
+gate is 1e-4, three times the worst.
+
+**This is the check that would have caught the bug §7 records costing a year.**
+`format_pqr` wrote minimum-width fields, a four-character residue name shifted
+every column, and DelPhi solved on charges that were not in the file — returning
+−865,205 kJ/mol for acetate against APBS's −197. Any mis-assignment of charge
+breaks the square, on every structure, with no reference needed.
+
+#### Rigid-motion invariance: a discretization error bar at protein scale
+
+Solvation energy is a property of the solute, so translating or rotating it
+cannot change the answer. On a fixed lattice it does, and **that spread is the
+backend's discretization error** — available at any size, with no closed form.
+
+fas2 at 1.0 Å, twelve poses (proper rotations about the centroid plus
+sub-spacing translations, so grid phase moves and the boundary condition does
+not):
+
+| backend | range | **std** | split-half |
+|---|---|---|---|
+| `gb` | 0.0000% | **0.0000%** | — |
+| TABI-PB | 0.167% | **0.052%** | 0.028 / 0.072 |
+| DelPhi C++ | 1.304% | **0.410%** | 0.285 / 0.535 |
+| pyDelPhi | 1.326% | **0.412%** | 0.279 / 0.542 |
+| APBS | 2.601% | **0.764%** | 0.880 / 0.531 |
+| debye | 4.220% | **1.416%** | 1.135 / 1.561 |
+
+**`gb` is the control, and it is what makes the metric trustworthy.** An
+analytic method has no lattice to fall out of phase with, so its spread must be
+zero — measured 2.6e-16, one ulp from rotating coordinates, against 0.05–1.4%
+for everything that discretizes. Twelve orders of magnitude between the control
+and the signal.
+
+**Gate on the standard deviation, not the range.** The range is the range of a
+small sample and moves with the draw: debye read **3.01% and 0.60%** on two
+different five-pose draws of the same structure, which is why the first version
+of this measurement was reported wrong. Twelve poses split into halves agree to
+within a factor of 1.4.
+
+**Two independent confirmations that this measures the method.** The DelPhi
+flavours land at 0.410% and 0.412% — two implementations of one algorithm,
+agreeing on their own discretization error to three digits. And TABI-PB is
+eightfold better than the best finite-difference backend, which is what a
+boundary-element method should be: it has a surface mesh but no volumetric
+lattice.
+
+**debye is 1.85× the worst reference-tier backend and 3.5× the best.** The gate
+is relational at 3× the worst — the shape M1b and M4 both landed on, carrying no
+constant of its own — and it skips rather than passes when nothing else is
+installed, since a bar with nothing to compare against is the check that cannot
+fail. *This is a real quality gap and it is larger than the speed gap M7
+closed.* It is also the first number the project has that says so.
+
+*A trap from writing these, recorded because it cost an hour.* Mutation-testing
+`posed` by changing `index == 0` to `index >= 0` produced a file of **identical
+length**, and the restore landed within the same mtime second — so Python's
+`.pyc` invalidation, which keys on (mtime, size), served stale bytecode and the
+"restored" tree kept failing. `inspect.getsource` reads the *file* and showed
+the correct source throughout, which is what made it look impossible. Clear
+`__pycache__` when a same-length mutation is reverted.
 
 ### `validate` asks the backends that can answer — items 1–3 above, taken
 

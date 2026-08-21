@@ -1,6 +1,6 @@
 {
   "name": "ion-protein-complex",
-  "description": "260 atoms carrying +21.69 e. Not the corpus's largest total charge since serum-albumin arrived at -30 e, but by far the densest: 0.083 e/atom against 0.0016, a factor of 52, on a united-atom structure with no hydrogens. That is why it is the worst cross-flavour DelPhi case in the corpus at 1.257% \u2014 see ROADMAP.md section 12.",
+  "description": "260 atoms carrying +21.69 e. Not the corpus's largest total charge since serum-albumin arrived at -30 e, but by far the densest: 0.0834 e/atom against 0.0016, a factor of 51, on a united-atom structure with no hydrogens. That is why it is the worst case whose `molecular` sibling is the worst cross-flavour DelPhi disagreement in the corpus, at 1.257%. This case itself is `smoothed-molecular`, which neither DelPhi flavour implements, so the comparison lives on `ion-protein-complex-molecular` \u2014 see ROADMAP.md section 12.",
   "source": "apbs-examples/ion-protein-complex.pqr",
   "tier": "full",
   "family": "finite-difference",

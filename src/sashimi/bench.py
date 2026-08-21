@@ -18,7 +18,7 @@ Three choices follow from it, and each is the whole reason a line below exists:
   time read 44.96 s against 42.04 s — the 6.5% that was really there. Measured
   across two runs at load averages 4.7 and 5.9, CPU samples of the same solve
   agree to under 2.5% where wall clock spread 1.4-2.7x.
-- **Children counted, because three of the four backends are subprocesses.**
+- **Children counted, because three of the five backends are subprocesses (apbs, delphi, tabipb).**
   `time.process_time()` excludes them by definition, so timing APBS or DelPhi
   with it alone silently measures nothing but this process's bookkeeping and
   falls back to wall clock in practice. `resource.getrusage(RUSAGE_CHILDREN)`
@@ -42,24 +42,26 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any
 
 from sashimi import backends
 from sashimi.errors import SashimiError
 from sashimi.pqr import read_pqr
-from sashimi.protocol import FiniteDifferenceRequest, GridSpec, SolventModel, SurfaceModel
+from sashimi.protocol import GridSpec, SolventModel, SurfaceModel, System
 
 __all__ = [
     "CaseSpec",
     "Comparison",
     "Measurement",
+    "children_counted",
     "compare_against",
+    "cpu_seconds",
     "measure",
     "remote_snippet",
     "render",
@@ -78,6 +80,29 @@ DEFAULT_REPEATS = 3
 BASELINE_TIMEOUT = 3600
 
 
+@cache
+def _rusage() -> Any:
+    """The `resource` module, or None where there is not one.
+
+    POSIX-only, and `cli.py` imports this module unconditionally — so a
+    module-level `import resource` makes the whole `sashimi` command
+    unimportable on Windows, for a package whose entire proposition is that it
+    installs anywhere. Imported here instead, once, with `cpu_seconds` falling
+    back to `process_time()` when it is absent. That fallback is *wrong* for
+    subprocess backends, which is exactly why it says so out loud.
+    """
+    try:
+        import resource  # noqa: PLC0415 — POSIX-only, so it cannot be top-level
+    except ImportError:  # pragma: no cover - exercised only off POSIX
+        return None
+    return resource
+
+
+def children_counted() -> bool:
+    """Whether `cpu_seconds` can see subprocess backends on this platform."""
+    return _rusage() is not None
+
+
 def cpu_seconds() -> float:
     """This process's CPU time plus every child it has reaped.
 
@@ -93,9 +118,12 @@ def cpu_seconds() -> float:
     too, so this is not safe across concurrent subprocess work. Both hold here:
     the solvers run one binary at a time and `subprocess.run` waits.
     """
-    here = resource.getrusage(resource.RUSAGE_SELF)
-    reaped = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return here.ru_utime + here.ru_stime + reaped.ru_utime + reaped.ru_stime
+    module = _rusage()
+    if module is None:  # pragma: no cover - exercised only off POSIX
+        return time.process_time()
+    here = module.getrusage(module.RUSAGE_SELF)
+    reaped = module.getrusage(module.RUSAGE_CHILDREN)
+    return float(here.ru_utime + here.ru_stime + reaped.ru_utime + reaped.ru_stime)
 
 
 @dataclass(frozen=True)
@@ -181,10 +209,16 @@ def measure[T](work: Callable[[], T], *, repeats: int, label: str) -> tuple[Meas
 
     `cpu_seconds` counts this process and its reaped children, so a subprocess
     backend is measured rather than silently timed at zero. It excludes time the
-    scheduler gave to something else, which is the entire point. Across a
-    *different* checkout it still cannot see anything — a revision is another
-    interpreter — so `--against` has the child report its own; see
-    `_remote_sample`.
+    scheduler gave to something else, which is the entire point.
+
+    **`--against` still has the far side report its own number, and not because
+    `RUSAGE_CHILDREN` cannot see it.** It can: the other checkout runs under
+    `subprocess.run`, which waits, so it is a reaped descendant like any other.
+    The reason is that measuring it from here would charge `uv run`'s dependency
+    resolution and a second interpreter's start-up into the sample. An earlier
+    draft of this docstring gave the wrong reason, and that is how the
+    comparison path kept `process_time()` through the very change that added
+    `cpu_seconds` — a wrong *why* is what let a wrong *what* survive review.
     """
     if repeats < 1:
         raise ValueError(f"repeats must be at least 1, got {repeats}")
@@ -211,14 +245,24 @@ def solve_case(spec: CaseSpec) -> Callable[[], float]:
     — twenty CPU numbers with no way to re-run them, which is the failure this
     module's own docstring says it exists to prevent.
     """
-    structure = read_pqr(spec.path)
-    request = FiniteDifferenceRequest(
-        structure=structure,
+    solver, family = backends.solver_for(spec.backend)
+    # `request_for`, not a hardcoded `FiniteDifferenceRequest`. The registry
+    # returns the family for exactly this reason and the first draft threw it
+    # away, which made `--backend tabipb` die on a missing `mesh_density` and
+    # made `--backend gb` silently ignore `--resolution` — a resolution sweep
+    # that reported flat timings and identical energies with no warning.
+    request = System(
+        structure=read_pqr(spec.path),
         solvent=SolventModel(surface_model=spec.surface),
         grid=GridSpec(resolution=spec.resolution, padding=spec.padding),
+        want_energy=True,
         want_potential=False,
-    )
-    solver, _family = backends.solver_for(spec.backend)
+    ).request_for(family)
+
+    # Binary discovery is lazy — `ApbsSolver.binary` shells out for a version
+    # and hashes the executable on first use — and with children now counted
+    # that lands in sample one. Pay it here, where the PQR parsing already is.
+    solver.solve(request)
 
     def work() -> float:
         energy = solver.solve(request).energy_kj_mol
@@ -256,9 +300,9 @@ def compare_against(
     energy_here = 0.0
     energy_there = 0.0
     for _ in range(repeats):
-        started = time.process_time()
+        started = cpu_seconds()
         energy_here = local()
-        here.append(time.process_time() - started)
+        here.append(cpu_seconds() - started)
         sample, energy_there = _remote_sample(checkout, spec)
         there.append(sample)
     return Comparison(
@@ -277,20 +321,35 @@ def compare_against(
 # protocol types, which have been there since M1.
 _REMOTE = """
 import json, time
+try:
+    import resource
+except ImportError:
+    resource = None
 from sashimi.backends import solver_for
 from sashimi.pqr import read_pqr
-from sashimi.protocol import FiniteDifferenceRequest, GridSpec, SolventModel, SurfaceModel
-structure = read_pqr({structure!r})
-request = FiniteDifferenceRequest(
-    structure=structure,
+from sashimi.protocol import GridSpec, SolventModel, SurfaceModel, System
+
+
+def cpu():
+    if resource is None:
+        return time.process_time()
+    a = resource.getrusage(resource.RUSAGE_SELF)
+    b = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return a.ru_utime + a.ru_stime + b.ru_utime + b.ru_stime
+
+
+solver, family = solver_for({backend!r})
+request = System(
+    structure=read_pqr({structure!r}),
     solvent=SolventModel(surface_model=SurfaceModel({surface!r})),
     grid=GridSpec(resolution={resolution!r}, padding={padding!r}),
+    want_energy=True,
     want_potential=False,
-)
-solver = solver_for({backend!r})[0]
-started = time.process_time()
+).request_for(family)
+solver.solve(request)
+started = cpu()
 energy = solver.solve(request).energy_kj_mol
-print(json.dumps({{"best": time.process_time() - started, "energy": energy}}))
+print(json.dumps({{"best": cpu() - started, "energy": energy}}))
 """
 
 
