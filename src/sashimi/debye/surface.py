@@ -82,6 +82,7 @@ rather than trusting it.
 from __future__ import annotations
 
 import itertools
+import math
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -377,7 +378,21 @@ def _neighbours(coords: FloatArray, inflated: FloatArray) -> list[list[int]]:
             for other in bins.get((int(key[0]) + di, int(key[1]) + dj, int(key[2]) + dk), ()):
                 if other == index:
                     continue
-                gap = float(np.linalg.norm(coords[other] - coords[index]))
+                # **Not `np.linalg.norm`, and this is the load-bearing kind of
+                # detail.** For a 1-D array numpy computes `sqrt(x.dot(x))`, and
+                # `dot` is BLAS — which dispatches a microarchitecture-specific
+                # kernel at run time, so the last bit of this distance depends on
+                # the CPU the process happens to be running on. Here that lands
+                # in a *threshold*: two atoms sitting exactly at the sum of their
+                # radii become neighbours on one machine and not on another,
+                # which changes the rims, the seats and so the surface. Written
+                # out, it is the same three multiplications everywhere.
+                offset = coords[other] - coords[index]
+                gap = math.sqrt(
+                    float(offset[0]) * float(offset[0])
+                    + float(offset[1]) * float(offset[1])
+                    + float(offset[2]) * float(offset[2])
+                )
                 if gap < inflated[index] + inflated[other]:
                     lists[index].append(other)
     return lists
@@ -1012,7 +1027,15 @@ def _rim(
 ) -> tuple[FloatArray, FloatArray, float] | None:
     """Where two accessible spheres meet: centre, axis and radius of the circle."""
     axis_vector = coords[j] - coords[i]
-    separation = float(np.linalg.norm(axis_vector))
+    # Spelled out rather than `np.linalg.norm`, for the reason `_neighbours`
+    # records: numpy routes that through BLAS, whose summation order is chosen
+    # per CPU at run time. It made this rim's origin and normal differ in the
+    # last bit between two GitHub runners of the same operating system.
+    separation = math.sqrt(
+        float(axis_vector[0]) * float(axis_vector[0])
+        + float(axis_vector[1]) * float(axis_vector[1])
+        + float(axis_vector[2]) * float(axis_vector[2])
+    )
     if separation >= inflated[i] + inflated[j] or separation <= DEGENERATE:
         return None
     if separation <= abs(inflated[i] - inflated[j]):
