@@ -442,19 +442,35 @@ def test_a_band_wider_than_a_cell_is_worse_than_no_ramp_at_all():
     assert wide > hard, "a two-cell band is no longer worse than hard, so the finding moved"
 
 
-def test_the_ramp_refuses_the_surface_it_cannot_measure_a_distance_to():
-    """`molecular` is the default surface and the one this does not yet cover.
+def test_the_ramp_reaches_the_default_surface_and_uses_its_own_distance():
+    """M8a removed the refusal this test used to assert, and that is the milestone.
 
-    The ramp is built from `min(|x - c| - r)`, which is the distance to a union
-    of spheres and *not* to the solvent-excluded surface. Refusing is the whole
-    point: ramping against the wrong surface would return a number that looked
-    like an improvement and was not.
+    M8 shipped the ramp for `van-der-waals` only, because `min(|x - c| - r)` is
+    the distance to a union of spheres and *not* to the solvent-excluded
+    surface — so `dielectric_faces` refused rather than ramping against the
+    wrong boundary. `ReducedSurface.signed_gap` gives the solvent-excluded
+    surface a distance of its own, out of the same three families that decide
+    `inside`, and the refusal is gone.
+
+    Asserted as a *difference* from the hard scheme rather than as "it returns":
+    a ramp that silently fell back to the hard assignment would return perfectly
+    good arrays, and this is the one shape of failure that would leave every
+    other test in this file green.
     """
     from sashimi.debye.dielectric import dielectric_faces  # noqa: PLC0415
-    from sashimi.errors import UnsupportedRequest  # noqa: PLC0415
+    from sashimi.pqr import read_pqr  # noqa: PLC0415
 
-    structure = _born(3.0)
-    grid = size_grid(structure, GridSpec(resolution=1.0, padding=10.0))
+    structure = read_pqr("tests/data/ala-gly.pqr")
+    grid = size_grid(structure, GridSpec(resolution=0.5, padding=10.0))
     solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
-    with pytest.raises(UnsupportedRequest, match="van-der-waals"):
-        dielectric_faces(grid, structure, solvent, smoothing=0.5)
+
+    hard = dielectric_faces(grid, structure, solvent)
+    ramped = dielectric_faces(grid, structure, solvent, smoothing=0.25)
+    for axis, (blunt, smooth) in enumerate(zip(hard, ramped, strict=True)):
+        assert blunt.shape == smooth.shape
+        assert not np.array_equal(blunt, smooth), f"axis {axis} was not ramped at all"
+        # Every face is still between the two dielectrics: a harmonic blend of
+        # two values cannot leave their interval, and a fraction outside [0, 1]
+        # would be the way this stopped being true.
+        assert smooth.min() >= min(solvent.solute_dielectric, solvent.solvent_dielectric)
+        assert smooth.max() <= max(solvent.solute_dielectric, solvent.solvent_dielectric)

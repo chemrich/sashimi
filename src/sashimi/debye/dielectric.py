@@ -63,7 +63,6 @@ from sashimi.constants import (
 )
 from sashimi.debye.grid import DebyeGrid, axis_coordinates
 from sashimi.debye.surface import ReducedSurface, dilate, inside_union_of_spheres
-from sashimi.errors import UnsupportedRequest
 from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel, SurfaceModel
 
 __all__ = [
@@ -155,27 +154,12 @@ def dielectric_faces(
             for staggered in range(DIMENSIONS)
         )
 
-    if smoothing > 0.0 and solvent.surface_model is not SurfaceModel.VAN_DER_WAALS:
-        # Refused rather than silently ignored. The ramp needs a *signed
-        # distance* to the boundary, and `min_i(|x - c_i| - r_i)` is that only
-        # for a union of spheres. The solvent-excluded surface is made of three
-        # families of patch and its distance function is not this expression —
-        # using it anyway would ramp against the wrong surface and report a
-        # number that looked like an improvement.
-        raise UnsupportedRequest(
-            f"dielectric_smoothing is implemented for {SurfaceModel.VAN_DER_WAALS.value} "
-            f"only, and this request is {solvent.surface_model.value}. The ramp is built "
-            "from an exact distance to a union of spheres; the solvent-excluded surface "
-            "needs one of its own, which ROADMAP.md section 12 records as the next step."
-        )
-
     # One surface for the three staggered lattices: they differ in where the
     # nodes are, not in where the solute is.
     surface = surface or ReducedSurface(structure, solvent)
     faces = []
     for axis in range(DIMENSIONS):
         axes = axis_coordinates(grid, staggered=axis)
-        inside = surface.inside(axes)
         if smoothing > 0.0:
             # **Harmonic, not arithmetic**, and **sub-cell, not a band.** The
             # mean is harmonic because that is the textbook one for flux normal
@@ -190,14 +174,30 @@ def dielectric_faces(
             # assignment at every rung but one**. Ramping the fraction across a
             # single cell from the exact signed distance is 5-8x *better* than
             # hard instead.
-            width = smoothing * float(min(grid.spacing))
-            gap = _surface_gap(axes, structure, width)
+            # **Clamped, because `smoothing` is in cells and a coarse level's
+            # cell is not the fine one's.** `build_levels` re-discretizes at
+            # every multigrid level and hands each the same cell count, so at a
+            # 1.0 A request the coarsest level's spacing is 6.4 A and a 0.25-cell
+            # ramp is 1.6 A wide — wider than the probe, past which the gap field
+            # saturates and the ramp stops being a ramp: measured, solvent faces
+            # came back at 23.0 instead of 78.54. The probe is the range the
+            # distance carries, so it is the width's ceiling.
+            width = min(smoothing * float(min(grid.spacing)), solvent.surface_radius)
+            # **The distance is the surface's own, not a stand-in for it.** M8
+            # shipped this for `van-der-waals` only, where `min(|x - c| - r)` is
+            # exact; M8a gives the solvent-excluded surface a signed distance of
+            # its own, out of the same three families that decide `inside`. Both
+            # go through `signed_gap`, so the ramp no longer knows or cares which
+            # boundary it is ramping across.
+            gap = surface.signed_gap(axes)
             fraction = np.clip(0.5 - gap / (2.0 * width), 0.0, 1.0)
             eps = 1.0 / (
                 fraction / solvent.solute_dielectric + (1.0 - fraction) / solvent.solvent_dielectric
             )
         else:
-            eps = np.where(inside, solvent.solute_dielectric, solvent.solvent_dielectric)
+            eps = np.where(
+                surface.inside(axes), solvent.solute_dielectric, solvent.solvent_dielectric
+            )
         faces.append(np.ascontiguousarray(eps, dtype=np.float64))
     return faces[0], faces[1], faces[2]
 

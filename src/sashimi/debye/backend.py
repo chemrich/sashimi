@@ -206,6 +206,11 @@ def _resolved(grid: DebyeGrid, solvent: SolventModel, options: DebyeOptions) -> 
         "equation": "linear",
         "grid": grid.as_diagnostics(),
         "debye": {
+            # Present because it changes the answer, which is the rule this
+            # dict exists to serve: `artifacts.content_address` digests it, so
+            # two schemes that omitted it would share a saved map and the second
+            # would silently overwrite the first.
+            "dielectric_smoothing": options.dielectric_smoothing,
             "tolerance": options.tolerance,
             # `max_cycles` is here because it decides whether the answer exists
             # at all: a case that only converges at a raised budget and one that
