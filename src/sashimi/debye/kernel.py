@@ -96,6 +96,7 @@ __all__ = [
     "decide_rims",
     "decide_seated",
     "enumerate_rims",
+    "mark_union",
     "neighbour_lists",
     "probe_seats",
     "why_unavailable",
@@ -1059,3 +1060,73 @@ def probe_seats(
         overlapping, atoms, degenerate, False, per_atom, offset, seats,
     )  # fmt: skip
     return seats
+
+
+@cache
+def _compiled_union() -> Any:
+    """Build the union-of-spheres kernel once. Same laziness as `_compiled`."""
+    from numba import njit  # noqa: PLC0415 — the whole point is that this is lazy
+
+    @njit(cache=True, fastmath=False, nogil=True)
+    def kernel(  # type: ignore[no-untyped-def]  # noqa: PLR0917
+        first_axis,
+        second_axis,
+        third_axis,
+        coords,
+        radii,
+        mask,
+    ):  # pragma: no cover - compiled; exercised through `mark_union`
+        """Mark every lattice node inside any sphere. Mutates `mask`.
+
+        The last uncompiled loop in the geometry, and the cheapest to reason
+        about: the output is a boolean or, so a node claimed by any sphere is
+        the node claimed by the first and the association cannot leak into an
+        answer. The reference sums `(dx**2 + dy**2) + dz**2` — an *array*
+        `** 2`, which numpy fast-paths to `np.square` — so the same
+        left-to-right order here is the same number.
+
+        The window is the sphere's own index range per axis, which is what
+        keeps this proportional to the volume the spheres occupy rather than to
+        atoms times points. ROADMAP.md section 7 records what the whole-grid
+        version cost before that: 64 s on a 1,960-atom protein.
+        """
+        for atom in range(coords.shape[0]):
+            radius = radii[atom]
+            if radius <= 0.0:
+                continue  # a zero-radius atom bounds no volume; Kirkwood's has one
+            cx, cy, cz = coords[atom, 0], coords[atom, 1], coords[atom, 2]
+            lo0 = np.searchsorted(first_axis, cx - radius, "left")
+            hi0 = np.searchsorted(first_axis, cx + radius, "right")
+            lo1 = np.searchsorted(second_axis, cy - radius, "left")
+            hi1 = np.searchsorted(second_axis, cy + radius, "right")
+            lo2 = np.searchsorted(third_axis, cz - radius, "left")
+            hi2 = np.searchsorted(third_axis, cz + radius, "right")
+            if lo0 >= hi0 or lo1 >= hi1 or lo2 >= hi2:
+                continue  # the sphere falls between nodes, or outside the box
+            squared_radius = radius * radius
+            for i in range(lo0, hi0):
+                dx = first_axis[i] - cx
+                dx2 = dx * dx
+                for j in range(lo1, hi1):
+                    dy = second_axis[j] - cy
+                    plane = dx2 + dy * dy
+                    for k in range(lo2, hi2):
+                        dz = third_axis[k] - cz
+                        if plane + dz * dz <= squared_radius:
+                            mask[i, j, k] = True
+
+    return kernel
+
+
+def mark_union(
+    axes: list[FloatArray], coords: FloatArray, radii: FloatArray, mask: np.ndarray
+) -> None:
+    """Mark every node inside any sphere. Mutates `mask`."""
+    _compiled_union()(
+        np.ascontiguousarray(axes[0]),
+        np.ascontiguousarray(axes[1]),
+        np.ascontiguousarray(axes[2]),
+        np.ascontiguousarray(coords),
+        np.ascontiguousarray(radii),
+        mask,
+    )

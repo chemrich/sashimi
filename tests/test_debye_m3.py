@@ -48,7 +48,8 @@ from sashimi.apbs import ApbsSolver
 from sashimi.corpus import MANIFEST, Case
 from sashimi.debye import DebyeSolver
 from sashimi.field import sample_values
-from sashimi.protocol import PotentialGrid
+from sashimi.pqr import read_pqr
+from sashimi.protocol import GridSpec, PotentialGrid, SolventModel, SurfaceModel
 
 # The arm: one zero-salt case and two salted ones on the surface debye builds.
 ZERO_SALT = "born-ion-vdw"
@@ -322,4 +323,44 @@ def test_the_neutral_solute_is_recorded_and_not_judged():
         f"{apbs_peptide:.4f}, inside the band the charged cases meet. The "
         "conventions have converged — that is a real result, so update "
         "ROADMAP.md section 12 M3 rather than deleting this test."
+    )
+
+
+def test_sharing_the_distance_pass_changes_no_boundary_value():
+    """Two states out of one pass must equal two states out of two passes.
+
+    The distance from a boundary node to an atom does not depend on the
+    solvent, and it is the expensive half — 1.5 billion pairs on serum albumin,
+    which was being computed twice. Sharing it is worth 5.4 s of a 45 s solve
+    and is required to change nothing, so this compares against the one-state
+    function each state used to call.
+
+    Both states are asked for, and they are not symmetric: the solvated one
+    carries screening and an `exp`, the reference has `kappa = 0` and neither.
+    A shared loop that leaked one state's screening into the other would pass a
+    test that only looked at the solvated field.
+    """
+    from sashimi.debye.grid import size_grid  # noqa: PLC0415
+    from sashimi.debye.sources import (  # noqa: PLC0415
+        debye_huckel_boundaries,
+        debye_huckel_boundary,
+    )
+
+    pqr = read_pqr("tests/data/ala-gly.pqr")
+    solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
+    reference_solvent = dataclasses.replace(
+        solvent, solvent_dielectric=solvent.solute_dielectric, ionic_strength=0.0
+    )
+    grid = size_grid(pqr, GridSpec(resolution=0.5, padding=10.0))
+
+    separately = [
+        debye_huckel_boundary(grid, pqr, solvent, homogeneous=False),
+        debye_huckel_boundary(grid, pqr, reference_solvent, homogeneous=True),
+    ]
+    together = debye_huckel_boundaries(grid, pqr, [(solvent, False), (reference_solvent, True)])
+    assert np.any(separately[0]), "the solvated boundary is empty, so this proves nothing"
+    for alone, shared in zip(separately, together, strict=True):
+        assert np.array_equal(alone, shared)
+    assert not np.array_equal(separately[0], separately[1]), (
+        "the two states produced the same field, so the comparison cannot see them swap"
     )
