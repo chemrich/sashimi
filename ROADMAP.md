@@ -2827,7 +2827,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. Revisit when fractional-volume dielectric averaging damps the oscillation. See the section below |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. See the sections below |
 | M8 ✅ | **The interface, graded without a reference** | **met for `van-der-waals` 2026-08-22, and the default surface is not that.** Two halves. The *instrument*: a pose spread sees only the phase-dependent half of the discretization error, so `grade_refinement` adds the other by Richardson over h, h/2, h/4 — validated against the Born closed form at **0.08–0.48%**, beating the finest rung it is built from every time, with a `converging` guard that refuses a ladder reading −172.6, −177.0, −171.7 rather than fitting it. The *scheme*: a hard face-centre dielectric replaced by a solute fraction ramped across **one cell** from the exact signed distance and blended harmonically — **4–17× against the Born closed form and 3.6–5.6× on pose dispersion**, with the ramp at 0.5 Å closer to converged than the hard assignment at 0.25 Å. Shipped off by default and bit-identical when off. Three claims of this document died in the process: the fitted convergence order is a property of the ladder and not the method, `posed`'s translation moves nothing because the box follows the solute, and averaging the indicator over a band of *whole* cells is worse than not averaging at all |
-| M8a ✅ | **The solvent-excluded distance** | **met 2026-08-22**, and it moved the number M8 could not: the ramp raises the energy's convergence order from **0.30 to 2.48** on van der Waals and **0.98 to 3.84** on molecular, which is the interface treatment ceasing to bound the accuracy. `ReducedSurface.signed_gap` is `probe - dist(x, A)`, out of the same three families that decide `inside`, and `sign(gap)` reproduces `inside` node for node. **The optimal width is surface-dependent** — 0.5 cells for van der Waals, 0.25 for molecular, whose re-entrant patches are tighter; at 0.5 on molecular the order collapses to 0.18, so a single constant would have been wrong on one of the two. Pose dispersion alone would have mis-read this, which is what Q0's other half is for. Was: the one thing between M8 and the default surface. The ramp needs a signed distance and `min(\|x − c\|) − r` is the distance to a union of spheres, not to the solvent-excluded surface — three families of patch with a distance function of its own. *Exit:* the M8 gate re-run on `molecular`, on both references, at no worse than the ratios M8 measured on `van-der-waals`; and `dielectric_faces` stops refusing |
+| M8a ✅ | **The solvent-excluded distance** | **met 2026-08-22**, and it moved the number M8 could not: the ramp raises the energy's convergence order from **0.32 to 2.65** on van der Waals and **1.05 to 2.53** on molecular — an interface treatment ceasing to bound the accuracy. `ReducedSurface.signed_gap` is `probe - dist(x, A)`, out of the same three families that decide `inside`, and `sign(gap)` reproduces `inside` node for node. Both ramp widths work on both surfaces and their limits agree to 0.14% and 0.16%. *An earlier draft reported the best width as surface-dependent; that was a one-sided distance of its own making and is withdrawn below.* Pose dispersion alone would have ratified the bug, which is what Q0's other half is for The ramp needs a signed distance and `min(\|x − c\|) − r` is the distance to a union of spheres, not to the solvent-excluded surface — three families of patch with a distance function of its own. *Exit:* the M8 gate re-run on `molecular`, on both references, at no worse than the ratios M8 measured on `van-der-waals`; and `dielectric_faces` stops refusing |
 | M9 | **Focusing, for the boundary and not the resolution** | a coarse pre-solve supplying the fine grid's Dirichlet data, in place of the multi-atom Debye-Hückel sum. **Named for what debye would use it for**: the incumbents focus to put resolution where it matters, and debye would focus to stop paying `O(nodes × atoms)` for a boundary condition. *Exit, and both halves are required:* debye's whole-solve scaling falls from **atoms^1.15** to near-linear across the 906–18,242-atom ladder with the boundary stage below 10% of a solve; **and** the Born closed-form error and the `ala-gly` pose dispersion are no worse than the values the multi-atom boundary gives, with every moved corpus value re-recorded against a reference that does not share the approximation. Measured groundwork is in the section below |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
@@ -4415,53 +4415,71 @@ asking only whether it is within the probe. `ReducedSurface.signed_gap` asks how
 far it is. `sign(gap)` reproduces `inside` **node for node on both surfaces and
 both fixtures**, which is the bar, and it is a test rather than a claim.
 
-*It found a defect on the first run.* The radial family wrote its distances with
-`np.minimum(..., out=block[fancy_index])`, and fancy indexing returns a copy —
-every value landed in a temporary and was discarded. The surface came back
-saturated wherever that family was the only one to reach a node. **A second
-implementation of one definition is what caught it**, which is the third time
-that has been the mechanism in this milestone.
+#### The result: the convergence order, on both surfaces
 
-#### What it is worth, and the thing that nearly got mis-read
+Richardson over 1.0 / 0.5 / 0.25 Å on `ala-gly`, against **achieved** spacings
+rather than requested ones:
 
-Pose dispersion on `ala-gly`, twelve poses, is **1.5–3.5× better** on
-`molecular` where M8 measured 3.6–5.6× on `van-der-waals` — a weaker result, and
-the ramped means at 0.5 cells wander *away* from the hard ones rather than
-toward them. Read on dispersion alone that is a scheme improving the phase noise
-about a drifting answer, which is precisely the failure Q0 was built to expose.
-
-**The refinement instrument says the opposite, and it is right.** Richardson
-over 1.0 / 0.5 / 0.25 Å:
-
-| surface | scheme | order | limit |
+| surface | hard | ramp 0.25 | ramp 0.5 |
 |---|---|---|---|
-| van der Waals | hard | 0.30 | −189.75 |
-| van der Waals | ramp 0.25 | **2.29** | −216.84 |
-| van der Waals | ramp 0.5 | **2.48** | −216.54 |
-| molecular | hard | 0.98 | −206.47 |
-| molecular | **ramp 0.25** | **3.84** | −207.95 |
-| molecular | ramp 0.5 | 0.18 | −224.07 |
+| van der Waals | 0.32 | **2.44** | **2.65** |
+| molecular | 1.05 | **2.52** | **2.53** |
 
-**The ramp raises the convergence order from 0.3–1.0 to 2.3–3.8.** That is the
-whole point of an interface treatment and it is the first thing in this project
-to move it. Two independent cross-checks say the limits are real rather than
-fitted: on van der Waals the two widths agree to **0.14%**, and on molecular
-ramp 0.25's limit agrees with the hard scheme's to **0.7%** — two schemes with
-completely different discretizations arriving at the same answer.
+**The ramp takes the energy's convergence order from 0.3–1.0 to 2.4–2.7.** That
+is an interface treatment ceasing to bound the accuracy, and it is the first
+thing in this project to move that number. Three cross-checks say the limits are
+real rather than fitted: the two widths agree to **0.14%** on van der Waals and
+**0.16%** on molecular, and molecular's ramped limit of −208.9 sits beside the
+−208.2 an independent hard-scheme refinement reached earlier the same day.
 
-**The width is surface-dependent, and that is the finding the dispersion table
-was hiding.** Half a cell suits the van der Waals surface and *over-smooths* the
-solvent-excluded one, whose re-entrant patches are tighter; at 0.5 cells on
-`molecular` the order collapses to 0.18 and the limit runs away to −224. At 0.25
-cells it is the best number in the table. **A single default width would have
-been wrong on one of the two surfaces**, which is why this stays a caller knob
-with the measured optima recorded rather than a constant chosen once.
+#### Three defects, and the shape they had in common
 
-**Still off by default and the default is bit-identical** — the corpus
-reproduces all 58 cases. Turning it on changes every recorded energy, so the
-default cannot move until those are re-recorded against references that do not
-share the face-centre assignment; the closed forms, TABI-PB and this table's own
-limits are the three available.
+*A second implementation of one definition found all of them*, which is the
+third time that has been the mechanism in this milestone.
+
+- **The radial family wrote its distances into a copy.**
+  `np.minimum(..., out=block[fancy_index])` — fancy indexing returns a copy, so
+  every value landed in a temporary. The surface came back saturated wherever
+  that family was the only one to reach a node, and `sign(gap) == inside` is
+  what showed it.
+- **`_window` is a bounding box, not a sphere.** `radius - span` is *negative*
+  for nodes in the box and outside the sphere, so a "distance" pointed the wrong
+  way and `signed_gap` returned values above the probe it is capped by. The
+  boolean family tolerates those nodes because it only asks whether a projection
+  is legal; a minimum does not.
+- **The width is in cells, and a coarse multigrid level's cell is not the fine
+  one's.** `build_levels` hands every level the same cell count, so at a 1.0 Å
+  request the coarsest level's 6.4 Å spacing turns a 0.25-cell ramp into 1.6 Å —
+  wider than the probe, past which the gap field saturates and the ramp stops
+  being a ramp. Measured before the clamp: solvent faces came back at **23.0
+  instead of 78.54**. The probe is the range the distance carries, so it is the
+  width's ceiling.
+
+#### A finding that was withdrawn the same day, and how
+
+The first version of this section reported that **the optimal ramp width is
+surface-dependent** — 0.5 cells for van der Waals, 0.25 for molecular, whose
+re-entrant patches are tighter — on the strength of molecular's order collapsing
+to 0.18 at 0.5 cells. It read like physics and it was a bug.
+
+`signed_gap` filled the whole van der Waals interior with a saturated value,
+because `inside` never asks about that region: everything inside the union is
+solute whatever the answer. A **distance** cannot take that shortcut — the
+solvent-excluded surface touches the van der Waals surface wherever the probe
+touches an atom, so a node just inside it is just inside the boundary. The
+consequence was a **one-sided ramp**: blended on the solvent side, clamped on
+the solute side, which displaces the interface outward by about half the ramp
+width. A wider ramp displaced it further, so `molecular` looked width-sensitive
+and `van-der-waals` — which had a real two-sided distance from `_union_gap` —
+did not.
+
+With the region fixed, **both widths work on both surfaces and the orders agree
+to within 0.01**. There is no surface-dependent width.
+
+*What is worth keeping from the episode* is that pose dispersion alone would
+have ratified the bug: at 0.5 cells on `molecular` the dispersion improved 2.2×
+while the answer walked away from its own limit. Q0's second half is what
+refused it, and a `/code-review` pass is what found the cause.
 
 ### M9 — focusing, for the boundary and not the resolution
 

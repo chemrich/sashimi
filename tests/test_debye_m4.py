@@ -333,11 +333,15 @@ def test_the_ramp_raises_the_convergence_order_on_both_surfaces():
     from the signed distance takes both above 2 — which is the interface
     treatment, not the solver, being what bounded the accuracy.
 
-    **The width is surface-dependent and that is the finding**: 0.5 cells suits
-    the van der Waals surface and over-smooths the solvent-excluded one, whose
-    re-entrant patches are tighter. Graded here at the width measured best for
-    each, with a bar of 1.5 — comfortably under the 2.3-3.8 measured, and
-    comfortably over the hard scheme it has to beat.
+    **Both widths, on both surfaces**, because an earlier draft of this test
+    graded each surface at its own width on the strength of a finding that was a
+    bug: `signed_gap` saturated the van der Waals interior, so the ramp was
+    one-sided and a wider one displaced the interface further. With a two-sided
+    distance the orders agree to within 0.01 across widths. Testing both is what
+    would catch that returning.
+
+    The bar is 1.5 — comfortably under the 2.4-2.7 measured, and comfortably
+    over the hard scheme it has to beat.
     """
     from sashimi.debye.options import DebyeOptions  # noqa: PLC0415
     from sashimi.invariants import Refinement  # noqa: PLC0415
@@ -362,7 +366,9 @@ def test_the_ramp_raises_the_convergence_order_on_both_surfaces():
         assert grade.converging, f"{model} at width {width} is not converging: {energies}"
         return grade.order
 
-    for model, width in ((SurfaceModel.VAN_DER_WAALS, 0.5), (SurfaceModel.MOLECULAR, 0.25)):
-        assert order(model, width) > 1.5 > order(model, 0.0), (
-            f"the ramp no longer raises the order on {model.value}"
-        )
+    for model in (SurfaceModel.VAN_DER_WAALS, SurfaceModel.MOLECULAR):
+        blunt = order(model, 0.0)
+        for width in (0.25, 0.5):
+            assert order(model, width) > 1.5 > blunt, (
+                f"the ramp no longer raises the order on {model.value} at width {width}"
+            )

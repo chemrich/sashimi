@@ -56,7 +56,7 @@ from itertools import pairwise
 
 import numpy as np
 
-from sashimi.protocol import FloatArray, PQRData, System
+from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolverFamily, System
 from sashimi.validate import Backend
 
 __all__ = [
@@ -303,10 +303,35 @@ def grade_refinement(
     peptide the 0.25 A rung is most of the total.
     """
     ladder = tuple(spacings) if spacings is not None else DEFAULT_LADDER
-    energies = tuple(
-        _energy(backend, replace(system, grid=replace(system.grid, resolution=h))) for h in ladder
-    )
-    return Refinement(backend=backend.name, spacings=ladder, energies=energies)
+    achieved, energies = [], []
+    for requested in ladder:
+        moved = replace(system, grid=replace(system.grid, resolution=requested))
+        energies.append(_energy(backend, moved))
+        achieved.append(_achieved_spacing(backend, moved, requested))
+    return Refinement(backend=backend.name, spacings=tuple(achieved), energies=tuple(energies))
+
+
+def _achieved_spacing(backend: Backend, system: System, requested: float) -> float:
+    """What the lattice actually resolved to, not what was asked for.
+
+    **Richardson divides by the refinement ratio, so the ratio has to be the
+    real one.** A grid backend snaps: debye's axes step in eights and APBS's
+    `dime` in 32s, and each axis lands somewhere different. On the Born r=3
+    fixture a requested 1.0 / 0.5 / 0.25 comes back as 0.8125 / 0.4643 / 0.25 —
+    ratios of **1.75 and 1.86, not 2** — and reading the exponent against 2
+    biases it by about 12%. The geometric mean of the three axes stands in for
+    an anisotropic lattice, because the error being fitted is a volume.
+
+    Falls back to the request for a backend with no lattice of its own; neither
+    the boundary-element nor the analytic tier refines in this sense, and
+    neither is graded on an order.
+    """
+    from sashimi.debye.grid import size_grid  # noqa: PLC0415 — avoids an import cycle
+
+    if backend.family is not SolverFamily.FINITE_DIFFERENCE:
+        return requested
+    spacing = size_grid(system.structure, system.grid).spacing
+    return float(np.prod(np.asarray(spacing, dtype=float)) ** (1.0 / DIMENSIONS))
 
 
 def grade_charge_scaling(backend: Backend, system: System, *, factor: float = 2.0) -> ChargeScaling:

@@ -965,7 +965,12 @@ def _radial_distance(
         local, points = _nodes_in(axes, window, candidates)
         offset = points - centre
         span = np.sqrt((offset**2).sum(axis=1))
-        usable = span > DEGENERATE
+        # `_window` is a bounding *box*, so it hands back nodes outside the
+        # sphere it bounds, and for those `radius - span` is negative — a
+        # distance pointing the wrong way. The boolean family tolerates them
+        # because it only asks whether the projection is legal; a minimum does
+        # not, so they are excluded here.
+        usable = (span > DEGENERATE) & (span < radius)
         pushed = np.zeros_like(points)
         pushed[usable] = centre + radius * offset[usable] / span[usable, None]
 
@@ -1480,22 +1485,31 @@ class ReducedSurface:
         rim that reaches a node has to be offered and the early-out is gone.
         """
         structure = self.structure
-        inside_vdw = inside_union_of_spheres(axes, structure.coords, structure.radii)
         if self.solvent.surface_model is not SurfaceModel.MOLECULAR or self.probe <= 0.0:
             return _union_gap(axes, structure.coords, structure.radii)
 
         inflated_mask = inside_union_of_spheres(
             axes, structure.coords, structure.radii + self.probe
         )
-        shell = inflated_mask & ~inside_vdw
-        # `probe` beyond the band is saturated territory either way, and using
-        # it rather than `inf` keeps the array finite for anything that plots it.
+        # **The whole inflated region, not just the shell, and that was a bug.**
+        # `inside` only ever asks about the shell, because everything inside the
+        # van der Waals union is solute whatever the answer. A *distance* cannot
+        # take that shortcut: the solvent-excluded surface touches the van der
+        # Waals surface wherever the probe touches an atom, so a node just
+        # inside it is just inside the boundary and needs a real value. Filling
+        # those with a saturated one made the ramp **one-sided** — blended on the
+        # solvent side, clamped on the solute side — which displaces the
+        # interface outward by about half the ramp width and looks exactly like
+        # a scheme whose best width depends on the surface.
+        region = inflated_mask
+        # Beyond this the ramp saturates either way. Finite rather than `inf` so
+        # anything that plots the field gets a number.
         far = 2.0 * self.probe
-        nearest = np.where(inflated_mask, far, 0.0).astype(np.float64)
-        if shell.any():
-            _radial_distance(axes, self.spheres, shell, nearest)
-            _toroidal_distance(axes, self, shell, nearest)
-            _vertex_distance(axes, self, shell, nearest)
+        nearest = np.where(region, far, 0.0).astype(np.float64)
+        if region.any():
+            _radial_distance(axes, self.spheres, region, nearest)
+            _toroidal_distance(axes, self, region, nearest)
+            _vertex_distance(axes, self, region, nearest)
         np.minimum(nearest, far, out=nearest)
         return np.asarray(self.probe - nearest, dtype=np.float64)
 
@@ -1547,10 +1561,10 @@ def _union_gap(axes: list[FloatArray], coords: FloatArray, radii: FloatArray) ->
     solvent-excluded surface had a distance of its own.
     """
     shape = tuple(len(axis) for axis in axes)
-    mesh = np.meshgrid(*axes, indexing="ij")
     gap = np.full(shape, np.inf, dtype=np.float64)
     for centre, radius in zip(coords, radii, strict=True):
-        squared = sum((mesh[axis] - centre[axis]) ** 2 for axis in range(DIMENSIONS))
+        offsets = [(axes[axis] - centre[axis]) ** 2 for axis in range(DIMENSIONS)]
+        squared = offsets[0][:, None, None] + offsets[1][None, :, None] + offsets[2][None, None, :]
         np.minimum(gap, np.sqrt(squared) - radius, out=gap)
     return gap
 
