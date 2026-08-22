@@ -364,3 +364,25 @@ def test_sharing_the_distance_pass_changes_no_boundary_value():
     assert not np.array_equal(separately[0], separately[1]), (
         "the two states produced the same field, so the comparison cannot see them swap"
     )
+
+
+def test_the_single_centre_solute_contains_the_one_it_stands_for():
+    """M9's baseline, and the two properties that make it a fair comparator.
+
+    `sdh` replaces the multi-atom boundary sum with one sphere at the centroid.
+    It has to carry the *same net charge* — the monopole is the only term it
+    keeps, so getting that wrong would make the comparison meaningless rather
+    than approximate — and its radius has to *contain* every atom's surface, or
+    the Stern layer would sit inside the solute it is excluding ions from.
+    """
+    from sashimi.debye.sources import single_debye_huckel_solute  # noqa: PLC0415
+
+    for path in ("tests/data/ala-gly.pqr", "tests/data/apbs-examples/fas2.pqr"):
+        structure = read_pqr(path)
+        one = single_debye_huckel_solute(structure)
+        assert one.n_atoms == 1
+        assert one.total_charge == pytest.approx(structure.total_charge, abs=1e-9)
+        centroid = structure.coords.mean(axis=0)
+        reach = np.sqrt(((structure.coords - centroid) ** 2).sum(axis=1)) + structure.radii
+        assert one.radii[0] == pytest.approx(reach.max())
+        assert one.radii[0] >= reach.max() - 1e-12, "an atom reaches outside the pseudo-sphere"

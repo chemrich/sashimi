@@ -31,7 +31,7 @@ from sashimi.analytic import debye_length_a
 from sashimi.debye.dielectric import bjerrum_length_a
 from sashimi.debye.grid import DebyeGrid
 from sashimi.errors import InputError
-from sashimi.protocol import FloatArray, PQRData, SolventModel
+from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel
 
 __all__ = [
     "assign_charges",
@@ -134,6 +134,43 @@ def debye_huckel_boundary(
 ) -> FloatArray:
     """Dirichlet values on the box face for one state. See `debye_huckel_boundaries`."""
     return debye_huckel_boundaries(grid, structure, [(solvent, homogeneous)])[0]
+
+
+def single_debye_huckel_solute(structure: PQRData) -> PQRData:
+    """The solute as one sphere at its centroid carrying the net charge.
+
+    **APBS's `bcfl sdh`, which is what its focusing buys it.** The multi-atom
+    sum this replaces is `O(face nodes x atoms)` — 1.5 billion pairs on serum
+    albumin, 36% of a solve, and the only superlinear stage debye has left. A
+    single centre is `O(face nodes)`, independent of how many atoms there are.
+
+    **This exists to be measured against, not to be switched on.** APBS can
+    afford it because focusing puts its coarse face at 1.7x the *fine box*,
+    where the `l >= 1` content a monopole omits has fallen off. debye's face
+    sits at `r_max/|R| = 0.89-1.25` — inside the solute's own circumscribing
+    sphere above ~2,000 atoms — and no single-centre expansion converges there
+    at any order: measured on fas2 the reference-state error runs 18.2% ->
+    5.2% -> 4.5% -> 2.2% through octupole, stalling rather than converging.
+
+    So the number this produces is a *baseline*, and ROADMAP.md section 12's M9
+    says why it has to exist: `sdh` on debye's existing box already passes the
+    milestone's first exit criterion, which is a fact about that criterion. A
+    replacement for the multi-atom sum has to beat this, not merely beat the
+    thing it replaces.
+
+    The radius is the circumscribing one — the furthest any atom's surface
+    reaches from the centroid — so the pseudo-sphere contains the solute it
+    stands for, and the Stern layer sits outside it exactly as it does for a
+    real atom — `debye_huckel_boundaries` adds `ion_radius` to whatever radius it
+    is handed, so the Stern layer needs no special case here.
+    """
+    centroid = structure.coords.mean(axis=0)
+    reach = np.sqrt(((structure.coords - centroid) ** 2).sum(axis=1)) + structure.radii
+    return PQRData(
+        coords=centroid.reshape(1, DIMENSIONS),
+        charges=np.array([structure.charges.sum()], dtype=np.float64),
+        radii=np.array([float(reach.max())], dtype=np.float64),
+    )
 
 
 def debye_huckel_boundaries(

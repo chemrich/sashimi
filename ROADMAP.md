@@ -4618,6 +4618,50 @@ It is also a prerequisite rather than a detour: a coarse box means a second
 hierarchy asking for the same rim geometry, and paying for it twice per lattice
 is what would make that second hierarchy unaffordable.
 
+#### The `sdh` baseline, measured — and the criterion that catches it
+
+**2026-08-22, M9 step (b).** `sashimi.debye.sources.single_debye_huckel_solute`
+builds the solute as one sphere at its centroid carrying the net charge, with
+the circumscribing radius. It exists to be **measured against**, because the
+review found that `sdh` on debye's existing box passes M9's original exit
+criterion in ten lines — and a milestone a ten-line change passes is not stating
+its milestone.
+
+Against the exact multi-atom sum, same box, same lattice, `molecular` at 1.0 Å.
+The near field is sampled on a shell 3–4 Å outside the atoms, which is what a
+consumer colours a surface with:
+
+| structure | energy | near-field r | sign | magnitude | boundary cost |
+|---|---|---|---|---|---|
+| fas2, 906 atoms | 0.981% | 0.9986 | 98.2% | 0.983 | 0.19 s → **0.00 s** |
+| 1a63, 2,065 | 1.530% | 0.9999 | 99.6% | 1.008 | 0.55 s → **0.00 s** |
+| serum albumin, 18,242 | 0.370% | 0.9912 | 97.0% | 1.001 | 12.95 s → **0.01 s** |
+
+**The boundary stage disappears** — 12.95 s to 0.01 s at 1,156 residues, the
+whole of the only superlinear term debye has. That is what makes `sdh` the
+baseline rather than a curiosity.
+
+**And it fails the rewritten accuracy gate on two of three structures**, at
+`r ≥ 0.999` and sign agreement `≥ 99%`. That is the point: the *original* gate —
+the Born ion and `ala-gly` pose dispersion — passes it trivially, because a
+one-atom solute makes `sdh` and `mdh` bit-identical and a net-neutral dipeptide
+makes an `sdh` boundary identically zero. **The rewritten criterion was checked
+against the very approximation that gamed its predecessor, and it catches it.**
+
+So M9's bar is now a number rather than an aspiration: **beat r = 0.9912 and
+97.0% sign agreement on serum albumin while keeping a boundary that costs
+0.01 s.** Whether focusing can is the open question; `sdh` is what it has to
+beat, and the energy column says the target is not far away — 0.37% on the
+largest case, where the near field is the half that is wrong.
+
+*One asymmetry worth carrying into the design.* The error is not where size
+suggests: albumin's energy error is the **smallest** of the three (0.370%) and
+its near-field correlation the **worst** (0.9912). Net charge is why —
+albumin carries −30 e where fas2 carries +4.05, so the monopole that `sdh` keeps
+describes albumin's far field better while its neglected `l ≥ 1` content is
+larger in absolute terms near the surface. **A gate on energy alone would have
+ranked these three backwards.**
+
 #### What it will cost, stated before it is built
 
 It changes recorded answers, and this is the axis where the bit-identity
