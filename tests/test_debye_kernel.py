@@ -24,6 +24,7 @@ two ever disagree about whether the kernel is present.
 from __future__ import annotations
 
 import importlib.util
+import math
 
 import numpy as np
 import pytest
@@ -441,7 +442,18 @@ def test_the_rim_does_not_square_a_scalar_with_pow():
             ring = surface_module._rim(coords, inflated, i, int(j))
             if ring is None:
                 continue
-            separation = float(np.linalg.norm(coords[j] - coords[i]))
+            # Not `np.linalg.norm`, for the same reason `_rim` stopped using
+            # it: numpy routes that through BLAS, whose `ddot` is dispatched per
+            # CPU. This test mirrors `_rim`'s formula, so it has to mirror its
+            # arithmetic too — with the norm left in, it passed on macOS and
+            # failed on Linux by one ulp, which is how the BLAS dependency was
+            # confirmed rather than merely suspected.
+            offset = coords[j] - coords[i]
+            separation = math.sqrt(
+                float(offset[0]) * float(offset[0])
+                + float(offset[1]) * float(offset[1])
+                + float(offset[2]) * float(offset[2])
+            )
             along = (
                 separation * separation + inflated[i] * inflated[i] - inflated[j] * inflated[j]
             ) / (2.0 * separation)
