@@ -24,6 +24,7 @@ two ever disagree about whether the kernel is present.
 from __future__ import annotations
 
 import importlib.util
+import math
 
 import numpy as np
 import pytest
@@ -372,11 +373,27 @@ def test_the_compiled_rims_are_identical_to_the_last_bit(structure: str, monkeyp
     reference, compiled = _both_ways(monkeypatch, lambda: surface_module._rims(spheres))
     assert len(reference) > 0, "no two spheres meet in this fixture"
     assert len(reference) == len(compiled)
-    for (origin, normal, radius, blockers), other in zip(reference, compiled, strict=True):
-        assert np.array_equal(origin, other[0])
-        assert np.array_equal(normal, other[1])
-        assert radius == other[2]
-        assert np.array_equal(blockers, other[3])
+
+    # Reported rather than asserted bare. When this failed on one of GitHub's
+    # Linux runners and passed on another, `assert np.array_equal(...)` printed
+    # `assert False` and nothing else — so the cause (a BLAS `ddot` dispatched
+    # per CPU, inside `np.linalg.norm`) took a CI round trip to see. A test of
+    # last bits has to print the last bits.
+    for index, (rim, other) in enumerate(zip(reference, compiled, strict=True)):
+        for field, left, right in zip(
+            ("origin", "normal", "radius", "blockers"), rim, other, strict=True
+        ):
+            mine, theirs = np.asarray(left), np.asarray(right)
+            if np.array_equal(mine, theirs):
+                continue
+            detail = ""
+            if mine.dtype.kind == "f":
+                ulps = np.abs(mine.view(np.int64) - theirs.view(np.int64))
+                detail = f", {ulps.max()} ulp apart"
+            raise AssertionError(
+                f"rim {index} of {len(reference)} differs in {field}{detail}:\n"
+                f"  reference {mine!r}\n  compiled  {theirs!r}"
+            )
 
 
 @needs_numba
@@ -425,7 +442,18 @@ def test_the_rim_does_not_square_a_scalar_with_pow():
             ring = surface_module._rim(coords, inflated, i, int(j))
             if ring is None:
                 continue
-            separation = float(np.linalg.norm(coords[j] - coords[i]))
+            # Not `np.linalg.norm`, for the same reason `_rim` stopped using
+            # it: numpy routes that through BLAS, whose `ddot` is dispatched per
+            # CPU. This test mirrors `_rim`'s formula, so it has to mirror its
+            # arithmetic too — with the norm left in, it passed on macOS and
+            # failed on Linux by one ulp, which is how the BLAS dependency was
+            # confirmed rather than merely suspected.
+            offset = coords[j] - coords[i]
+            separation = math.sqrt(
+                float(offset[0]) * float(offset[0])
+                + float(offset[1]) * float(offset[1])
+                + float(offset[2]) * float(offset[2])
+            )
             along = (
                 separation * separation + inflated[i] * inflated[i] - inflated[j] * inflated[j]
             ) / (2.0 * separation)
