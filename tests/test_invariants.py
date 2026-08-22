@@ -23,6 +23,8 @@ the failure this repository keeps recording.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -30,7 +32,14 @@ from sashimi import backends
 from sashimi.errors import BackendUnavailable, UnsupportedRequest
 from sashimi.invariants import grade_charge_scaling, grade_pose_spread, posed
 from sashimi.pqr import read_pqr
-from sashimi.protocol import AccuracyTier, GridSpec, SolventModel, SurfaceModel, System
+from sashimi.protocol import (
+    AccuracyTier,
+    GridSpec,
+    PQRData,
+    SolventModel,
+    SurfaceModel,
+    System,
+)
 from sashimi.validate import Backend
 
 # Small enough that every backend can run the sweep on every push, and
@@ -250,3 +259,110 @@ def test_the_translation_scales_with_the_grid():
     coarse = posed(structure, 1, spacing=1.0).coords - structure.coords
     # Same rotation, so the difference between the two is purely the translation.
     assert np.linalg.norm(coarse.mean(axis=0)) > np.linalg.norm(fine.mean(axis=0))
+
+
+def test_a_sub_cell_translation_changes_nothing_because_the_box_follows_it():
+    """The half of `posed` that does no work, pinned so nobody re-derives its rationale.
+
+    `POSE_SHIFT_CELLS` used to be documented as probing grid phase. It cannot:
+    `size_grid` builds the box from `pqr.center()` and `pqr.extent()`, so moving
+    the solute moves the lattice with it and every atom keeps its position
+    relative to its own nodes. **The rotation is what varies the phase**, by
+    changing the bounding box and therefore the lattice.
+
+    Asserted as an equality rather than a tolerance because it is an identity of
+    the construction, not a numerical accident — and the contrast is asserted
+    too, so a change that quietly made rotation inert as well would not slip
+    through a test that only said "translation does nothing".
+    """
+    base = read_pqr(PEPTIDE)
+    solver, family = backends.solver_for("debye")
+
+    def energy(structure: PQRData) -> float:
+        system = replace(_system(), structure=structure)
+        answer = solver.solve(system.request_for(family)).energy_kj_mol
+        assert answer is not None
+        return float(answer)
+
+    still = energy(base)
+    for cells in (0.25, 0.5, 0.75):
+        moved = replace(base, coords=base.coords + cells * RESOLUTION)
+        assert energy(moved) == pytest.approx(still, abs=1e-9)
+
+    rng = np.random.default_rng(7)
+    turn, _ = np.linalg.qr(rng.standard_normal((3, 3)))
+    turn = turn * np.sign(np.linalg.det(turn))
+    centre = base.coords.mean(axis=0)
+    rotated = replace(base, coords=(base.coords - centre) @ turn.T + centre)
+    assert abs(energy(rotated) - still) > 0.1, (
+        "the rotation moved the energy by less than 0.1 kJ/mol, so this fixture "
+        "no longer exercises the phase variation the pose spread is built on"
+    )
+
+
+def _born(radius: float) -> PQRData:
+    return PQRData(coords=np.zeros((1, 3)), charges=np.array([1.0]), radii=np.array([radius]))
+
+
+def _born_system(radius: float, spacing: float) -> System:
+    return System(
+        structure=_born(radius),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS, ionic_strength=0.0),
+        grid=GridSpec(resolution=spacing, padding=10.0),
+        want_energy=True,
+        want_potential=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("radius", "ladder", "tolerance"),
+    [(3.0, (1.0, 0.5, 0.25), 0.006), (2.0, (0.5, 0.25, 0.125), 0.005)],
+)
+def test_richardson_finds_a_limit_that_is_already_known(radius, ladder, tolerance):
+    """The extrapolator graded where the answer is not in question.
+
+    `grade_refinement` reports a limit no backend can vouch for, so its accuracy
+    has to be established somewhere the truth is independent — which is the Born
+    sphere, whose solvation energy is a closed form. Measured: the limit lands
+    0.08-0.48% from exact where the ladder converges, and **beats the finest
+    rung it was built from every time** (0.45-0.81%). That is the claim this
+    instrument is allowed to make — half a percent, not a gold standard.
+    """
+    from sashimi.analytic import born_solvation_energy  # noqa: PLC0415
+    from sashimi.invariants import grade_refinement  # noqa: PLC0415
+
+    backend = _backend("debye")
+    system = _born_system(radius, ladder[0])
+    grade = grade_refinement(backend, system, spacings=ladder)
+    # The closed form has to be evaluated at the *solvent model's* dielectrics,
+    # not the function's defaults: `solute_dielectric` defaults to 1.0 there and
+    # is 2.0 here, which is a factor of two in the answer rather than a rounding.
+    exact = born_solvation_energy(
+        radius_a=radius,
+        charge_e=1.0,
+        solute_dielectric=system.solvent.solute_dielectric,
+        solvent_dielectric=system.solvent.solvent_dielectric,
+    )
+
+    assert grade.converging, f"the ladder {grade.energies} is not in the asymptotic regime"
+    assert abs(grade.limit - exact) / abs(exact) < tolerance
+    assert abs(grade.limit - exact) < abs(grade.energies[-1] - exact), (
+        "the extrapolation is no better than the finest rung it was built from, "
+        "so it is not earning the two extra solves"
+    )
+
+
+def test_a_ladder_outside_the_asymptotic_regime_is_refused_rather_than_fitted():
+    """The guard that makes the limit safe to quote.
+
+    A 2 A sphere on a ladder starting at 1 A is under-resolved, and its energies
+    do not descend — they read -172.6, -177.0, -171.7. Richardson on that
+    returns a limit 19.6% from exact, which is worse than every rung it was
+    built from. `converging` is what stops a caller believing it, and it is
+    checked here rather than assumed because ROADMAP.md section 12 records that
+    nothing converges monotonically at `d/a >= 0.5` on a sharp boundary.
+    """
+    from sashimi.invariants import grade_refinement  # noqa: PLC0415
+
+    grade = grade_refinement(_backend("debye"), _born_system(2.0, 1.0), spacings=(1.0, 0.5, 0.25))
+    assert not grade.converging, f"expected a non-monotone ladder, got {grade.energies}"

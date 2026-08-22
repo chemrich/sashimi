@@ -360,3 +360,101 @@ def test_a_charge_on_the_box_face_is_refused_rather_than_clipped():
     # The same structure with room around it is ordinary, and still solvable.
     padded = size_grid(structure, GridSpec(resolution=1.0, padding=5.0))
     assert np.isfinite(debye_huckel_boundary(padded, structure, VDW)).all()
+
+
+def _born(radius: float) -> PQRData:
+    return PQRData(coords=np.zeros((1, 3)), charges=np.array([1.0]), radii=np.array([radius]))
+
+
+def _born_energy(radius: float, spacing: float, smoothing: float) -> float:
+    from sashimi.debye import DebyeSolver  # noqa: PLC0415
+    from sashimi.debye.options import DebyeOptions  # noqa: PLC0415
+    from sashimi.protocol import FiniteDifferenceRequest  # noqa: PLC0415
+
+    request = FiniteDifferenceRequest(
+        structure=_born(radius),
+        solvent=SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS, ionic_strength=0.0),
+        grid=GridSpec(resolution=spacing, padding=10.0),
+        want_potential=False,
+    )
+    answer = DebyeSolver(options=DebyeOptions(dielectric_smoothing=smoothing)).solve(request)
+    assert answer.energy_kj_mol is not None
+    return float(answer.energy_kj_mol)
+
+
+def test_the_shipped_scheme_is_the_hard_one_and_stays_the_default():
+    """The knob must be off, or every recorded corpus energy is a different quantity."""
+    from sashimi.debye.options import DebyeOptions  # noqa: PLC0415
+
+    assert DebyeOptions().dielectric_smoothing == 0.0
+
+
+@pytest.mark.parametrize(("radius", "spacing"), [(2.0, 0.5), (3.0, 0.25), (3.0, 0.125)])
+def test_a_sub_cell_ramp_beats_the_hard_assignment_against_the_closed_form(radius, spacing):
+    """Graded on the Born energy, which is exact — not against another solver.
+
+    Both finite-difference incumbents make the same face-centre assignment this
+    replaces, so neither can referee it; `sashimi.debye.dielectric` says so at
+    length. The closed form has no such conflict.
+
+    Measured 4-17x better across the ladder. The bar here is 2x, which is far
+    enough below the measurement to survive a solver-tolerance change and far
+    enough above 1 to catch the scheme being silently disabled.
+    """
+    from sashimi.analytic import born_solvation_energy  # noqa: PLC0415
+
+    solvent = SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS, ionic_strength=0.0)
+    exact = born_solvation_energy(
+        radius_a=radius,
+        charge_e=1.0,
+        solute_dielectric=solvent.solute_dielectric,
+        solvent_dielectric=solvent.solvent_dielectric,
+    )
+    hard = abs(_born_energy(radius, spacing, 0.0) - exact)
+    ramped = abs(_born_energy(radius, spacing, 0.5) - exact)
+    assert ramped * 2.0 < hard, (
+        f"the ramp is {hard / ramped:.1f}x better at a={radius}, h={spacing}, "
+        "where it was measured at 4-17x"
+    )
+
+
+def test_a_band_wider_than_a_cell_is_worse_than_no_ramp_at_all():
+    """The negative result that decided the scheme, pinned so it is not re-run.
+
+    The first implementation averaged the *indicator* over a box of whole cells
+    and blended harmonically — which is what "smoothing over a band of w cells"
+    naturally reads as. It smears the interface across three cells and on this
+    case it is **worse than the hard assignment**. The ramp is sub-cell for that
+    reason, and a future widening would be caught here rather than in a
+    quarter's worth of drifted energies.
+    """
+    from sashimi.analytic import born_solvation_energy  # noqa: PLC0415
+
+    solvent = SolventModel(surface_model=SurfaceModel.VAN_DER_WAALS, ionic_strength=0.0)
+    exact = born_solvation_energy(
+        radius_a=3.0,
+        charge_e=1.0,
+        solute_dielectric=solvent.solute_dielectric,
+        solvent_dielectric=solvent.solvent_dielectric,
+    )
+    hard = abs(_born_energy(3.0, 0.25, 0.0) - exact)
+    wide = abs(_born_energy(3.0, 0.25, 2.0) - exact)
+    assert wide > hard, "a two-cell band is no longer worse than hard, so the finding moved"
+
+
+def test_the_ramp_refuses_the_surface_it_cannot_measure_a_distance_to():
+    """`molecular` is the default surface and the one this does not yet cover.
+
+    The ramp is built from `min(|x - c| - r)`, which is the distance to a union
+    of spheres and *not* to the solvent-excluded surface. Refusing is the whole
+    point: ramping against the wrong surface would return a number that looked
+    like an improvement and was not.
+    """
+    from sashimi.debye.dielectric import dielectric_faces  # noqa: PLC0415
+    from sashimi.errors import UnsupportedRequest  # noqa: PLC0415
+
+    structure = _born(3.0)
+    grid = size_grid(structure, GridSpec(resolution=1.0, padding=10.0))
+    solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
+    with pytest.raises(UnsupportedRequest, match="van-der-waals"):
+        dielectric_faces(grid, structure, solvent, smoothing=0.5)

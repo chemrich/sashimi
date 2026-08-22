@@ -57,6 +57,16 @@ class DebyeOptions:
     the consumer displays.
     """
 
+    # Width in cells of the band the dielectric is blended over at the interface,
+    # blended *harmonically*. Zero is the shipped scheme: a hard assignment from
+    # the face centre's own side of the surface, which is what APBS does with
+    # `srfm mol` and what every recorded corpus energy was measured with.
+    #
+    # **Non-zero changes the answer**, so it is a knob and not a default. See
+    # `sashimi.debye.dielectric` for what M1c measured and ROADMAP.md section 12
+    # for the gate it has to pass before the default could move.
+    dielectric_smoothing: float = 0.0
+
     tolerance: float = 1e-8
     max_cycles: int = 200
 

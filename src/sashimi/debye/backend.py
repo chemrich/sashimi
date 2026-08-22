@@ -80,7 +80,7 @@ def _solve_state(
     states share the distance matrix it is built from and that matrix is 1.5
     billion pairs on a protein. See `debye_huckel_boundaries`.
     """
-    levels = build_levels(grid, structure, solvent)
+    levels = build_levels(grid, structure, solvent, options.dielectric_smoothing)
     rhs = source_term(grid, structure, solvent) - levels[0].apply(boundary)
     rhs[0, :, :] = rhs[-1, :, :] = 0.0
     rhs[:, 0, :] = rhs[:, -1, :] = 0.0

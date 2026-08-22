@@ -63,6 +63,7 @@ from sashimi.constants import (
 )
 from sashimi.debye.grid import DebyeGrid, axis_coordinates
 from sashimi.debye.surface import ReducedSurface, dilate, inside_union_of_spheres
+from sashimi.errors import UnsupportedRequest
 from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel, SurfaceModel
 
 __all__ = [
@@ -92,11 +93,38 @@ def bjerrum_length_a(temperature: float) -> float:
     return metres / ANGSTROM
 
 
+def _surface_gap(axes: list[FloatArray], structure: PQRData, reach: float) -> FloatArray:
+    """Signed distance to the van der Waals surface, clamped beyond `reach`.
+
+    `min_i(|x - c_i| - r_i)`, which is exact for a union of spheres and is why
+    this is offered on that boundary and refused on the other one. Computed over
+    each sphere's own index window, like `inside_union_of_spheres` — anything
+    further than `reach` from every atom is solvent by a margin the ramp does
+    not care about, so it keeps the clamp and is never visited.
+    """
+    shape = tuple(len(axis) for axis in axes)
+    gap = np.full(shape, reach, dtype=np.float64)
+    for centre, radius in zip(structure.coords, structure.radii, strict=True):
+        window = []
+        for axis in range(DIMENSIONS):
+            span = radius + reach
+            lo = int(np.searchsorted(axes[axis], centre[axis] - span, side="left"))
+            hi = int(np.searchsorted(axes[axis], centre[axis] + span, side="right"))
+            window.append(slice(lo, hi))
+        if any(w.start >= w.stop for w in window):
+            continue
+        offsets = [(axes[axis][window[axis]] - centre[axis]) ** 2 for axis in range(DIMENSIONS)]
+        squared = offsets[0][:, None, None] + offsets[1][None, :, None] + offsets[2][None, None, :]
+        np.minimum(gap[tuple(window)], np.sqrt(squared) - radius, out=gap[tuple(window)])
+    return gap
+
+
 def dielectric_faces(
     grid: DebyeGrid,
     structure: PQRData,
     solvent: SolventModel,
     surface: ReducedSurface | None = None,
+    smoothing: float = 0.0,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
     """Dielectric at the face centres, one array per axis.
 
@@ -127,6 +155,20 @@ def dielectric_faces(
             for staggered in range(DIMENSIONS)
         )
 
+    if smoothing > 0.0 and solvent.surface_model is not SurfaceModel.VAN_DER_WAALS:
+        # Refused rather than silently ignored. The ramp needs a *signed
+        # distance* to the boundary, and `min_i(|x - c_i| - r_i)` is that only
+        # for a union of spheres. The solvent-excluded surface is made of three
+        # families of patch and its distance function is not this expression —
+        # using it anyway would ramp against the wrong surface and report a
+        # number that looked like an improvement.
+        raise UnsupportedRequest(
+            f"dielectric_smoothing is implemented for {SurfaceModel.VAN_DER_WAALS.value} "
+            f"only, and this request is {solvent.surface_model.value}. The ramp is built "
+            "from an exact distance to a union of spheres; the solvent-excluded surface "
+            "needs one of its own, which ROADMAP.md section 12 records as the next step."
+        )
+
     # One surface for the three staggered lattices: they differ in where the
     # nodes are, not in where the solute is.
     surface = surface or ReducedSurface(structure, solvent)
@@ -134,7 +176,28 @@ def dielectric_faces(
     for axis in range(DIMENSIONS):
         axes = axis_coordinates(grid, staggered=axis)
         inside = surface.inside(axes)
-        eps = np.where(inside, solvent.solute_dielectric, solvent.solvent_dielectric)
+        if smoothing > 0.0:
+            # **Harmonic, not arithmetic**, and **sub-cell, not a band.** The
+            # mean is harmonic because that is the textbook one for flux normal
+            # to a layered interface, which is what a face coefficient in a
+            # finite-volume operator is; blended arithmetically M1c measured the
+            # Born energy going 0.853% -> 3.545%.
+            #
+            # The width is where a first attempt at this went wrong and the
+            # measurement is in ROADMAP.md section 12. Averaging the *indicator*
+            # over a box of whole cells smears the interface across three of
+            # them, and on the Born closed form that is **worse than the hard
+            # assignment at every rung but one**. Ramping the fraction across a
+            # single cell from the exact signed distance is 5-8x *better* than
+            # hard instead.
+            width = smoothing * float(min(grid.spacing))
+            gap = _surface_gap(axes, structure, width)
+            fraction = np.clip(0.5 - gap / (2.0 * width), 0.0, 1.0)
+            eps = 1.0 / (
+                fraction / solvent.solute_dielectric + (1.0 - fraction) / solvent.solvent_dielectric
+            )
+        else:
+            eps = np.where(inside, solvent.solute_dielectric, solvent.solvent_dielectric)
         faces.append(np.ascontiguousarray(eps, dtype=np.float64))
     return faces[0], faces[1], faces[2]
 

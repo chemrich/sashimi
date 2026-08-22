@@ -107,6 +107,17 @@ def size_grid(pqr: PQRData, spec: GridSpec) -> DebyeGrid:
     as its distance from the solute. There is no coarse grid and no focusing,
     which is the one place debye is structurally simpler than both incumbents:
     the box is solved directly, so `padding` is the whole boundary story.
+
+    **That simplicity has a price, and it is the largest single stage in a
+    solve.** The boundary condition is *not* the same approximation the
+    incumbents make: focusing is what lets APBS use `bcfl sdh`, the whole
+    molecule as one sphere and `O(boundary nodes)`, because a monopole is a good
+    description at 1.7x the molecular extent. With no coarse grid debye cannot
+    approximate that crudely, so it sums the screened tail over *every atom at
+    every face node* — 1.5 billion pairs on serum albumin, 36% of a solve,
+    scaling as atoms^1.45 where every other stage is near-linear. ROADMAP.md
+    section 12's "M9 — focusing, for the boundary and not the resolution" is the
+    plan to stop paying it.
     """
     extent = pqr.extent()
     center = pqr.center()
