@@ -4105,6 +4105,74 @@ radius equals the explicitly-multiplied formula — and not as
 `assert x ** 2 != x * x`, which would be asserting somebody's libm and would
 redden CI the day that libm improved.
 
+#### The sequel, three days later: a distance that went through BLAS
+
+**2026-08-22.** The `pow` finding above was not the only place an exact number
+rested on somebody else's arithmetic, and the second one was worse. `main` went
+red on `ubuntu-latest, full` at `698cbfc` — a README-only merge — with
+`test_the_compiled_rims_are_identical_to_the_last_bit` failing on origins and
+normals, **while the identical kernel code had passed on the push before it.**
+
+`np.linalg.norm` on a 1-D array is `sqrt(x.dot(x))`, and `dot` is BLAS.
+**OpenBLAS dispatches its `ddot` kernel by CPU microarchitecture at run time**,
+so the summation order — and the last bit of every distance taken this way —
+depends on which machine the job landed on. Two GitHub runners of the same
+operating system disagree. That is why it looked flaky and was not: it is
+deterministic per CPU and varies across them.
+
+**Two call sites, and the one CI caught was the harmless one.**
+
+- `_rim` built the rim's origin and normal from it. A rim circle out by an ulp
+  rarely moves a node, which is why the corpus never noticed.
+- `_neighbours` used it as `gap < inflated[i] + inflated[j]` — a **threshold**.
+  One ulp there flips whether two atoms are neighbours, which changes the rims,
+  the seats and therefore the surface. **That can move an energy rather than a
+  last bit, and it had been there since M4.** Nothing had reason to catch it: a
+  threshold only bites for a pair sitting within an ulp of touching, and the
+  corpus was recorded and verified on machines that happened to agree.
+
+Both now spell the distance out. The corpus reproduces all 58 cases on both
+paths afterwards, so nothing recorded moved *on this platform* — which was a
+real question rather than a formality, given the threshold.
+
+**What made it confirmable rather than merely plausible** was a second failure
+in the same run: `test_the_rim_does_not_square_a_scalar_with_pow`, the
+invariant guard written for the `pow` finding, still derived its `separation`
+with `np.linalg.norm` after `_rim` had stopped. It failed on Linux and passed
+on macOS with both values printed —
+
+    assert 2.664419145590815 == 2.6644191455908146
+
+— which is the divergence on one line of arithmetic rather than inferred from a
+surface. *A guard written for one platform-dependence found the next one by
+being wrong in the same way.*
+
+**The audit that followed, because two instances is a pattern and not a
+coincidence.** Every BLAS-routed number in the package, and whether it can reach
+an answer: `sources.py` takes an axis-wise norm, which is `add.reduce` rather
+than `dot`, so it is deterministic; `backend.py`'s energy genuinely is
+`np.dot(charges, phi)`, but the corpus compares with a per-case `rtol` and the
+bit-identity tests run both paths in one process where the dispatch is fixed;
+`analysis.py`'s extremum spacing is a threshold on a norm, noted and not
+exercised against exact recordings; `field.py`'s direction normalisation feeds
+tolerance-checked samples. **The two that mattered were the two feeding an exact
+comparison and a threshold**, which is the question to ask of each one rather
+than replacing them all.
+
+**The general rule, now stated twice over.** An exactly-recorded number must not
+pass through a library whose arithmetic is chosen at run time — `pow` from libm,
+`ddot` from BLAS. Neither is a bug in those libraries: both are free to
+associate as they like, and both do it differently on different machines. The
+requirement that found both was **bit-identity between two independent
+implementations**, which is a stronger test of the *first* implementation than
+anything written against it alone.
+
+*A test-quality note that cost a CI round trip.* `assert np.array_equal(origin,
+other[0])` prints `assert False` and nothing else, so the first failure said
+only that rim geometry differed. It now names the rim, the field and the ulp
+distance, and prints both values. **A test of last bits has to print the last
+bits.**
+
 #### Two mistakes inside the kernels, both caught before they ran
 
 - **An out-of-bounds write that only the last rim could reach.** The first draft
