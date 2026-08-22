@@ -4284,6 +4284,115 @@ commits and comments:
 | 8 debye | Phase 10 (handoff) | Phase 4 |
 | 9 Integration | Phase 4 | — |
 
+### Q0 and Q1 — the instrument, and the interface scheme it graded
+
+**2026-08-22.** Two blocks of performance work left debye's discretization
+untouched, by construction: every kernel was required to be bit-identical, and a
+bit-identical change cannot improve accuracy. This is the other axis.
+
+#### Q0 — what a pose spread does and does not measure
+
+`sashimi.invariants` said "the spread across poses is that backend's
+discretization error on that structure". **It is the part of that error that
+depends on grid phase**, and on debye it is the smaller part. Three findings,
+each of which changed a claim in this repository.
+
+**A pose spread cannot see a systematic error.** On `ala-gly` at 0.5 Å the
+dispersion is 0.88% while the mean sits several percent from where its own
+refinement extrapolates. A scheme can be beautifully phase-stable about the
+wrong answer, and a gate on dispersion alone would call that an improvement. So
+`grade_refinement` now reports the other half: solve at `h`, `h/2`, `h/4`, fit
+`E = limit + C h^order`, and report both.
+
+**The extrapolator is worth about half a percent, and that is measured rather
+than assumed.** Graded on the Born sphere, where the limit is a closed form: it
+lands 0.08–0.48% from exact and **beats the finest rung it was built from every
+time** (0.45–0.81%). It is a better number than any single solve and it is not a
+gold standard. `converging` guards it — a 2 Å sphere on a ladder starting at
+1 Å reads −172.6, −177.0, −171.7, and Richardson on that is 19.6% wrong. The
+guard refuses it.
+
+**The fitted order is not trustworthy at all.** On the same two spheres it reads
+1.95, 1.66, 1.62, 0.96 and 0.52 depending only on which three spacings are
+chosen. *An earlier note in this session called debye's convergence "first order
+at h^1.17" on the strength of one ladder; that number is a property of the
+ladder and the claim is withdrawn.* What survives is the ordering: the
+systematic error is larger than the phase-dependent one.
+
+**And the translation in `posed` does nothing.** `POSE_SHIFT_CELLS` carried a
+careful rationale about probing grid phase. It cannot: `size_grid` builds the
+box from `pqr.center()` and `pqr.extent()`, so translating the solute
+translates the lattice with it and every atom keeps its position relative to its
+own nodes. Measured on `ala-gly` at 0.5 Å, shifts of 0.25, 0.50 and 0.75 cells
+move the energy by 0.0, 0.0 and one ulp; the rotation moves it by 0.96 kJ/mol.
+**A pose spread here is a rotation spread.** One consequence: a spherically
+symmetric solute has no rotation either, so the metric is identically zero on a
+Born ion — the metric and the closed forms cover disjoint sets of structures,
+which is why Q1 below had to be graded twice.
+
+#### Q1 — the scheme was the whole result
+
+M1c recorded harmonic dielectric averaging taking the Born error from 0.853% to
+0.107%, and left it open because the real-structure check used APBS, which
+shares the assignment under test. Re-run with references that do not.
+
+**The first implementation failed, and how it failed is the finding.**
+"Smoothing over a band of `w` cells" reads naturally as averaging the indicator
+over a box of whole cells and blending harmonically. That smears the interface
+across three cells, and on the Born closed form it is **worse than the hard
+assignment at every rung but one** — 0.862% against hard's 0.806% at 0.25 Å,
+against M1c's reported 0.107%. The hard baseline reproduced (0.806% against
+0.853%), so the setup was right and the scheme was wrong.
+
+**Ramping the fraction across a single cell, from the exact signed distance,
+reproduces M1c's magnitude.** `min_i(|x - c_i| - r_i)` is exact for a union of
+spheres; the solute fraction is a linear ramp over one cell and the two
+dielectrics are blended harmonically, which is the textbook mean for flux normal
+to a layered interface.
+
+| a | h | hard | ramp 0.25 | ramp 0.5 |
+|---|---|---|---|---|
+| 2.0 | 0.500 | 4.569% | **0.087%** | 0.747% |
+| 2.0 | 0.250 | 1.450% | 0.138% | **0.185%** |
+| 3.0 | 0.500 | 1.492% | 0.441% | **0.310%** |
+| 3.0 | 0.250 | 0.806% | **0.100%** | 0.130% |
+| 3.0 | 0.125 | 0.453% | 0.098% | **0.060%** |
+
+**4–17× better**, and the width is load-bearing: a whole cell is worse than half
+a cell, and two cells is worse than not ramping at all.
+
+**The reference-free gate agrees**, which matters because the closed form is a
+sphere and the metric is blind to spheres. Pose dispersion on `ala-gly`, twelve
+poses, van der Waals:
+
+| h | hard | ramp 0.25 | ramp 0.5 |
+|---|---|---|---|
+| 1.000 | 2.950% | 1.817% | **0.537%** |
+| 0.500 | 0.737% | 0.423% | **0.206%** |
+| 0.250 | 0.152% | 0.067% | **0.027%** |
+
+**3.6–5.6× better**, and the means converge sooner: hard is still moving 6.2
+kJ/mol between its last two rungs where the ramp moves 1.4. **The ramp at 0.5 Å
+is closer to converged than hard at 0.25 Å** — worth a factor of two in
+resolution, which is eight times the work.
+
+#### What shipped, and what did not
+
+`DebyeOptions.dielectric_smoothing` is **off by default and the default is
+bit-identical** — the corpus reproduces all 58 cases unchanged. It is a knob
+rather than a default for one reason: **it is implemented for `van-der-waals`
+only, and the shipped default surface is `molecular`.** The ramp needs a signed
+distance, and `min_i(|x - c_i| - r_i)` is the distance to a union of spheres,
+not to the solvent-excluded surface — which is three families of patch with a
+distance function of its own. Ramping against the wrong surface would return a
+number that looked like an improvement, so `dielectric_faces` refuses instead.
+
+**That distance is the next piece of work, and it is the whole of it.** The
+evidence that it is worth building is above: on the boundary where the distance
+*is* available, a one-cell ramp is 4–17× better against an exact reference and
+3.6–5.6× better on a reference-free one. Nothing about that argument is specific
+to the van der Waals surface; only the distance function is.
+
 ### Phase 9 — the case for replacing protean's default, measured on both axes
 
 **2026-08-21.** Phase 9 is "protean consumes `SolveResult`", and the substantive

@@ -77,7 +77,7 @@ def _solve_state(
     accidentally inherit the fine grid's Debye-Huckel tail.
     """
     boundary = debye_huckel_boundary(grid, structure, solvent, homogeneous=homogeneous)
-    levels = build_levels(grid, structure, solvent)
+    levels = build_levels(grid, structure, solvent, options.dielectric_smoothing)
     rhs = source_term(grid, structure, solvent) - levels[0].apply(boundary)
     rhs[0, :, :] = rhs[-1, :, :] = 0.0
     rhs[:, 0, :] = rhs[:, -1, :] = 0.0

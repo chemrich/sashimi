@@ -211,7 +211,9 @@ def _prolong(coarse: FloatArray) -> FloatArray:
     return out
 
 
-def build_levels(grid: DebyeGrid, structure: PQRData, solvent: SolventModel) -> list[Level]:
+def build_levels(
+    grid: DebyeGrid, structure: PQRData, solvent: SolventModel, smoothing: float = 0.0
+) -> list[Level]:
     """The multigrid hierarchy, each level's operator built from the geometry.
 
     Re-discretized rather than algebraically coarsened: each level samples the
@@ -232,7 +234,9 @@ def build_levels(grid: DebyeGrid, structure: PQRData, solvent: SolventModel) -> 
     surface = ReducedSurface(structure, solvent)
     levels = []
     for level_grid in grid_hierarchy(grid):
-        eps_x, eps_y, eps_z = dielectric_faces(level_grid, structure, solvent, surface)
+        eps_x, eps_y, eps_z = dielectric_faces(
+            level_grid, structure, solvent, surface, smoothing=smoothing
+        )
         screening, _ = screening_nodes(level_grid, structure, solvent, surface)
         hx, hy, hz = level_grid.spacing
         levels.append(
