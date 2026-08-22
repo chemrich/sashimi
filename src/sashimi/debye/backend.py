@@ -36,7 +36,7 @@ from sashimi.debye.grid import DebyeGrid, size_grid
 from sashimi.debye.linear import SolveReport, build_levels, solve_system
 from sashimi.debye.options import DebyeOptions, check_equation, check_surface
 from sashimi.debye.sources import (
-    debye_huckel_boundary,
+    debye_huckel_boundaries,
     interpolate_at_atoms,
     source_term,
 )
@@ -67,7 +67,7 @@ def _solve_state(
     solvent: SolventModel,
     options: DebyeOptions,
     *,
-    homogeneous: bool,
+    boundary: FloatArray,
 ) -> tuple[FloatArray, SolveReport]:
     """One of the two states, returning the total potential in kT/e.
 
@@ -75,8 +75,11 @@ def _solve_state(
     end: every vector the solver touches then has a zero boundary, so the
     coarse-grid corrections need no boundary handling of their own and cannot
     accidentally inherit the fine grid's Debye-Huckel tail.
+
+    **The boundary is passed in rather than computed here**, because the two
+    states share the distance matrix it is built from and that matrix is 1.5
+    billion pairs on a protein. See `debye_huckel_boundaries`.
     """
-    boundary = debye_huckel_boundary(grid, structure, solvent, homogeneous=homogeneous)
     levels = build_levels(grid, structure, solvent, options.dielectric_smoothing)
     rhs = source_term(grid, structure, solvent) - levels[0].apply(boundary)
     rhs[0, :, :] = rhs[-1, :, :] = 0.0
@@ -116,24 +119,33 @@ class DebyeSolver:
 
         started = time.perf_counter()
         grid = size_grid(request.structure, request.grid)
+
+        # The reference state: solute dielectric everywhere, no mobile ions.
+        # Built by replacing the solvent's properties rather than by a second
+        # code path, so the two states cannot drift apart in anything but the
+        # physics being varied. Named up here because both states' boundary
+        # values come out of one pass over the distances — and only the states
+        # actually being solved are asked for, so a `want_energy=False` request
+        # still pays for one.
+        reference_solvent = replace(
+            solvent,
+            solvent_dielectric=solvent.solute_dielectric,
+            ionic_strength=0.0,
+        )
+        wanted = [(solvent, False)]
+        if request.want_energy:
+            wanted.append((reference_solvent, True))
+        boundaries = debye_huckel_boundaries(grid, request.structure, wanted)
+
         solvated, solvated_report = _solve_state(
-            grid, request.structure, solvent, self.options, homogeneous=False
+            grid, request.structure, solvent, self.options, boundary=boundaries[0]
         )
 
         energy: float | None = None
         reference_report: SolveReport | None = None
         if request.want_energy:
-            # The reference state: solute dielectric everywhere, no mobile ions.
-            # Built by replacing the solvent's properties rather than by a
-            # second code path, so the two states cannot drift apart in
-            # anything but the physics being varied.
-            reference_solvent = replace(
-                solvent,
-                solvent_dielectric=solvent.solute_dielectric,
-                ionic_strength=0.0,
-            )
             uniform, reference_report = _solve_state(
-                grid, request.structure, reference_solvent, self.options, homogeneous=True
+                grid, request.structure, reference_solvent, self.options, boundary=boundaries[1]
             )
             energy = _polar_solvation_energy(
                 grid, request.structure, solvated - uniform, solvent.temperature

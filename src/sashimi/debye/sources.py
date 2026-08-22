@@ -23,6 +23,8 @@ exact for a lone ion at any distance and asymptotically right for a molecule.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from sashimi.analytic import debye_length_a
@@ -130,7 +132,30 @@ def debye_huckel_boundary(
     *,
     homogeneous: bool = False,
 ) -> FloatArray:
-    """Dirichlet values on the box face, kT/e, zero in the interior.
+    """Dirichlet values on the box face for one state. See `debye_huckel_boundaries`."""
+    return debye_huckel_boundaries(grid, structure, [(solvent, homogeneous)])[0]
+
+
+def debye_huckel_boundaries(
+    grid: DebyeGrid,
+    structure: PQRData,
+    states: Sequence[tuple[SolventModel, bool]],
+) -> list[FloatArray]:
+    """Dirichlet values on the box face, kT/e, zero in the interior — for several
+    states over one pass of distances.
+
+    **Why this takes a list.** A solve with `want_energy` needs two of these:
+    the solvated state and the uniform-dielectric reference. They differ only in
+    a dielectric, a screening length and a prefactor — and they share the
+    expensive half, which is the distance from every boundary node to every
+    atom. On serum albumin that is 82,050 nodes against 18,242 atoms, **1.5
+    billion pairs**, and computing it twice cost 6.4 s of a 45 s solve for
+    nothing. Measured separately: 11.82 s for the screened state and 6.37 s for
+    the reference, where the reference has no `exp` at all.
+
+    That is the same waste M4 found in `dielectric_faces`, where the reference
+    state built a surface and threw it away. Here the arithmetic per state is
+    untouched, so the fields come back bit-identical; only the sharing is new.
 
     Every atom contributes a screened Coulomb tail, evaluated with its own
     ion-exclusion radius:
@@ -143,21 +168,30 @@ def debye_huckel_boundary(
     expression for both states is what makes their difference a solvation
     energy rather than two unrelated numbers subtracted.
     """
-    eps = solvent.solute_dielectric if homogeneous else solvent.solvent_dielectric
-    kappa = (
-        0.0
-        if homogeneous or solvent.ionic_strength <= 0.0
-        else 1.0
-        / debye_length_a(solvent.ionic_strength, solvent.solvent_dielectric, solvent.temperature)
-    )
-    prefactor = bjerrum_length_a(solvent.temperature) / eps
+    recipes = []
+    for solvent, homogeneous in states:
+        eps = solvent.solute_dielectric if homogeneous else solvent.solvent_dielectric
+        kappa = (
+            0.0
+            if homogeneous or solvent.ionic_strength <= 0.0
+            else 1.0
+            / debye_length_a(
+                solvent.ionic_strength, solvent.solvent_dielectric, solvent.temperature
+            )
+        )
+        exclusion = structure.radii + solvent.ion_radius
+        recipes.append(
+            (
+                bjerrum_length_a(solvent.temperature) / eps,
+                kappa,
+                exclusion,
+                structure.charges / (1.0 + kappa * exclusion) if kappa else structure.charges,
+            )
+        )
 
     mask = boundary_mask(grid.shape)
     indices = np.argwhere(mask)
     points = np.asarray(grid.origin) + indices * np.asarray(grid.spacing)
-
-    exclusion = structure.radii + solvent.ion_radius
-    screening = structure.charges / (1.0 + kappa * exclusion) if kappa else structure.charges
 
     # The Debye-Huckel tail is a point-charge expression, so it is meaningful
     # only where the box face is clear of the charges — which is what `padding`
@@ -170,7 +204,11 @@ def debye_huckel_boundary(
     # singularity into 7.1e6 kT/e on that node and solved on. A confident wrong
     # number, from a guard that was documented as unreachable.
     closest = float("inf")
-    values = np.zeros(len(points), dtype=np.float64)
+    values = [np.zeros(len(points), dtype=np.float64) for _ in recipes]
+    # The bound is in *pairs*, so it holds whatever the atom count is — and it
+    # bounds one distance block, which is now shared rather than rebuilt per
+    # state. Each state's `contribution` is built and released inside the state
+    # loop, so the peak is what it was with one state.
     chunk = max(1, _PAIR_CHUNK // max(1, structure.n_atoms))
     for start in range(0, len(points), chunk):
         block = points[start : start + chunk]
@@ -185,14 +223,18 @@ def debye_huckel_boundary(
                 "own singularity, not a potential. Increase GridSpec.padding — it is the "
                 "whole boundary condition for this solver."
             )
-        contribution = screening[None, :] / distances
-        if kappa:
-            contribution *= np.exp(-kappa * (distances - exclusion[None, :]))
-        values[start : start + chunk] = prefactor * contribution.sum(axis=1)
+        for (prefactor, kappa, exclusion, screening), out in zip(recipes, values, strict=True):
+            contribution = screening[None, :] / distances
+            if kappa:
+                contribution *= np.exp(-kappa * (distances - exclusion[None, :]))
+            out[start : start + chunk] = prefactor * contribution.sum(axis=1)
 
-    field = np.zeros(grid.shape, dtype=np.float64)
-    field[tuple(indices.T)] = values
-    return field
+    fields = []
+    for out in values:
+        field = np.zeros(grid.shape, dtype=np.float64)
+        field[tuple(indices.T)] = out
+        fields.append(field)
+    return fields
 
 
 def source_term(grid: DebyeGrid, structure: PQRData, solvent: SolventModel) -> FloatArray:

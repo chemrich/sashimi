@@ -92,6 +92,32 @@ def bjerrum_length_a(temperature: float) -> float:
     return metres / ANGSTROM
 
 
+def _surface_gap(axes: list[FloatArray], structure: PQRData, reach: float) -> FloatArray:
+    """Signed distance to the van der Waals surface, clamped beyond `reach`.
+
+    `min_i(|x - c_i| - r_i)`, which is exact for a union of spheres and is why
+    this is offered on that boundary and refused on the other one. Computed over
+    each sphere's own index window, like `inside_union_of_spheres` — anything
+    further than `reach` from every atom is solvent by a margin the ramp does
+    not care about, so it keeps the clamp and is never visited.
+    """
+    shape = tuple(len(axis) for axis in axes)
+    gap = np.full(shape, reach, dtype=np.float64)
+    for centre, radius in zip(structure.coords, structure.radii, strict=True):
+        window = []
+        for axis in range(DIMENSIONS):
+            span = radius + reach
+            lo = int(np.searchsorted(axes[axis], centre[axis] - span, side="left"))
+            hi = int(np.searchsorted(axes[axis], centre[axis] + span, side="right"))
+            window.append(slice(lo, hi))
+        if any(w.start >= w.stop for w in window):
+            continue
+        offsets = [(axes[axis][window[axis]] - centre[axis]) ** 2 for axis in range(DIMENSIONS)]
+        squared = offsets[0][:, None, None] + offsets[1][None, :, None] + offsets[2][None, None, :]
+        np.minimum(gap[tuple(window)], np.sqrt(squared) - radius, out=gap[tuple(window)])
+    return gap
+
+
 def dielectric_faces(
     grid: DebyeGrid,
     structure: PQRData,

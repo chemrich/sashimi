@@ -161,6 +161,14 @@ def inside_union_of_spheres(
     """
     shape = tuple(len(axis) for axis in axes)
     mask = np.zeros(shape, dtype=bool)
+
+    # The compiled path, when `sashimi-electro[fast]` is installed. Same
+    # contract as the families: a boolean or, held to a bit-identical mask by
+    # `tests/test_debye_kernel.py`.
+    if kernel.available():
+        kernel.mark_union(axes, coords, radii, mask)
+        return mask
+
     for center, radius in zip(coords, radii, strict=True):
         if radius <= 0.0:
             continue  # a zero-radius atom bounds no volume; Kirkwood's has one
