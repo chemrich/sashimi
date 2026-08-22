@@ -460,3 +460,24 @@ def test_the_rim_does_not_square_a_scalar_with_pow():
             assert ring[2] == float(np.sqrt(inflated[i] * inflated[i] - along * along))
             checked += 1
     assert checked > 0, "no rim survived, so nothing was checked"
+
+
+@needs_numba
+@pytest.mark.parametrize("structure", [PEPTIDE, "tests/data/apbs-examples/fas2.pqr"])
+def test_the_compiled_union_of_spheres_is_identical(structure: str, monkeypatch):
+    """Both radii sets, because the two differ by more than a constant.
+
+    `inside()` asks this twice — once at the van der Waals radii and once
+    inflated by the probe — and the inflated union is roughly twice the nodes,
+    with far more overlap between spheres. A kernel that got the window bounds
+    right for one could still be wrong at the other.
+    """
+    pqr = read_pqr(structure)
+    probe = SolventModel(surface_model=SurfaceModel.MOLECULAR).surface_radius
+    axes = axis_coordinates(size_grid(pqr, GridSpec(resolution=1.0, padding=10.0)))
+    for radii in (pqr.radii, pqr.radii + probe):
+        reference, compiled = _both_ways(
+            monkeypatch, lambda r=radii: surface_module.inside_union_of_spheres(axes, pqr.coords, r)
+        )
+        assert reference.any(), "the fixture marked nothing, so this compares two empties"
+        assert np.array_equal(reference, compiled)
