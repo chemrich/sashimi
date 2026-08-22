@@ -15,3 +15,8 @@ io.mc
 # Solve artifacts: sashimi writes maps next to the PQR by default, so running
 # anything against a fixture drops megabytes into tests/data.
 tests/data/potential-*.dx
+
+# macOS Finder metadata. Committed twice on 2026-08-22 by a `git add -A` in a
+# repository that had no rule against it and no hook that would notice — see the
+# commit removing them. Binary, machine-specific, and useless to every consumer.
+.DS_Store
