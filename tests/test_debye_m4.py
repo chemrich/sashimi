@@ -60,7 +60,7 @@ from sashimi.corpus import (
 from sashimi.debye import DebyeSolver
 from sashimi.debye.grid import axis_coordinates, size_grid
 from sashimi.debye.surface import inside_solute, inside_union_of_spheres
-from sashimi.pqr import parse_pqr
+from sashimi.pqr import parse_pqr, read_pqr
 from sashimi.protocol import (
     FiniteDifferenceRequest,
     FloatArray,
@@ -289,3 +289,80 @@ def _solve(case: Case) -> dict[str, float]:
     result = DebyeSolver().solve(case.request())
     assert result.energy_kj_mol is not None, f"{case.name}: the case asked for no energy"
     return {"energy_kj_mol": result.energy_kj_mol}
+
+
+def test_the_signed_distance_agrees_with_the_boolean_it_is_derived_from():
+    """M8a's oracle, checked against M4's — `sign(gap)` must reproduce `inside`.
+
+    `signed_gap` is not a second construction: `inside` reads "solvent is the
+    accessible set dilated by the probe", so the signed distance to the boundary
+    is `probe - dist(x, A)` and the three families already compute that distance
+    before discarding it. Two implementations of one definition, so exact
+    agreement is the bar.
+
+    **It found a real defect immediately.** The radial family wrote its
+    distances with `np.minimum(..., out=block[fancy_index])`, and fancy indexing
+    returns a copy — every value landed in a temporary. The surface came back
+    saturated wherever that family was the only one to reach a node, and this
+    comparison is what showed it.
+    """
+    from sashimi.debye.surface import ReducedSurface  # noqa: PLC0415
+
+    for path, resolution in (
+        ("tests/data/ala-gly.pqr", 0.5),
+        ("tests/data/apbs-examples/fas2.pqr", 1.0),
+    ):
+        structure = read_pqr(path)
+        for model in (SurfaceModel.VAN_DER_WAALS, SurfaceModel.MOLECULAR):
+            surface = ReducedSurface(structure, SolventModel(surface_model=model))
+            axes = axis_coordinates(size_grid(structure, GridSpec(resolution=resolution)))
+            inside = surface.inside(axes)
+            gap = surface.signed_gap(axes)
+            assert inside.any() and not inside.all(), f"{path} {model} decided nothing either way"
+            assert np.array_equal(gap <= 0.0, inside), (
+                f"{path} {model}: the distance and the boolean disagree on "
+                f"{int(((gap <= 0.0) != inside).sum())} nodes"
+            )
+
+
+def test_the_ramp_raises_the_convergence_order_on_both_surfaces():
+    """M8a's gate, and the one a pose spread alone would have failed to catch.
+
+    A hard face-centre dielectric converges at order 0.3 (van der Waals) and
+    1.0 (molecular) on this structure. Ramping the solute fraction across a cell
+    from the signed distance takes both above 2 — which is the interface
+    treatment, not the solver, being what bounded the accuracy.
+
+    **The width is surface-dependent and that is the finding**: 0.5 cells suits
+    the van der Waals surface and over-smooths the solvent-excluded one, whose
+    re-entrant patches are tighter. Graded here at the width measured best for
+    each, with a bar of 1.5 — comfortably under the 2.3-3.8 measured, and
+    comfortably over the hard scheme it has to beat.
+    """
+    from sashimi.debye.options import DebyeOptions  # noqa: PLC0415
+    from sashimi.invariants import Refinement  # noqa: PLC0415
+
+    ladder = (1.0, 0.5, 0.25)
+    structure = read_pqr("tests/data/ala-gly.pqr")
+
+    def order(model: SurfaceModel, width: float) -> float:
+        solver = DebyeSolver(options=DebyeOptions(dielectric_smoothing=width))
+        energies = []
+        for spacing in ladder:
+            request = FiniteDifferenceRequest(
+                structure=structure,
+                solvent=SolventModel(surface_model=model),
+                grid=GridSpec(resolution=spacing, padding=10.0),
+                want_potential=False,
+            )
+            answer = solver.solve(request).energy_kj_mol
+            assert answer is not None
+            energies.append(float(answer))
+        grade = Refinement(backend="debye", spacings=ladder, energies=tuple(energies))
+        assert grade.converging, f"{model} at width {width} is not converging: {energies}"
+        return grade.order
+
+    for model, width in ((SurfaceModel.VAN_DER_WAALS, 0.5), (SurfaceModel.MOLECULAR, 0.25)):
+        assert order(model, width) > 1.5 > order(model, 0.0), (
+            f"the ramp no longer raises the order on {model.value}"
+        )

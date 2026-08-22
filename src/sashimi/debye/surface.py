@@ -934,6 +934,157 @@ def _toroidally_reachable(
     return reachable
 
 
+def _radial_distance(
+    axes: list[FloatArray],
+    spheres: _Spheres,
+    shell: np.ndarray,
+    nearest: FloatArray,
+) -> None:
+    """Family one, as a distance instead of a verdict. Mutates `nearest`.
+
+    `_radially_reachable` asks whether a legal probe centre sits within `probe`
+    of a node. This asks how far the nearest one is, over the same candidates
+    and with the same legality test — and the candidate distance is already in
+    that function, discarded: a shell node `x` inside atom `i`'s accessible
+    sphere projects to `a = c_i + R_i (x - c_i)/|x - c_i|`, and `|x - a|` is
+    exactly `R_i - |x - c_i|`, which the docstring there proves is at most the
+    probe.
+    """
+    coords, inflated = spheres.coords, spheres.inflated
+    for index, (centre, radius) in enumerate(zip(coords, inflated, strict=True)):
+        if radius <= 0.0:
+            continue
+        window = _window(axes, centre, radius)
+        if window is None:
+            continue
+        box = tuple(window)
+        candidates = shell[box]
+        if not candidates.any():
+            continue
+
+        local, points = _nodes_in(axes, window, candidates)
+        offset = points - centre
+        span = np.sqrt((offset**2).sum(axis=1))
+        usable = span > DEGENERATE
+        pushed = np.zeros_like(points)
+        pushed[usable] = centre + radius * offset[usable] / span[usable, None]
+
+        allowed = np.zeros(len(points), dtype=bool)
+        allowed[usable] = _legal(pushed[usable], coords, inflated, spheres.testable[index])
+        if not allowed.any():
+            continue
+        reach = np.where(allowed, radius - span, np.inf)
+        # Assigned rather than `np.minimum(..., out=...)`: fancy indexing
+        # returns a *copy*, so an in-place write lands in a temporary and is
+        # discarded. The first version did that and the surface came back
+        # saturated wherever this family was the only one to reach a node —
+        # caught by comparing `sign(gap)` against `inside`, which is why that
+        # comparison is a test and not a one-off.
+        block = nearest[box]
+        block[local[0], local[1], local[2]] = np.minimum(block[local[0], local[1], local[2]], reach)
+        nearest[box] = block
+
+
+def _toroidal_distance(
+    axes: list[FloatArray],
+    surface: ReducedSurface,
+    shell: np.ndarray,
+    nearest: FloatArray,
+) -> None:
+    """Family two, as a distance. Mutates `nearest`.
+
+    The projection onto the rim circle is the same one `_toroidally_reachable`
+    makes, and `sqrt(gap**2 + axial**2)` is the quantity it compares against the
+    probe — so this is that comparison's left-hand side, kept.
+
+    **No early-out, and that is the cost of a distance.** The boolean version
+    skips a node another rim already claimed, because a boolean or does not care
+    which rim won. A minimum does: every rim that reaches a node has to be
+    offered, so `decided` has no analogue here.
+    """
+    spheres = surface.spheres
+    coords, inflated = spheres.coords, spheres.inflated
+    rims = surface.rims
+    nodes = _Nodes.of(axes, shell)
+    if not rims or not len(nodes):
+        return
+
+    origins = np.array([origin for origin, _, _, _ in rims])
+    normals = np.array([normal for _, normal, _, _ in rims])
+    ring_radii = np.array([ring_radius for _, _, ring_radius, _ in rims])
+    reach = ring_radii + surface.probe
+    bins = _Bins(nodes.points, float(np.median(reach)))
+    best = np.full(len(nodes), np.inf, dtype=np.float64)
+
+    span = nodes.points.max(axis=0) - nodes.points.min(axis=0)
+    volume = float(np.prod(np.maximum(span, bins.cell)))
+    density = len(nodes) / volume
+    expected = density * (2.0 * reach + bins.cell) ** DIMENSIONS
+
+    for first, last in _batches(expected, PAIR_BATCH):
+        batch = slice(first, last)
+        rim, node = bins.near_many(origins[batch], reach[batch])
+        if not len(rim):
+            continue
+        owner = rim + first
+        offset = nodes.points[node] - origins[owner]
+        normal = normals[owner]
+        axial = (offset * normal).sum(axis=1)
+        radial = offset - axial[:, None] * normal
+        length = np.sqrt((radial**2).sum(axis=1))
+        usable = length > DEGENERATE
+        if not usable.any():
+            continue
+        rim, owner, node = rim[usable], owner[usable], node[usable]
+        axial, length = axial[usable], length[usable]
+        projected = origins[owner] + ring_radii[owner][:, None] * radial[usable] / length[:, None]
+        apart = np.sqrt((length - ring_radii[owner]) ** 2 + axial**2)
+
+        edges = np.searchsorted(rim, np.arange(last - first + 1))
+        for local, (lo, hi) in enumerate(itertools.pairwise(edges)):
+            if lo == hi:
+                continue
+            allowed = _legal(projected[lo:hi], coords, inflated, rims[first + local][3])
+            if not allowed.any():
+                continue
+            hit = node[lo:hi][allowed]
+            np.minimum.at(best, hit, apart[lo:hi][allowed])
+
+    marked = nearest[nodes.index[0], nodes.index[1], nodes.index[2]]
+    nearest[nodes.index[0], nodes.index[1], nodes.index[2]] = np.minimum(marked, best)
+
+
+def _vertex_distance(
+    axes: list[FloatArray],
+    surface: ReducedSurface,
+    shell: np.ndarray,
+    nearest: FloatArray,
+) -> None:
+    """Family three, as a distance: the nearest legal seat. Mutates `nearest`."""
+    seats = surface.seats
+    if not len(seats):
+        return
+    nodes = _Nodes.of(axes, shell)
+    if not len(nodes):
+        return
+    best = np.full(len(nodes), np.inf, dtype=np.float64)
+    bins = _Bins(seats, surface.probe)
+    keys = bins.keys_of(nodes.points)
+    order = np.lexsort((keys[:, 2], keys[:, 1], keys[:, 0]))
+    ordered = keys[order]
+    starts = np.flatnonzero(np.r_[True, (ordered[1:] != ordered[:-1]).any(axis=1)])
+    stops = np.r_[starts[1:], len(ordered)]
+    for start, stop in zip(starts, stops, strict=True):
+        found = bins.gather(ordered[start])
+        if not len(found):
+            continue
+        members = order[start:stop]
+        gap = nodes.points[members][:, None, :] - seats[found][None, :, :]
+        best[members] = np.sqrt((gap * gap).sum(axis=2)).min(axis=1)
+    marked = nearest[nodes.index[0], nodes.index[1], nodes.index[2]]
+    nearest[nodes.index[0], nodes.index[1], nodes.index[2]] = np.minimum(marked, best)
+
+
 def _rims(spheres: _Spheres) -> list[tuple[FloatArray, FloatArray, float, np.ndarray]]:
     """Every reachable circle where two accessible spheres meet, and what blocks it.
 
@@ -1301,6 +1452,53 @@ class ReducedSurface:
     def seats(self) -> FloatArray:
         return _probe_seats(self.spheres)
 
+    def signed_gap(self, axes: list[FloatArray]) -> FloatArray:
+        """Signed distance to the solvent-excluded surface: negative inside the solute.
+
+        **This falls out of the construction rather than being a second one.**
+        `inside` reads: solvent is the accessible set `A` dilated by the probe.
+        So a node is solvent exactly when the nearest legal probe centre is
+        within `probe` of it, and the *signed distance to the boundary* is
+
+            gap(x) = probe - dist(x, A)
+
+        — zero where the two coincide, positive out in the solvent, negative in
+        the solute. The three families already compute `dist(x, A)` and throw it
+        away: each finds a candidate legal probe centre and asks whether it is
+        within the probe. This asks how far it is.
+
+        **Only the shell is computed, and the rest is exact anyway.** Inside the
+        van der Waals union every point is solute by the proof in this module's
+        header, and outside the inflated union every point is a legal probe
+        centre, so `dist = 0`. Between them is where the surface lives and where
+        the three families run. The two saturated regions are filled with values
+        far enough outside the band that any ramp built on this clamps.
+
+        Costlier than `inside` for one structural reason, recorded because it is
+        not obvious: the boolean version stops asking once a node is claimed —
+        a boolean or does not care which feature won. A minimum does, so every
+        rim that reaches a node has to be offered and the early-out is gone.
+        """
+        structure = self.structure
+        inside_vdw = inside_union_of_spheres(axes, structure.coords, structure.radii)
+        if self.solvent.surface_model is not SurfaceModel.MOLECULAR or self.probe <= 0.0:
+            return _union_gap(axes, structure.coords, structure.radii)
+
+        inflated_mask = inside_union_of_spheres(
+            axes, structure.coords, structure.radii + self.probe
+        )
+        shell = inflated_mask & ~inside_vdw
+        # `probe` beyond the band is saturated territory either way, and using
+        # it rather than `inf` keeps the array finite for anything that plots it.
+        far = 2.0 * self.probe
+        nearest = np.where(inflated_mask, far, 0.0).astype(np.float64)
+        if shell.any():
+            _radial_distance(axes, self.spheres, shell, nearest)
+            _toroidal_distance(axes, self, shell, nearest)
+            _vertex_distance(axes, self, shell, nearest)
+        np.minimum(nearest, far, out=nearest)
+        return np.asarray(self.probe - nearest, dtype=np.float64)
+
     def inside(self, axes: list[FloatArray]) -> np.ndarray:
         """Boolean mask over the lattice spanned by `axes`: inside the solute.
 
@@ -1340,6 +1538,21 @@ class ReducedSurface:
             reachable |= _vertex_reachable(axes, self, still)
 
         return np.asarray(inside_vdw | (inflated_mask & ~reachable), dtype=bool)
+
+
+def _union_gap(axes: list[FloatArray], coords: FloatArray, radii: FloatArray) -> FloatArray:
+    """Signed distance to a union of spheres: `min_i(|x - c_i| - r_i)`, exactly.
+
+    The van der Waals case, and the one `dielectric.py` used before the
+    solvent-excluded surface had a distance of its own.
+    """
+    shape = tuple(len(axis) for axis in axes)
+    mesh = np.meshgrid(*axes, indexing="ij")
+    gap = np.full(shape, np.inf, dtype=np.float64)
+    for centre, radius in zip(coords, radii, strict=True):
+        squared = sum((mesh[axis] - centre[axis]) ** 2 for axis in range(DIMENSIONS))
+        np.minimum(gap, np.sqrt(squared) - radius, out=gap)
+    return gap
 
 
 def inside_solute(
