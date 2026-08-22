@@ -2828,7 +2828,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. See the sections below |
 | M8 ✅ | **The interface, graded without a reference** | **met for `van-der-waals` 2026-08-22, and the default surface is not that.** Two halves. The *instrument*: a pose spread sees only the phase-dependent half of the discretization error, so `grade_refinement` adds the other by Richardson over h, h/2, h/4 — validated against the Born closed form at **0.08–0.48%**, beating the finest rung it is built from every time, with a `converging` guard that refuses a ladder reading −172.6, −177.0, −171.7 rather than fitting it. The *scheme*: a hard face-centre dielectric replaced by a solute fraction ramped across **one cell** from the exact signed distance and blended harmonically — **4–17× against the Born closed form and 3.6–5.6× on pose dispersion**, with the ramp at 0.5 Å closer to converged than the hard assignment at 0.25 Å. Shipped off by default and bit-identical when off. Three claims of this document died in the process: the fitted convergence order is a property of the ladder and not the method, `posed`'s translation moves nothing because the box follows the solute, and averaging the indicator over a band of *whole* cells is worse than not averaging at all |
 | M8a ✅ | **The solvent-excluded distance** | **met 2026-08-22**, and it moved the number M8 could not: the ramp raises the energy's convergence order from **0.32 to 2.65** on van der Waals and **1.05 to 2.53** on molecular — an interface treatment ceasing to bound the accuracy. `ReducedSurface.signed_gap` is `probe - dist(x, A)`, out of the same three families that decide `inside`, and `sign(gap)` reproduces `inside` node for node. Both ramp widths work on both surfaces and their limits agree to 0.14% and 0.16%. *An earlier draft reported the best width as surface-dependent; that was a one-sided distance of its own making and is withdrawn below.* Pose dispersion alone would have ratified the bug, which is what Q0's other half is for |
-| M9 | **Focusing, for the boundary and not the resolution** | a coarse pre-solve supplying the fine grid's Dirichlet data, in place of the multi-atom Debye-Hückel sum. **Named for what debye would use it for**: the incumbents focus to put resolution where it matters, and debye would focus to stop paying `O(nodes × atoms)` for a boundary condition. *Exit, and both halves are required:* debye's whole-solve scaling falls from **atoms^1.15** to near-linear across the 906–18,242-atom ladder with the boundary stage below 10% of a solve; **and** the Born closed-form error and the `ala-gly` pose dispersion are no worse than the values the multi-atom boundary gives, with every moved corpus value re-recorded against a reference that does not share the approximation. Measured groundwork is in the section below |
+| M9 | **Focusing, for the boundary and not the resolution** | a coarse pre-solve supplying the fine grid's Dirichlet data, in place of the multi-atom Debye-Hückel sum. **Named for what debye would use it for**: the incumbents focus to put resolution where it matters, and debye would focus to stop paying `O(nodes × atoms)` for a boundary condition. *Exit, rewritten 2026-08-22 after an adversarial review found the first version blind to the quantity M9 changes.* **Speed:** total CPU per solve fits atoms^≤1.05 across the 906→18,242-atom ladder **and** is strictly lower than the `mdh` baseline on every rung — wall clock, not stage percentages, because a stage-named bar is passed by relabelling work into the coarse build. **Accuracy, on observables that can see a boundary change:** `residue_potentials` on fas2, 1a63 and serum albumin against the exact `mdh` sum on the same box and lattice, at r ≥ 0.999, sign agreement ≥ 99% and magnitude within 1.02× — half the debye-vs-APBS gap phase 9 quotes, because M9 must not spend debye's whole margin against the incumbent it replaces; energy on the large elongated charged cases within 0.5%, with fas2 graded against its **TABI-PB** recording, the only box-free referee at protein scale; and a padding sweep at fixed `h` in which the focusing-minus-`mdh` difference falls monotonically, proving the residual is boundary-model error. **The first version gated on the Born ion and `ala-gly` pose dispersion, and both are blind by construction** — a one-atom solute makes `sdh` and `mdh` bit-identical, and `ala-gly` is net-neutral so an `sdh` boundary is identically zero, a 100% deletion that moves dispersion 0.01 pp while moving the mean 3.12 kJ/mol. They stay as regression anchors, not as bars |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
 18 of them with closed forms; three independent reference backends to be graded
@@ -4484,9 +4484,13 @@ refused it, and a `/code-review` pass is what found the cause.
 ### M9 — focusing, for the boundary and not the resolution
 
 **Named 2026-08-22, and the name is the argument.** Both incumbents focus:
-`mg-auto` solves a coarse box at `CFAC × extent` and then a fine box at
-`extent + 2 × padding`, carrying the coarse solution inward as the fine grid's
-Dirichlet data. The usual reason to want that is *resolution* — detail where the
+`mg-auto` solves a fine box at `extent + 2 × padding` and a coarse box at
+**`CFAC × fglen`** — 1.7 times the *fine box*, not 1.7 times the extent, which
+is about 2.1× the extent on serum albumin — carrying the coarse solution inward
+as the fine grid's Dirichlet data. *An earlier draft of this section said
+`CFAC × extent`. Under that rule 69 of the corpus's 100 cases fail containment
+and APBS 3.4.1 hard-aborts with "Finest mesh has fallen off the coarser
+meshes"; `apbs/grid.py` has it right and this section did not.* The usual reason to want that is *resolution* — detail where the
 chemistry is, without paying for it everywhere. **That is not why debye would
 want it**, and calling this "focusing" without the qualifier would send the next
 reader looking for an active site.
@@ -4515,13 +4519,36 @@ compiled and thirty years tuned.
 `sashimi.apbs.input` asks for **`bcfl sdh`** — *single* Debye-Hückel. APBS places
 the entire molecule at the boundary as **one sphere carrying the net charge**,
 which is `O(boundary nodes)` and independent of how many atoms there are. It can
-afford something that crude *because* focusing puts that boundary at 1.7×
-the molecular extent, where a monopole is a good description, and then refines
-inward.
+afford something that crude *because* focusing moves that boundary out to 1.7×
+the fine box — where the monopole is still 5–61% RMS wrong, but where the error
+is exponentially damped by salt before it reaches the fine face (4.5 Debye
+lengths on albumin) and where the `l ≥ 1` content it omits falls as
+`(r/R)^l = 0.588^l` — and then refines inward.
 
-debye has no focusing, so it cannot afford a crude boundary. It sums the
-screened tail over **every atom at every face node** — the equivalent of APBS's
-`mdh` — and section 12's measurement of that is:
+debye has no focusing, and the claim that it therefore *cannot afford* a crude
+boundary was asserted here and is **false as stated**: `sdh` on debye's existing
+box costs only **0.37–1.83%** of the energy, takes albumin 51.1 s to 28.3 s, and
+moves whole-solve scaling from atoms^1.176 to atoms^0.972. **It passes this
+milestone's exit criterion as first written, in ten lines** — which is a fact
+about the criterion, not about the design.
+
+The real argument is geometric and is stronger. At `padding = 10 Å` debye's box
+face sits at `r_max/|R| = 0.89–1.25` — **inside the solute's own circumscribing
+sphere** for every structure above ~2,000 atoms — and no single-centre expansion
+converges there at any order. Measured on fas2 the reference-state error runs
+18.2% (monopole) → 5.2% (+dipole) → 4.5% (+quadrupole) → 2.2% (+octupole):
+stalling, not converging. *That* is why the multi-atom sum is there, and why a
+multipole expansion is not the cheap way out.
+
+**The two states are not equally at risk and the plan treated them as one.** On
+albumin the reference (κ = 0, uniform dielectric) boundary has an RMS of
+**117.5 kT/e** against the screened state's **0.0398** — three thousand times —
+so every bit of a crude boundary's damage lands in the reference state, which is
+also the expensive one. A distance cutoff, the obvious cheap fix, works only on
+the screened half.
+
+It sums the screened tail over **every atom at every face node** — the
+equivalent of APBS's `mdh` — and section 12's measurement of that is:
 
     82,050 face nodes × 18,242 atoms = 1.50 billion pairs
     36% of a solve, scaling as atoms^1.45
@@ -4554,21 +4581,57 @@ That remains attractive and it has a trap: the naive split's source term is
 `O(grid points × atoms)`, which is the same shape as the boundary problem it
 would sit next to. It needs a cost model before any physics.
 
-Focusing has no such trap. The coarse solve is cheap — **all of debye's linear
-algebra is 11% of a run** — and it replaces the largest single stage and the
-worst scaling term at once. It is also the most conservative option available:
+Focusing's trap is a different one, and the first draft of this section walked
+into it: **a coarse box needs a coarse `build_levels`, not just a coarse
+multigrid solve.** `build_levels` calls `dielectric_faces` and `screening_nodes`
+at every level, so a second box is a second *geometry* — 47–55% of a run by M7's
+own row — where the linear algebra it was priced against is 11%. Priced the way
+`mg-auto` does it, with one shared `dime` for both boxes, focusing is a **net
+loss on every structure measured**: 1.265× / 1.203× / 1.168× / 1.012–1.117× on
+fas2 / 1a63 / actin / mache. The coarse grid has to be genuinely coarse and the
+`ReducedSurface` has to be shared across both boxes, and neither is optional. It is also the most conservative option available:
 it changes *where the Dirichlet data comes from*, not what equation is being
 solved, and both incumbents have run it for decades.
+
+#### The review found a free win ahead of the milestone, and three profiles had missed it
+
+`_blocker_table(rims)` and the stacked `origins` / `normals` / `ring_radii` are
+**pure functions of `rims`**, which is itself a `cached_property` — and
+`build_levels` rebuilt all four on **every one of a solve's sixteen lattices**,
+re-stacking 245,456 rows of an answer it already had.
+
+Measured by A/B in one process on serum albumin, eight `inside()` calls:
+**12.26 s recomputed against 10.62 s memoized**, so about **3.3 s of a 33 s
+solve**. Bit-identical — the corpus reproduces all 58 cases — and it needs no
+new grid, no re-recording and no accuracy argument.
+
+**Why three profiling passes walked past it.** Every profile in this milestone
+attributed cost *by function*: `decide_rims`, `build:rims`, `family:toroidal`.
+This work is inside `_toroidally_reachable`, so it was attributed to the rim
+family, which is exactly where a reader would expect rim work to be. What a
+by-function profile cannot show is that a stage's input **does not depend on the
+loop it sits in** — and that is the same lesson M7's `cached_property`
+mis-attribution taught in the other direction, where a one-time cost was charged
+to a per-lattice caller. *Ask what a stage depends on, not only where it runs.*
+
+It is also a prerequisite rather than a detour: a coarse box means a second
+hierarchy asking for the same rim geometry, and paying for it twice per lattice
+is what would make that second hierarchy unaffordable.
 
 #### What it will cost, stated before it is built
 
 It changes recorded answers, and this is the axis where the bit-identity
 discipline that carried three blocks of performance work gives no cover at all.
 The boundary values move, so every corpus energy moves, and each has to be
-re-recorded against a reference that does not share the approximation — the
-closed forms, TABI-PB, or M8's refinement limit. M8's instrument exists for
-exactly this and should be used rather than APBS, which shares `sdh` and cannot
-referee a change to it.
+re-recorded against a reference that does not share the approximation. **Not
+M8's refinement limit**, which was on that list and has been struck: it shares
+debye's box, and with the exact boundary its own limit is padding-dependent
+(−213.00 / −206.47 / −211.23 at padding 5 / 10 / 20 Å), so it cannot referee a
+change to what the box edge is held at. `grade_refinement` varies only
+`resolution`, never `padding`, so a boundary-model error passes through
+Richardson untouched — measured, it reproduces the bias in its own extrapolated
+limit to four significant figures and reports `converging = True`. TABI-PB and
+the closed forms remain.
 
 The accuracy question is genuinely open in both directions. A coarse solve is a
 *better* boundary than a monopole and a *worse* one than an exact multi-atom

@@ -851,9 +851,7 @@ def _toroidally_reachable(
     # The rims are geometry and the nodes are one cloud, so both are built
     # before the loop. What is left inside it is the part that genuinely
     # depends on both: projecting a node onto a circle.
-    origins = np.array([origin for origin, _, _, _ in rims])
-    normals = np.array([normal for _, normal, _, _ in rims])
-    ring_radii = np.array([ring_radius for _, _, ring_radius, _ in rims])
+    origins, normals, ring_radii = surface.rim_arrays
 
     # Every node a rim can decide is within `ring_radius + probe` of its centre,
     # so the typical such distance is the scale to bin on. Swept on fas2 across
@@ -876,7 +874,7 @@ def _toroidally_reachable(
             origins,
             normals,
             ring_radii,
-            _blocker_table(rims),
+            surface.blocker_table,
             coords,
             inflated,
             probe,
@@ -1022,9 +1020,7 @@ def _toroidal_distance(
     if not rims or not len(nodes):
         return
 
-    origins = np.array([origin for origin, _, _, _ in rims])
-    normals = np.array([normal for _, normal, _, _ in rims])
-    ring_radii = np.array([ring_radius for _, _, ring_radius, _ in rims])
+    origins, normals, ring_radii = surface.rim_arrays
     reach = ring_radii + surface.probe
     bins = _Bins(nodes.points, float(np.median(reach)))
     best = np.full(len(nodes), np.inf, dtype=np.float64)
@@ -1464,6 +1460,31 @@ class ReducedSurface:
     @cached_property
     def seats(self) -> FloatArray:
         return _probe_seats(self.spheres)
+
+    @cached_property
+    def rim_arrays(self) -> tuple[FloatArray, FloatArray, FloatArray]:
+        """Every rim's origin, axis and radius, stacked — built once per structure.
+
+        **These are geometry, and `inside()` is asked about sixteen lattices.**
+        They are pure functions of `rims`, which is itself a `cached_property`,
+        so rebuilding them per lattice re-stacks 245,456 rows of somebody else's
+        answer. Measured on serum albumin, that and `blocker_table` below were
+        **3.9 s of a 25.7 s `build_levels`** — the same "cost per call, not per
+        point" shape M7 found in the rim loop, one level up, and invisible in a
+        profile that attributes by function rather than by what the function
+        depends on.
+        """
+        rims = self.rims
+        return (
+            np.array([origin for origin, _, _, _ in rims]),
+            np.array([normal for _, normal, _, _ in rims]),
+            np.array([ring_radius for _, _, ring_radius, _ in rims]),
+        )
+
+    @cached_property
+    def blocker_table(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The rims' blocking atoms as one CSR, built once. See `rim_arrays`."""
+        return _blocker_table(self.rims)
 
     def signed_gap(self, axes: list[FloatArray]) -> FloatArray:
         """Signed distance to the solvent-excluded surface: negative inside the solute.
