@@ -2836,7 +2836,9 @@ the only environment in which debye's central claim can even be stated.
 **Phase 9 — Integration, ongoing.** mcpymol grows a convenience chaining
 `sashimi_solve` → load DX → surface coloring; protean consumes `SolveResult`.
 Sashimi itself should go quiet after this — a wrapper that needs constant
-attention has failed at its one job.
+attention has failed at its one job. *The measurement that decides how far the
+replacement goes — whether debye supersedes protean's screened-Coulomb default
+or only its APBS path — is the last section of this phase, below.*
 
 ### `sashimi validate` defaults to the fast tier
 
@@ -4281,6 +4283,106 @@ commits and comments:
 | 7 Multi-backend | — | Phase 3 |
 | 8 debye | Phase 10 (handoff) | Phase 4 |
 | 9 Integration | Phase 4 | — |
+
+### Phase 9 — the case for replacing protean's default, measured on both axes
+
+**2026-08-21.** Phase 9 is "protean consumes `SolveResult`", and the substantive
+question inside it is whether debye should replace protean's *default* backend
+rather than merely its APBS path. protean's own PLAN.md decision 8 (2026-08-09)
+reads "screened Coulomb is the default; APBS is an optional backend", chosen
+because APBS needs a binary — and that decision predates debye, which is the
+thing built to answer it. So it is re-opened here with measurements rather than
+with the argument that was already in §12.
+
+Both axes were measured against protean's **own** code, `coulombic` from
+`protean_mcp.analysis.electrostatics`, run in protean's virtualenv against debye
+in sashimi's. Neither environment was modified. Python 3.13.12 both, numpy 2.5.1
+against 2.5.2.
+
+#### Speed: the crossover is ~244 residues, not ~1,290
+
+CPU seconds, protean's defaults (1.0 Å, 10 Å padding), alternating so machine
+drift hits both sides, minimum of three passes. debye is asked for the field
+only — `want_energy=False` skips the uniform-dielectric solve, which is what a
+consumer colouring a surface actually needs:
+
+| structure | aa | atoms | `coulombic` | debye, field | debye + energy | ratio | debye's grid |
+|---|---|---|---|---|---|---|---|
+| fas2 | 59 | 906 | 0.51 | 1.19 | 1.39 | 2.34× | 1.39× more points |
+| 1a63 | 161 | 2,065 | 2.15 | 3.05 | 3.56 | 1.42× | 1.43× |
+| actin-monomer | 382 | 5,877 | 14.94 | 11.60 | 13.68 | **0.78×** | 1.32× |
+| acetylcholinesterase | 538 | 8,279 | 19.14 | 14.54 | 16.61 | **0.76×** | 1.22× |
+| serum albumin | 1,156 | 18,242 | 110.08 | 37.18 | 44.59 | **0.34×** | 1.14× |
+
+`coulombic` scales as **atoms^1.76**, debye as **atoms^1.15**, and they cross at
+**3,845 atoms — about 244 residues.** protean's working range is 250 to 1,200
+residues, so **debye is the faster of the two across essentially the whole of
+it**, and three times faster at the top.
+
+**Two fairness notes, both against debye and both left in.** debye solves on
+1.14–1.43× *more* grid points than `coulombic` at the same requested spacing,
+because `size_grid` steps in eights and pads from radius-inflated bounds. And
+`coulombic` does its distance matrix in float32 where debye is float64
+throughout. The crossover would move further in debye's favour if either were
+normalised away, so neither was.
+
+*The projection this replaces was mine and it was wrong.* Fitting the two
+endpoints already in this section gave ~155 residues; the measured answer is
+244, 57% higher. Same direction, wrong number — which is the seventh projection
+in this document to miss, and the reason this section exists at all.
+
+#### Quality: debye converges on APBS, `coulombic` cannot
+
+protean's PLAN.md records what its approximation costs, measured on 1UBQ against
+APBS on a shell 3 Å outside the atoms: **Pearson r = 0.958, sign agreement
+94.1%, magnitudes about 1.6× low.** That protocol is re-run here with debye
+added, on 1UBQ prepared by `sashimi.prep` (1,231 atoms, net charge 0.000, no
+warnings, nothing rebuilt). The shell is stated rather than eyeballed: lattice
+nodes outside the van der Waals union inflated by 3.0 Å and inside it inflated
+by 4.0 Å, sampled by trilinear interpolation from each backend's own solve.
+
+| | nodes | debye r | sign | magnitude | `coulombic` r | sign | magnitude |
+|---|---|---|---|---|---|---|---|
+| 1.0 Å | 6,211 | 0.998 | 97.8% | **1.05×** | 0.977 | 93.8% | 1.74× low |
+| 0.8 Å | 12,903 | 1.000 | 98.9% | **1.03×** | 0.979 | 94.4% | 1.76× low |
+| 0.6 Å | 29,725 | 1.000 | 99.1% | **1.04×** | 0.979 | 94.6% | 1.75× low |
+
+The `coulombic` row reproduces protean's own recorded figures closely — 0.977
+against 0.958, 93.8% against 94.1%, 1.74× against 1.6× — from a different shell
+definition and a different preparation, which is the check that this protocol is
+theirs in substance.
+
+**The refinement axis is what makes this decisive, and it is why three
+resolutions were run rather than one.** debye *converges* on APBS: r → 1.000,
+sign agreement → 99.1%, magnitude ratio 1.05 → 1.04×. `coulombic` is **flat** —
+its r does not improve and its magnitudes stay 1.75× low no matter how fine the
+grid. That is the signature of the difference being **physical rather than
+discretization**: one uniform dielectric has no reaction field to converge to.
+protean's own module docstring already says so — "no free energy should ever be
+derived from the Coulombic field" — and this puts a number on the part it does
+not claim, the field itself.
+
+*A caveat this project has been burned by, discharged rather than waved at.*
+M1b's correction was that a cross-lattice comparison of the near field is
+worthless, because grid phase swings it 5–21×. Each backend here solved on its
+own lattice — APBS 65³ where debye chose 57×57×65 at 1.0 Å — so the three
+resolutions are also three different lattice pairings, and the numbers move by
+0.002 in r and 0.02× in magnitude across them. The shell sits 3 Å out, well
+outside the region where phase dominates.
+
+#### What this settles and what it does not
+
+**Settled: on protean's working range debye is both the more accurate field and
+the faster one**, and it needs no binary, which was the whole charter. Below
+~244 residues `coulombic` is quicker — 0.51 s against 1.19 s on a 59-residue
+peptide — and that is the honest cost of the switch, at a scale where both are
+sub-second.
+
+**Not settled here:** whether protean keeps `coulombic` at all. Nothing in this
+measurement says a fast indicative field is worthless; it says it should not be
+the default for a range where a correct one is cheaper. That is protean's call
+to record in protean's plan, and this section exists to be the evidence when it
+is made.
 
 ## 13. Risks and mitigations
 
