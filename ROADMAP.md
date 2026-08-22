@@ -2826,6 +2826,9 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. Revisit when fractional-volume dielectric averaging damps the oscillation. See the section below |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. See the sections below |
+| M8 ✅ | **The interface, graded without a reference** | **met for `van-der-waals` 2026-08-22, and the default surface is not that.** Two halves. The *instrument*: a pose spread sees only the phase-dependent half of the discretization error, so `grade_refinement` adds the other by Richardson over h, h/2, h/4 — validated against the Born closed form at **0.08–0.48%**, beating the finest rung it is built from every time, with a `converging` guard that refuses a ladder reading −172.6, −177.0, −171.7 rather than fitting it. The *scheme*: a hard face-centre dielectric replaced by a solute fraction ramped across **one cell** from the exact signed distance and blended harmonically — **4–17× against the Born closed form and 3.6–5.6× on pose dispersion**, with the ramp at 0.5 Å closer to converged than the hard assignment at 0.25 Å. Shipped off by default and bit-identical when off. Three claims of this document died in the process: the fitted convergence order is a property of the ladder and not the method, `posed`'s translation moves nothing because the box follows the solute, and averaging the indicator over a band of *whole* cells is worse than not averaging at all |
+| M8a | **The solvent-excluded distance** | the one thing between M8 and the default surface. The ramp needs a signed distance and `min(\|x − c\|) − r` is the distance to a union of spheres, not to the solvent-excluded surface — three families of patch with a distance function of its own. *Exit:* the M8 gate re-run on `molecular`, on both references, at no worse than the ratios M8 measured on `van-der-waals`; and `dielectric_faces` stops refusing |
+| M9 | **Focusing, for the boundary and not the resolution** | a coarse pre-solve supplying the fine grid's Dirichlet data, in place of the multi-atom Debye-Hückel sum. **Named for what debye would use it for**: the incumbents focus to put resolution where it matters, and debye would focus to stop paying `O(nodes × atoms)` for a boundary condition. *Exit, and both halves are required:* debye's whole-solve scaling falls from **atoms^1.15** to near-linear across the 906–18,242-atom ladder with the boundary stage below 10% of a solve; **and** the Born closed-form error and the `ala-gly` pose dispersion are no worse than the values the multi-atom boundary gives, with every moved corpus value re-recorded against a reference that does not share the approximation. Measured groundwork is in the section below |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
 18 of them with closed forms; three independent reference backends to be graded
@@ -3473,6 +3476,10 @@ only 3.0× faster than our pure-numpy solver. **Two compiled incumbents differ b
 3.8× from each other**, which is nearly the 3.0× between the slower of them and
 debye — so on this problem the implementation and the algorithm dominate the
 language. APBS's near-linear exponent is focusing; debye has none, by design.
+*Withdrawn 2026-08-22 — see "M9 — focusing, for the boundary and not the
+resolution". Focusing costs an extra solve and APBS solves 1.65× more points
+than debye at 1,156 residues; it is not where the exponent comes from. debye's
+own exponent is its `O(nodes × atoms)` boundary sum, measured at atoms^1.45.*
 
 #### The numba spike: 7×, and where that leaves Rust
 
@@ -4203,7 +4210,9 @@ largest single item in a debye run, and `inside_union_of_spheres` — a numpy
 loop nobody has looked at, marking each sphere over its own index window — is
 next. Neither is a call-overhead problem, so neither is another numba port:
 **the remaining levers are algorithmic.** debye still has no focusing, which is
-where APBS's near-linear exponent comes from.
+where APBS's near-linear exponent comes from. *That last clause is withdrawn;
+M9 below has the measurement. What debye lacks is not focusing's resolution
+but the cheap boundary condition focusing licenses.*
 
 **And the quality gap is now much larger than the speed gap.** debye's pose
 dispersion is 1.416% against APBS's 0.764% at protein scale — unchanged by any
@@ -4392,6 +4401,102 @@ evidence that it is worth building is above: on the boundary where the distance
 *is* available, a one-cell ramp is 4–17× better against an exact reference and
 3.6–5.6× better on a reference-free one. Nothing about that argument is specific
 to the van der Waals surface; only the distance function is.
+
+### M9 — focusing, for the boundary and not the resolution
+
+**Named 2026-08-22, and the name is the argument.** Both incumbents focus:
+`mg-auto` solves a coarse box at `CFAC × extent` and then a fine box at
+`extent + 2 × padding`, carrying the coarse solution inward as the fine grid's
+Dirichlet data. The usual reason to want that is *resolution* — detail where the
+chemistry is, without paying for it everywhere. **That is not why debye would
+want it**, and calling this "focusing" without the qualifier would send the next
+reader looking for an active site.
+
+#### What focusing is not
+
+It is not why APBS is faster, and this document said it was. "APBS's near-linear
+exponent is focusing" has been repeated three times here on no measurement.
+Measured, at 1,156 residues and a 1.0 Å request:
+
+| | points per solve | achieved spacing |
+|---|---|---|
+| APBS | **2,679,201** | 0.843 × 0.827 × 0.805 Å |
+| debye | 1,625,505 | 0.963 × 0.973 × 0.991 Å |
+
+APBS solves **1.65× more points, at a finer spacing than it was asked for**, and
+it solves more of them — each `elec` block runs coarse then fine, and an energy
+needs two blocks. That is roughly three times debye's total grid work, and APBS
+still finishes in **11.94 s against debye's 33.0 s**. *Focusing costs an extra
+solve; it cannot be the source of the speed.* What is left as the explanation is
+the thing that was always true and never needed a mechanism: APBS's multigrid is
+compiled and thirty years tuned.
+
+#### What focusing is for, here
+
+`sashimi.apbs.input` asks for **`bcfl sdh`** — *single* Debye-Hückel. APBS places
+the entire molecule at the boundary as **one sphere carrying the net charge**,
+which is `O(boundary nodes)` and independent of how many atoms there are. It can
+afford something that crude *because* focusing puts that boundary at 1.7×
+the molecular extent, where a monopole is a good description, and then refines
+inward.
+
+debye has no focusing, so it cannot afford a crude boundary. It sums the
+screened tail over **every atom at every face node** — the equivalent of APBS's
+`mdh` — and section 12's measurement of that is:
+
+    82,050 face nodes × 18,242 atoms = 1.50 billion pairs
+    36% of a solve, scaling as atoms^1.45
+
+with face-nodes × atoms predicting exactly 1.45. **Every other stage in debye is
+near-linear now**, so that single term is what makes the whole solver
+superlinear, and it grows to dominate as structures get bigger.
+
+So the trade the two solvers have made is the opposite of how this document has
+described it:
+
+| | boundary condition | extra solve |
+|---|---|---|
+| APBS | one sphere, `O(nodes)` | yes — the coarse grid |
+| debye | every atom, `O(nodes × atoms)` | no |
+
+**debye's single box was recorded as the simpler design** — `size_grid`'s
+docstring says "there is no coarse grid and no focusing, which is the one place
+debye is structurally simpler than both incumbents: the box is solved directly,
+so `padding` is the whole boundary story." That is true, and the simplicity is
+what forces the expensive boundary. The cost of not having a coarse grid is
+larger than the coarse grid.
+
+#### Why this is the better structural change
+
+An earlier draft of the accuracy plan proposed a reaction-field split — solve for
+the smooth reaction potential so the singular self-energy never reaches the grid,
+which is what makes DelPhi's energies four thousand times sharper on a sphere.
+That remains attractive and it has a trap: the naive split's source term is
+`O(grid points × atoms)`, which is the same shape as the boundary problem it
+would sit next to. It needs a cost model before any physics.
+
+Focusing has no such trap. The coarse solve is cheap — **all of debye's linear
+algebra is 11% of a run** — and it replaces the largest single stage and the
+worst scaling term at once. It is also the most conservative option available:
+it changes *where the Dirichlet data comes from*, not what equation is being
+solved, and both incumbents have run it for decades.
+
+#### What it will cost, stated before it is built
+
+It changes recorded answers, and this is the axis where the bit-identity
+discipline that carried three blocks of performance work gives no cover at all.
+The boundary values move, so every corpus energy moves, and each has to be
+re-recorded against a reference that does not share the approximation — the
+closed forms, TABI-PB, or M8's refinement limit. M8's instrument exists for
+exactly this and should be used rather than APBS, which shares `sdh` and cannot
+referee a change to it.
+
+The accuracy question is genuinely open in both directions. A coarse solve is a
+*better* boundary than a monopole and a *worse* one than an exact multi-atom
+sum, so debye may lose accuracy at the boundary and gain it back in being able
+to afford a tighter box or a finer grid for the same wall clock. **That trade is
+the milestone**, and it is why M9's exit criterion above requires the accuracy
+half as well as the scaling half.
 
 ### Phase 9 — the case for replacing protean's default, measured on both axes
 
