@@ -175,6 +175,22 @@ def test_cpu_seconds_counts_a_reaped_child(tmp_path):
     else — a wall-clock benchmark wearing a CPU-time label. Checked against a
     child that deliberately burns CPU rather than sleeping, since sleeping would
     pass with or without the fix.
+
+    **The assertion is on the child's contribution, not on a ratio, and that is
+    a correction.** This first read `spent_total > spent_here * 2`, which
+    compares the child's work against however much CPU *this* process happened
+    to spend inside `subprocess.run` — a fork and an exec, whose cost is the
+    runner's business and not this project's. On 2026-08-21 that reached 0.298 s
+    on GitHub's Linux runners against a child's 0.519 s, and all three CI legs
+    went red on a documentation-only change. **The numbers in the failure proved
+    the feature was working**: the child contributed 0.221 s, which is what the
+    test exists to detect.
+
+    `cpu_seconds()` is `RUSAGE_SELF + RUSAGE_CHILDREN` and `process_time()` is
+    the self half alone, so the difference *is* the child's time and nothing
+    else. Were `RUSAGE_CHILDREN` dropped, the two would move together and the
+    difference would collapse to zero — so this is both stricter about what it
+    means and indifferent to how slow a fork is.
     """
     import subprocess  # noqa: PLC0415 — local to the one test that shells out
 
@@ -182,11 +198,12 @@ def test_cpu_seconds_counts_a_reaped_child(tmp_path):
     subprocess.run([sys.executable, "-c", "sum(i*i for i in range(4_000_000))"], check=True)
     spent_here = time.process_time() - before_process
     spent_total = cpu_seconds() - before_total
+    from_the_child = spent_total - spent_here
 
-    assert spent_total > 0.05, "the child's CPU time is not being counted at all"
-    assert spent_total > spent_here * 2, (
-        f"child CPU {spent_total:.3f}s barely exceeds this process's {spent_here:.3f}s, "
-        "so RUSAGE_CHILDREN is probably not contributing"
+    assert from_the_child > 0.05, (
+        f"the child contributed {from_the_child:.3f}s of CPU "
+        f"(total {spent_total:.3f}s, this process {spent_here:.3f}s), "
+        "so RUSAGE_CHILDREN is not reaching cpu_seconds()"
     )
 
 
