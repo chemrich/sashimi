@@ -772,9 +772,15 @@ def test_the_two_grid_codes_agree_where_they_can_be_compared():
     the one case with an analytic answer.
     """
     recorded = cross_backend_cases("delphi")
-    # 35 as of M0. A floor that trails the real count by sixteen would let every
-    # sharp-boundary recording be deleted without a word.
-    assert len(recorded) >= 35
+    # Set equality against the directory, not `>= 35`. The floor this replaces
+    # was written when 35 was the real count; the directory holds 58 now, so it
+    # had stopped guarding twenty-three of them and would have let any of those
+    # be deleted without a word. A count floor under a set that grows is a guard
+    # with a shelf life, and ROADMAP.md section 12 records this repository
+    # hitting the same shape more than once.
+    assert {name for name, _, _ in recorded} == {
+        path.stem for path in corpus_dir_for("delphi").glob("*.json")
+    }
 
     for name, reference, other in recorded:
         deviation = abs(other["energy_kj_mol"] - reference["energy_kj_mol"]) / abs(

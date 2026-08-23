@@ -304,6 +304,17 @@ jobs:
         if: matrix.profile == 'full'
         run: uv run --frozen sashimi corpus verify --tier standard
 
+      # The same step for the one backend that needs nothing installed, and so
+      # runs on the leg where nothing is. `pytest` re-solves debye's fast tier;
+      # this is the standard tier, 39 cases in 43.8 s measured 2026-08-23, and
+      # without it 35 of the 58 debye recordings are re-solved by nothing
+      # automatic at all. Deliberately on `none` rather than `full`: the leg
+      # with no binaries is the one that proves debye needs none, and running it
+      # beside APBS would pay twice for numbers that do not depend on APBS.
+      - name: Verify the corpus (debye, standard tier)
+        if: matrix.profile == 'none'
+        run: uv run --frozen sashimi corpus verify --backend debye --tier standard
+
   # Single stable check name for the branch ruleset to require. Matrix job names
   # change whenever the matrix does; this one does not.
   ci-ok:

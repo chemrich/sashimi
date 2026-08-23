@@ -39,10 +39,19 @@ from sashimi.protocol import SurfaceModel
 
 ALA_GLY = Path("tests/data/ala-gly.pqr")
 
-# The recorded answer for this structure at the default grid, which is what the
-# corpus holds. Repeated here so a bench run that silently solved something else
-# has something to fail against.
-ALA_GLY_ENERGY = -218.62772042354118
+# The recorded answer for this structure at the default grid, so a bench run
+# that silently solved something else has something to fail against.
+#
+# Read from the corpus rather than restated. A literal here is a second copy of
+# a number the corpus already owns, and it goes stale in exactly the case that
+# matters — a deliberate re-record, where every corpus test moves to the new
+# answer and this one is left behind pointing at the old. It was also an
+# absolute digit string, and ROADMAP.md section 12 records bit-identity in this
+# solver being a per-platform property: the same expression returns
+# ...4118 on macOS and ...4138 on linux/amd64.
+ALA_GLY_ENERGY = float(
+    json.loads(Path("tests/corpus/debye/peptide-molecular.json").read_text())["energy_kj_mol"]
+)
 
 
 def _spec(
