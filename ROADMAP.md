@@ -2828,7 +2828,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. See the sections below |
 | M8 ✅ | **The interface, graded without a reference** | **met for `van-der-waals` 2026-08-22, and the default surface is not that.** Two halves. The *instrument*: a pose spread sees only the phase-dependent half of the discretization error, so `grade_refinement` adds the other by Richardson over h, h/2, h/4 — validated against the Born closed form at **0.08–0.48%**, beating the finest rung it is built from every time, with a `converging` guard that refuses a ladder reading −172.6, −177.0, −171.7 rather than fitting it. The *scheme*: a hard face-centre dielectric replaced by a solute fraction ramped across **one cell** from the exact signed distance and blended harmonically — **4–17× against the Born closed form and 3.6–5.6× on pose dispersion**, with the ramp at 0.5 Å closer to converged than the hard assignment at 0.25 Å. Shipped off by default and bit-identical when off. Three claims of this document died in the process: the fitted convergence order is a property of the ladder and not the method, `posed`'s translation moves nothing because the box follows the solute, and averaging the indicator over a band of *whole* cells is worse than not averaging at all |
 | M8a ✅ | **The solvent-excluded distance** | **met 2026-08-22**, and it moved the number M8 could not: the ramp raises the energy's convergence order from **0.32 to 2.65** on van der Waals and **1.05 to 2.53** on molecular — an interface treatment ceasing to bound the accuracy. `ReducedSurface.signed_gap` is `probe - dist(x, A)`, out of the same three families that decide `inside`, and `sign(gap)` reproduces `inside` node for node. Both ramp widths work on both surfaces and their limits agree to 0.14% and 0.16%. *An earlier draft reported the best width as surface-dependent; that was a one-sided distance of its own making and is withdrawn below.* Pose dispersion alone would have ratified the bug, which is what Q0's other half is for |
-| M9 ✅ | **A boundary that does not cost `O(nodes × atoms)`** | *Shipped 2026-08-23 — #68 the decision, #70 the implementation.* The exact multi-atom Debye-Hückel sum evaluated on a **strided sub-lattice of the box face** and interpolated up, in place of one sum per face node; pitch in ångströms, capped at 0.6× the solute's clearance. Serum albumin's boundary goes **12.94 s → 0.24 s** and the whole solve 30.05 → 17.94 s. *Named "focusing" until the step (c) review priced a coarse pre-solve at 2.0–2.5 s against the strided face's 0.24 s, at no better accuracy and for a second grid hierarchy — the milestone kept its purpose and lost its mechanism.* **Exit criterion retired 2026-08-23, and it is worth reading as a record rather than a bar.** *Met:* total CPU strictly lower than the `mdh` baseline on **every** rung of the 906→18,242 ladder, 1.18–1.74× and widening with size; and, on the 3–4 Å shell against the exact sum on the same box and lattice, **r = 1.000000, sign 100.00%, magnitude within 0.04% and energy within 0.052%** on fas2, 1a63 and serum albumin, against bars of 0.999 / 99% / 1.02× / 0.5%. *Struck, each measured:* **atoms^≤1.05**, because `sdh` deletes the boundary entirely and still fits 1.075 — the bar sat below the floor; **fas2 within 0.5% of its TABI-PB recording**, because the whole span from the exact boundary to `sdh` is 1.090 pp where the bar needs 2.375, so it graded discretization; and **`residue_potentials` as the observable**, because `sdh` passes it on all three structures at r ≥ 0.99998 — residue pooling averages away the near-surface `l ≥ 1` error that is the whole defect. **The three struck clauses share one cause, and it is the lesson of this milestone:** each graded something other than the quantity M9 changes — the wrong axis, the wrong referee, the wrong observable — while the *thresholds* were right every time. **A gate is a threshold and an observable, and the observable is the half that failed three times.** The Born ion and `ala-gly` pose dispersion remain regression anchors and were never bars: one atom makes `sdh` and `mdh` bit-identical, and a net-neutral dipeptide makes an `sdh` boundary identically zero. §12 carries the measurements and the forensics |
+| M9 ✅ | **A boundary that does not cost `O(nodes × atoms)`** | *Shipped 2026-08-23 — #68 the decision, #70 the implementation.* The exact multi-atom Debye-Hückel sum evaluated on a **strided sub-lattice of the box face** and interpolated up, in place of one sum per face node; pitch in ångströms, capped at 0.6× the solute's clearance. Serum albumin's boundary goes **12.94 s → 0.24 s** and the whole solve 30.05 → 17.94 s. *Named "focusing" until the step (c) review priced a coarse pre-solve at 2.0–2.5 s against the strided face's 0.24 s, at no better accuracy and for a second grid hierarchy — the milestone kept its purpose and lost its mechanism.* **Exit criterion retired 2026-08-23, and it is worth reading as a record rather than a bar.** *Met:* total CPU strictly lower than the `mdh` baseline on **every** rung of the 906→18,242 ladder, 1.18–1.74× and widening with size; and, on the 3–4 Å shell against the exact sum on the same box and lattice, **r = 1.000000, sign 100.00%, magnitude within 0.04% and energy within 0.052%** on fas2, 1a63 and serum albumin, against bars of 0.999 / 99% / 1.02× / 0.5%. *Struck, each measured — and the first one for a corrected reason:* **atoms^≤1.05**, not because it is unreachable but because **it measures the ladder as much as the solver**. Two of the nine rungs use different input conventions — `2LZT-ASP66` has a mean radius of 1.031 Å against ~1.55 elsewhere, and `hca` is 17.8% hydrogen against ~49% — and dropping them to leave seven homogeneous rungs moves the fit from 1.075 to **1.048 ± 0.026** for `sdh` and 1.084 to **1.057 ± 0.023** for the shipped solver, halving the standard error and reproducing across two independent runs. *That composition effect is 0.027, against M9's own improvement of 0.113 in the same units — a quarter of the signal, coming from the choice of structures rather than from the solver.* So the honest reading is that the floor sits **at** the bar rather than above it and the shipped solver is one standard error over — marginal, not impossible. **An earlier version of this row said the bar sat below the floor and was wrong**; it was fitted across a ladder that mixes radius sets. **fas2 within 0.5% of its TABI-PB recording**, because the whole span from the exact boundary to `sdh` is 1.090 pp where the bar needs 2.375, so it graded discretization; and **`residue_potentials` as the observable**, because `sdh` passes it on all three structures at r ≥ 0.99998 — residue pooling averages away the near-surface `l ≥ 1` error that is the whole defect. **The three struck clauses share one cause, and it is the lesson of this milestone:** each graded something other than the quantity M9 changes — the wrong axis, the wrong referee, the wrong observable — while the *thresholds* were right every time. **A gate is a threshold and an observable, and the observable is the half that failed three times.** The Born ion and `ala-gly` pose dispersion remain regression anchors and were never bars: one atom makes `sdh` and `mdh` bit-identical, and a net-neutral dipeptide makes an `sdh` boundary identically zero. §12 carries the measurements and the forensics |
 
 **What debye inherits that did not exist before 2026-08-13:** 64 corpus cases,
 18 of them with closed forms; three independent reference backends to be graded
@@ -5105,16 +5105,41 @@ where the nine-rung fit fails** — 1.032 against 1.074 for the same `sdh` data,
 because two of the three old rungs sit under 2 s where fixed costs dominate. Every
 exponent this document has quoted came from three points.
 
-Second, and this is the finding: **`sdh` deletes the boundary almost entirely and
-still fits `atoms^1.074`.** `sdh` is the floor — `O(face nodes)`, independent of
-atom count — so no boundary scheme can score below it, and the strided face
-cannot either. **The `atoms^≤1.05` clause is therefore not reachable by changing
-the boundary at all**, which is what M9 is. The residual superlinearity is
-geometry and linear algebra, and it belongs to a different milestone. The point
-estimate sits one standard error above the bar, so this is a strong indication
-rather than a proof; what is certain is that the clause is not a test of the
-boundary. *Third clause of this criterion to be found unpassable, after the
-fas2/TABI-PB energy bar and the `residue_potentials` observable.*
+Second, **`sdh` deletes the boundary almost entirely and still fits `atoms^1.074`
+on this ladder.** `sdh` is the floor — `O(face nodes)`, independent of atom count
+— so no boundary scheme can score below it, and the strided face cannot either.
+The residual superlinearity is geometry, not the boundary and not the linear
+algebra, which measures *sublinear* at 0.929.
+
+***Corrected 2026-08-23, and the correction is the more useful result.*** This
+section first concluded that `atoms^≤1.05` was therefore unreachable. It is not.
+**The ladder is not a homogeneous family**, and the exponent partly measures
+that: `2LZT-ASP66` carries a mean radius of **1.031 Å** against ~1.55 for every
+other rung — 959 of its 1,960 atoms are under 1.3 Å, a different hydrogen radius
+set — and `hca` is **17.8% hydrogen** against ~49% elsewhere, a polar-hydrogen
+convention. Both change how many neighbours an atom has, which is what the
+geometry stages cost. Refitted over the seven homogeneous rungs:
+
+| | all nine rungs | seven homogeneous rungs |
+|---|---|---|
+| exact `mdh` | 1.192 ± 0.050 | **1.170 ± 0.029** |
+| strided face | 1.084 ± 0.055 | **1.057 ± 0.023** |
+| `sdh`, the floor | 1.075 ± 0.056 | **1.048 ± 0.026** |
+
+The standard errors **halve**, and both independent runs agree to 0.001–0.004,
+which is what says this is a confound removed rather than points dropped for not
+fitting. *The exclusion was decided from the inputs — radius sets and hydrogen
+counts — not from the residuals; both structures remain perfectly good corpus
+cases, they are just not rungs on one scaling ladder.*
+
+So the floor sits **at** the bar, not above it, and the shipped solver is one
+standard error over. The clause is **marginal rather than impossible** — and it
+is still a weak gate. The composition effect is **0.027** where M9's own
+improvement is **0.113** in the same units — a quarter of the signal, coming from
+which structures were chosen rather than from the solver — and load alone moved
+earlier three-point fits by 0.23. **What is worth carrying forward
+is not the number but the method: an exponent fitted across structures with
+different radius conventions is measuring the conventions.**
 
 ##### What moved, and what did not
 
@@ -5185,6 +5210,59 @@ greens it.
   after the clearance cap, so `content_address` distinguishes schemes that change
   the answer without changing the box. Before it did, three boundary models
   1.4260% apart in energy shared one saved map.
+
+#### Where the residual cost actually is, and why it is not an exponent problem
+
+**2026-08-23.** With M9 merged, debye fits **atoms^1.057 ± 0.023** over seven
+homogeneous rungs against a boundary-free floor of **1.048 ± 0.026**. That is
+0.009 of exponent between the shipped solver and the best any boundary scheme
+could do, so the obvious next milestone — "attack the residual superlinearity" —
+was scoped by measurement before being attempted, and **the measurement says not
+to do it.**
+
+Stage-resolved, serum albumin at 1.0 Å, compiled kernel active, exponents fitted
+over the homogeneous rungs:
+
+| stage | albumin | % of solve | exponent |
+|---|---|---|---|
+| `build_levels` | 13.90 s | **73.0%** | 1.146 |
+|   `dielectric_faces` | 12.18 s | 64.0% | 1.117 |
+|   `screening_nodes` | 1.66 s | 8.7% | 1.108 |
+|     `surface.inside`, 16 calls | 13.82 s | 72.6% | 1.150 |
+|       `surface.seats` (one-time) | **5.81 s** | **30.5%** | **1.145** |
+|       `surface.rims` (one-time) | 0.99 s | 5.2% | 1.119 |
+| `solve_system` | 4.34 s | 22.8% | **0.919** |
+| boundary | 0.74 s | 3.9% | **1.379** |
+| `source_term`, energy read-back | 0.01 s | 0.1% | 0.89 |
+
+**Three things follow, and none of them is "optimise the exponent".**
+
+- **The linear algebra is sublinear and is 23% of the solve.** Every earlier
+  draft of this document that worried about multigrid cost was worrying about
+  the one stage that is not a scaling problem.
+- **Geometry is 73%, and it splits almost evenly** between a *one-time* surface
+  build (7.2 s, of which `_probe_seats` is 5.8 s) and the *per-lattice* masks
+  `inside` evaluates on each of 16 lattices (6.6 s). Both are near-linear. What
+  is left is a **constant factor**, and a constant factor in 73% of the runtime
+  is worth more than the 0.009 of exponent above it.
+- **`_probe_seats` is linear in what it produces and superlinear in what it
+  considers.** Seats come out at **atoms^0.953** — the output is linear — while
+  candidate triples go as **atoms^1.112** and CPU as 1.145. It is enumerating
+  more than it keeps, and the gap between 1.112 and 1.145 is memory locality
+  rather than arithmetic. *An algorithmic fix would target the candidate set, not
+  the seat set.*
+
+**The boundary keeps the highest exponent even after M9 — 1.379 — and that is
+worth writing down rather than celebrating.** The strided face cut the
+boundary's *magnitude* by 50× and left its *shape* alone: samples grow with the
+box face while atoms grow with the volume, so the product still climbs faster
+than either. At 3.9% of a solve that is invisible; at ten times albumin it comes
+back. The pitch cap is the knob that would answer it, and nothing needs doing
+until a structure that size exists in the corpus.
+
+*So there is no M10 here.* The honest next targets are the ones that are not
+about speed at all — §12's referee gap, where 30 of 58 debye recordings have no
+independent check and none above 906 atoms has any, and phase 5's release.
 
 ### Phase 9 — the case for replacing protean's default, measured on both axes
 
