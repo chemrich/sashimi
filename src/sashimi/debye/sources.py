@@ -141,7 +141,7 @@ def single_debye_huckel_solute(structure: PQRData) -> PQRData:
 
     **APBS's `bcfl sdh`, which is what its focusing buys it.** The multi-atom
     sum this replaces is `O(face nodes x atoms)` — 1.5 billion pairs on serum
-    albumin, 36% of a solve, and the only superlinear stage debye has left. A
+    albumin, 43% of a solve, and the only superlinear stage debye has left. A
     single centre is `O(face nodes)`, independent of how many atoms there are.
 
     **This exists to be measured against, not to be switched on.** APBS can

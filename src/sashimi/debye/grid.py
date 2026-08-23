@@ -114,10 +114,13 @@ def size_grid(pqr: PQRData, spec: GridSpec) -> DebyeGrid:
     molecule as one sphere and `O(boundary nodes)`, because a monopole is a good
     description at 1.7x the molecular extent. With no coarse grid debye cannot
     approximate that crudely, so it sums the screened tail over *every atom at
-    every face node* — 1.5 billion pairs on serum albumin, 36% of a solve,
+    every face node* — 1.5 billion pairs on serum albumin, 43% of a solve,
     scaling as atoms^1.45 where every other stage is near-linear. ROADMAP.md
-    section 12's "M9 — focusing, for the boundary and not the resolution" is the
-    plan to stop paying it.
+    section 12's "M9 — a boundary that does not cost `O(nodes x atoms)`" is the
+    plan to stop paying it — by striding the face, not by adding a coarse grid:
+    a coarse pre-solve was measured at 2.0-2.5 s on serum albumin against a
+    strided exact face at 0.24 s, so what debye cannot afford is `sdh`'s
+    crudeness, not the exact sum itself.
     """
     extent = pqr.extent()
     center = pqr.center()
