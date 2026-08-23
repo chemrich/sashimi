@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sashimi.debye.sources import DEFAULT_BOUNDARY_PITCH_A
 from sashimi.errors import UnsupportedRequest
 from sashimi.protocol import Equation, SurfaceModel
 
@@ -66,6 +67,18 @@ class DebyeOptions:
     # `sashimi.debye.dielectric` for what M1c measured and ROADMAP.md section 12
     # for the gate it has to pass before the default could move.
     dielectric_smoothing: float = 0.0
+
+    # How far apart, in angstroms, the box face is sampled before the
+    # Debye-Huckel sum is interpolated up to every face node. **A distance, not
+    # a node stride** — see `sources.DEFAULT_BOUNDARY_PITCH_A` for why a stride
+    # gives three different pitches on the three axes of one face.
+    #
+    # Zero or negative evaluates every node, which is the pre-M9 scheme and is
+    # bit-identical to it. So is any case under `sources.EXACT_FACE_PAIRS`,
+    # whatever this is set to: the exact face is already free there, and holding
+    # the small cases still is what keeps the closed-form and small-molecule
+    # recordings from needing to move.
+    boundary_pitch_a: float = DEFAULT_BOUNDARY_PITCH_A
 
     tolerance: float = 1e-8
     max_cycles: int = 200

@@ -23,7 +23,9 @@ exact for a lone ion at any distance and asymptotically right for a molecule.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -34,10 +36,16 @@ from sashimi.errors import InputError
 from sashimi.protocol import DIMENSIONS, FloatArray, PQRData, SolventModel
 
 __all__ = [
+    "DEFAULT_BOUNDARY_PITCH_A",
+    "EXACT_FACE_PAIRS",
+    "PITCH_CLEARANCE_FRACTION",
+    "FaceSampling",
     "assign_charges",
     "boundary_mask",
     "debye_huckel_boundary",
     "interpolate_at_atoms",
+    "plan_face_sampling",
+    "solute_clearance",
     "source_term",
     "trilinear_weights",
 ]
@@ -46,6 +54,41 @@ __all__ = [
 # points x atoms. Chunked at a few million entries, which is tens of megabytes
 # and keeps a 129^3 box over a 2,000-atom protein from allocating gigabytes.
 _PAIR_CHUNK = 4_000_000
+
+# How far apart, in angstroms, the sampled face nodes are. **Stated as a
+# distance and not as a node stride**, which is not a cosmetic choice: a stride
+# has to divide `n - 1 = 8m`, so a nominal "every 16th node" is really per-axis
+# pitches of 15.41 / 7.79 / 12.89 A on serum albumin — three different
+# resolutions on the three axes of one face. Measured at matched cost the
+# distance-pitched sampler is 1.16x better on the screened face and 1.19x on the
+# reference face than the stride that first replaced the exact sum.
+#
+# **Six and not twelve, and the difference is a gate failure.** Twelve was picked
+# from a matched-cost comparison on serum albumin at `padding = 10`. Swept across
+# padding it fails: at `padding = 3` a 12 A pitch lands fas2 at r = 0.998798 and
+# +0.7536% energy and 1a63 at 0.999400 and +0.6325%, both outside M9's gate,
+# where 6 A passes every padding tested on both. It costs nothing to be right —
+# the boundary is 1.2-2.5% of a solve at 6 A against 0.3-0.65% at 12 A, so the
+# whole saving on offer above 6 A is under two percent of a solve.
+DEFAULT_BOUNDARY_PITCH_A = 6.0
+
+# The pitch is also capped at this fraction of the solute's clearance from the
+# face. **A fixed distance-pitch scales the wrong way**: shrink the box and the
+# face moves closer to the solute, so the field on it varies faster *and* a fixed
+# pitch buys fewer samples. Padding is a caller's knob — `protocol.py` validates
+# only `padding >= 0` — so without this cap the default is safe only in the range
+# it was swept over, which is the shape of defect ROADMAP.md section 7 keeps
+# finding. 0.6 reproduces the measured-good 6 A at the default `padding = 10` and
+# tightens to 1.8 A at `padding = 3`.
+PITCH_CLEARANCE_FRACTION = 0.6
+
+# Below this many (face node x atom) pairs the exact face already costs under a
+# millisecond, and striding it would move a recorded answer for no gain. This is
+# the line between a molecule and a protein: `ala-gly` is 23,000 pairs and fas2
+# is 13.6 million. Every closed-form and small-molecule recording therefore keeps
+# the scheme it was recorded under, and only protein-scale cases move — which is
+# what makes this change re-recordable in one pass instead of all 58 at once.
+EXACT_FACE_PAIRS = 1_000_000
 
 
 def trilinear_weights(grid: DebyeGrid, coords: FloatArray) -> tuple[np.ndarray, FloatArray]:
@@ -131,9 +174,10 @@ def debye_huckel_boundary(
     solvent: SolventModel,
     *,
     homogeneous: bool = False,
+    pitch_a: float = DEFAULT_BOUNDARY_PITCH_A,
 ) -> FloatArray:
     """Dirichlet values on the box face for one state. See `debye_huckel_boundaries`."""
-    return debye_huckel_boundaries(grid, structure, [(solvent, homogeneous)])[0]
+    return debye_huckel_boundaries(grid, structure, [(solvent, homogeneous)], pitch_a=pitch_a)[0]
 
 
 def single_debye_huckel_solute(structure: PQRData) -> PQRData:
@@ -173,10 +217,200 @@ def single_debye_huckel_solute(structure: PQRData) -> PQRData:
     )
 
 
+@dataclass(frozen=True)
+class FaceSampling:
+    """Which face nodes the Debye-Huckel sum is actually evaluated at.
+
+    Per-axis index sets, **shared by all six faces**, which is what makes the
+    scheme consistent on the edges where two faces meet. A node on the edge
+    between the `x = 0` and `y = 0` faces is reached from either face by
+    interpolating along `z` from the same sampled points with the same weights,
+    so both faces write the same bits to it. Choose the index sets per face
+    instead and that node gets two different values depending on write order.
+    """
+
+    indices: tuple[np.ndarray, np.ndarray, np.ndarray]
+    exact: bool
+    pitch_a: float
+
+    @property
+    def label(self) -> str:
+        """What `_resolved` records, so `content_address` can tell the two apart."""
+        if self.exact:
+            return "multiple Debye-Huckel on the box face"
+        return f"multiple Debye-Huckel on a {self.pitch_a:g} A strided box face"
+
+    @property
+    def n_samples(self) -> int:
+        nx, ny, nz = (len(i) for i in self.indices)
+        return 2 * (ny * nz + nx * nz + nx * ny)
+
+
+def _axis_samples(n: int, spacing: float, pitch: float) -> np.ndarray:
+    """Node indices along one axis, both endpoints included, ~`pitch` apart.
+
+    Spread by `linspace` and rounded rather than by a fixed step, because a
+    fixed step leaves a short last interval where it meets the far endpoint and
+    that alone cost 1.08-1.14x in face error when it was measured.
+    """
+    count = math.ceil((n - 1) * spacing / pitch) + 1
+    if count >= n:
+        return np.arange(n, dtype=np.intp)
+    return np.unique(np.rint(np.linspace(0.0, n - 1, max(2, count))).astype(np.intp))
+
+
+def plan_face_sampling(
+    grid: DebyeGrid, structure: PQRData, pitch_a: float = DEFAULT_BOUNDARY_PITCH_A
+) -> FaceSampling:
+    """Decide the face sampling for a request, once, for everyone who needs it.
+
+    Called by `debye_huckel_boundaries` to do the work and by the backend's
+    `_resolved` to name it, so provenance cannot describe a scheme other than
+    the one that ran.
+    """
+    exact = tuple(np.arange(n, dtype=np.intp) for n in grid.shape)
+    nx, ny, nz = grid.shape
+    # The closed form rather than `boundary_mask(...).sum()`, which would
+    # allocate a 1.6 M-entry bool array on albumin to count its own surface.
+    faces = nx * ny * nz - (nx - 2) * (ny - 2) * (nz - 2)
+    if pitch_a <= 0.0 or faces * structure.n_atoms <= EXACT_FACE_PAIRS:
+        return FaceSampling(indices=exact, exact=True, pitch_a=pitch_a)  # type: ignore[arg-type]
+
+    pitch = min(pitch_a, PITCH_CLEARANCE_FRACTION * solute_clearance(grid, structure))
+    indices = tuple(
+        _axis_samples(n, h, pitch) for n, h in zip(grid.shape, grid.spacing, strict=True)
+    )
+    if all(len(i) == n for i, n in zip(indices, grid.shape, strict=True)):
+        return FaceSampling(indices=exact, exact=True, pitch_a=pitch)  # type: ignore[arg-type]
+    # The *effective* pitch, not the requested one, because this is what
+    # `label` reports into provenance: a run capped from 24 A to 1.8 A by a tight
+    # box must not record itself as having sampled every 24 A.
+    return FaceSampling(indices=indices, exact=False, pitch_a=pitch)  # type: ignore[arg-type]
+
+
+def _exact_nodes(shape: tuple[int, int, int]) -> np.ndarray:
+    """Every boundary node, enumerated exactly as the pre-M9 code did.
+
+    **The expression matters, not just the values it produces.** `np.argwhere`
+    returns a transposed, non-contiguous view — strides (8, 180240) on a 65^3
+    box — where the `np.unique` the strided path needs returns C-contiguous
+    (24, 8). The two agree element for element and in the same order, but
+    `points` inherits the layout and numpy's pairwise summation blocks by
+    layout, so every face node lands one ULP apart. That is enough to move a
+    recorded energy, and no test that compares values on one machine can see it
+    coming.
+
+    So this is not `np.unique`'s output rearranged to match; it is the original
+    call, kept so "the exact path is the scheme the recordings were made with"
+    is a property of the code rather than a claim about it.
+    """
+    return np.argwhere(boundary_mask(shape))
+
+
+def _sampled_nodes(shape: tuple[int, int, int], sampling: FaceSampling) -> np.ndarray:
+    """(S, 3) indices of the sampled boundary nodes, deduplicated and sorted.
+
+    Sorted lexicographically by `np.unique`, which is the same order as the flat
+    key `(i * ny + j) * nz + k`, so `searchsorted` on that key is a valid lookup.
+    """
+    blocks = []
+    for axis in range(DIMENSIONS):
+        b, c = (k for k in range(DIMENSIONS) if k != axis)
+        gb, gc = np.meshgrid(sampling.indices[b], sampling.indices[c], indexing="ij")
+        for position in (0, shape[axis] - 1):
+            block = np.empty((gb.size, DIMENSIONS), dtype=np.intp)
+            block[:, axis] = position
+            block[:, b] = gb.ravel()
+            block[:, c] = gc.ravel()
+            blocks.append(block)
+    return np.unique(np.concatenate(blocks), axis=0)
+
+
+def _lift(n: int, sample: np.ndarray) -> FloatArray | None:
+    """(n x m) matrix carrying values at `sample` to every node, linearly.
+
+    `None` when the samples *are* every node, which the caller takes as an
+    identity — not as an optimisation but as a guarantee: an identity matrix
+    multiply would be bit-identical anyway, and returning `None` says so without
+    asking the reader to convince themselves of it.
+    """
+    if len(sample) == n:
+        return None
+    ordinal = np.interp(
+        np.arange(n, dtype=np.float64),
+        sample.astype(np.float64),
+        np.arange(len(sample), dtype=np.float64),
+    )
+    lower = np.minimum(np.floor(ordinal).astype(np.intp), len(sample) - 2)
+    frac = ordinal - lower
+    weights = np.zeros((n, len(sample)), dtype=np.float64)
+    rows = np.arange(n, dtype=np.intp)
+    weights[rows, lower] = 1.0 - frac
+    weights[rows, lower + 1] = frac
+    return weights
+
+
+def solute_clearance(grid: DebyeGrid, structure: PQRData) -> float:
+    """How far the nearest atom centre sits from the box surface, in angstroms.
+
+    One quantity serving two purposes, which is why it is named rather than
+    inlined twice: it is what the refusal below tests, and it is what the face
+    pitch is capped against. Both are asking the same question — how close does
+    the boundary expression get to the charges it is a far-field approximation
+    of — and answering it in two places is how they would drift apart.
+    """
+    low = np.asarray(grid.origin, dtype=np.float64)
+    high = low + (np.asarray(grid.shape, dtype=np.float64) - 1.0) * np.asarray(grid.spacing)
+    reach = np.minimum(structure.coords - low, high - structure.coords)
+    return float(reach.min()) if reach.size else float("inf")
+
+
+def _refuse_atoms_near_the_face(grid: DebyeGrid, structure: PQRData) -> None:
+    """Refuse a solute whose atoms reach the box face, in `O(atoms)`.
+
+    **This check used to be a side effect of the expensive thing.** It lived
+    inside the distance block below as a running minimum over every face node
+    against every atom — which is only available while that `O(nodes x atoms)`
+    matrix is being built. Sample the face instead and the check evaporates: a
+    strided face visits a few hundred of 82,050 nodes and could only catch the
+    bad case by luck.
+
+    **And what it protects against is not what its predecessor documented.** The
+    comment it replaces described a `np.maximum(distances, 1e-6)` clip turning
+    the expression's singularity into 7.1e6 kT/e on one node. Under any
+    replacement boundary no singularity returns, because the face value is
+    interpolated. What returns is quieter and worse: `_solve_state` zeroes the
+    right-hand side on all six faces, so an atom sitting *on* a face has its
+    charge assigned entirely to Dirichlet nodes and then discarded — **20.00% of
+    a structure's total charge silently missing from the source term**, falling
+    as `1 - d/h` to nothing at one full cell. `trilinear_weights` objects only
+    when an atom is strictly outside the box, so nothing else sees it.
+
+    Distance is measured from the atom centre to the box surface, which is the
+    same quantity the old check minimised over and is a lower bound on the
+    distance to the nearest face *node*. Conservative in the safe direction, and
+    it costs one pass over the atoms.
+    """
+    closest = solute_clearance(grid, structure)
+    if closest < min(grid.spacing):
+        raise InputError(
+            f"an atom lies {closest:.4g} A from the edge of the box, closer than the "
+            f"grid spacing {min(grid.spacing):.4g} A. The boundary values are a "
+            "Debye-Huckel tail summed over the atoms, which is only meaningful where "
+            "the box face is clear of them; at this distance it is the expression's "
+            "own singularity, not a potential — and an atom this close also loses "
+            "charge to the Dirichlet face, which nothing downstream would report. "
+            "Increase GridSpec.padding — it is the whole boundary condition for this "
+            "solver."
+        )
+
+
 def debye_huckel_boundaries(
     grid: DebyeGrid,
     structure: PQRData,
     states: Sequence[tuple[SolventModel, bool]],
+    *,
+    pitch_a: float = DEFAULT_BOUNDARY_PITCH_A,
 ) -> list[FloatArray]:
     """Dirichlet values on the box face, kT/e, zero in the interior — for several
     states over one pass of distances.
@@ -204,6 +438,22 @@ def debye_huckel_boundaries(
     so it reduces to a plain Coulomb sum. Using the *same* box and the same
     expression for both states is what makes their difference a solvation
     energy rather than two unrelated numbers subtracted.
+
+    **The sum is evaluated on a strided face and interpolated up.** Every atom at
+    every face node is `O(nodes x atoms)` — the only superlinear stage debye has,
+    43% of a serum albumin solve and scaling as atoms^1.45 where everything else
+    is near-linear. The field it produces is smooth: it is a sum of `1/r` tails
+    seen from at least `padding` away, so it has no feature the face lattice can
+    resolve and sampling it every ~12 A loses nothing. Measured on albumin the
+    boundary goes **12.94 s -> 0.24 s** and the near field comes back at
+    r = 1.000000, sign 99.996%, energy +0.068% against the exact sum — better
+    than a coarse pre-solve, which ROADMAP.md section 12 priced at 2.0-2.5 s for
+    the same accuracy and a second grid hierarchy.
+
+    `pitch_a <= 0` and any case under `EXACT_FACE_PAIRS` evaluate every node, and
+    that path is **bit-identical to the exact sum** rather than merely close: the
+    per-point arithmetic below is untouched and the interpolation is skipped, not
+    applied as an identity.
     """
     recipes = []
     for solvent, homogeneous in states:
@@ -226,21 +476,29 @@ def debye_huckel_boundaries(
             )
         )
 
-    mask = boundary_mask(grid.shape)
-    indices = np.argwhere(mask)
-    points = np.asarray(grid.origin) + indices * np.asarray(grid.spacing)
-
     # The Debye-Huckel tail is a point-charge expression, so it is meaningful
     # only where the box face is clear of the charges — which is what `padding`
-    # is for. Refusing is not defensive coding here: this replaced a
-    # `np.maximum(distances, 1e-6)` clip whose comment claimed the case could
-    # not arise and that something downstream would describe it. Both were
-    # wrong. A zero-radius atom at the low corner of its own bounding box with
-    # `padding=0` sits exactly *on* a boundary node, is legally inside the grid
-    # so `trilinear_weights` does not object, and the clip turned the
-    # singularity into 7.1e6 kT/e on that node and solved on. A confident wrong
-    # number, from a guard that was documented as unreachable.
-    closest = float("inf")
+    # is for. See `_refuse_atoms_near_the_face` for why this is now an explicit
+    # O(atoms) pass rather than a minimum taken over the distance block below.
+    _refuse_atoms_near_the_face(grid, structure)
+
+    sampling = plan_face_sampling(grid, structure, pitch_a)
+    # **The exact path is the pre-M9 expression, verbatim, and that is not
+    # fussiness.** `np.argwhere` returns a transposed view with strides
+    # (8, 180240); `_sampled_nodes` returns a C-contiguous (24, 8). The indices
+    # are equal element for element and in the same order — but `points`
+    # inherits the layout, and numpy's pairwise summation blocks by memory
+    # layout, so `norm(..., axis=2)` and `sum(axis=1)` accumulate in a different
+    # order and every face node lands one ULP away. Measured on
+    # `peptide-molecular` that moved the recorded energy from
+    # -218.62772042354118 to -218.62772042354123 on 13,043 of 22,530 nodes.
+    #
+    # A tolerance-based corpus cannot see that, and neither can a test that
+    # compares this function against itself — which is how it survived a green
+    # suite. `tests/test_debye_m9.py` now anchors on the literal digits.
+    indices = _exact_nodes(grid.shape) if sampling.exact else _sampled_nodes(grid.shape, sampling)
+    points = np.asarray(grid.origin) + indices * np.asarray(grid.spacing)
+
     values = [np.zeros(len(points), dtype=np.float64) for _ in recipes]
     # The bound is in *pairs*, so it holds whatever the atom count is — and it
     # bounds one distance block, which is now shared rather than rebuilt per
@@ -250,27 +508,43 @@ def debye_huckel_boundaries(
     for start in range(0, len(points), chunk):
         block = points[start : start + chunk]
         distances = np.linalg.norm(block[:, None, :] - structure.coords[None, :, :], axis=2)
-        closest = min(closest, float(distances.min()))
-        if closest < min(grid.spacing):
-            raise InputError(
-                f"an atom lies {closest:.4g} A from the edge of the box, closer than the "
-                f"grid spacing {min(grid.spacing):.4g} A. The boundary values are a "
-                "Debye-Huckel tail summed over the atoms, which is only meaningful where "
-                "the box face is clear of them; at this distance it is the expression's "
-                "own singularity, not a potential. Increase GridSpec.padding — it is the "
-                "whole boundary condition for this solver."
-            )
         for (prefactor, kappa, exclusion, screening), out in zip(recipes, values, strict=True):
             contribution = screening[None, :] / distances
             if kappa:
                 contribution *= np.exp(-kappa * (distances - exclusion[None, :]))
             out[start : start + chunk] = prefactor * contribution.sum(axis=1)
 
-    fields = []
-    for out in values:
-        field = np.zeros(grid.shape, dtype=np.float64)
-        field[tuple(indices.T)] = out
-        fields.append(field)
+    if sampling.exact:
+        fields = []
+        for out in values:
+            field = np.zeros(grid.shape, dtype=np.float64)
+            field[tuple(indices.T)] = out
+            fields.append(field)
+        return fields
+
+    # Lexicographic order is what `np.unique` returned above, and it is the order
+    # this key sorts in, so `searchsorted` finds a sampled node's row.
+    shape = grid.shape
+    keys = (indices[:, 0] * shape[1] + indices[:, 1]) * shape[2] + indices[:, 2]
+    lifts = [_lift(n, s) for n, s in zip(shape, sampling.indices, strict=True)]
+
+    fields = [np.zeros(shape, dtype=np.float64) for _ in recipes]
+    for axis in range(DIMENSIONS):
+        b, c = (k for k in range(DIMENSIONS) if k != axis)
+        lift_b, lift_c = lifts[b], lifts[c]
+        gb, gc = np.meshgrid(sampling.indices[b], sampling.indices[c], indexing="ij")
+        for position in (0, shape[axis] - 1):
+            face: list[np.ndarray] = [np.empty(0, dtype=np.intp)] * DIMENSIONS
+            face[axis] = np.full(gb.size, position, dtype=np.intp)
+            face[b] = gb.ravel()
+            face[c] = gc.ravel()
+            rows = np.searchsorted(keys, (face[0] * shape[1] + face[1]) * shape[2] + face[2])
+            where = tuple(position if k == axis else slice(None) for k in range(DIMENSIONS))
+            for out, field in zip(values, fields, strict=True):
+                sampled = out[rows].reshape(gb.shape)
+                lifted = sampled if lift_b is None else lift_b @ sampled
+                lifted = lifted if lift_c is None else lifted @ lift_c.T
+                field[where] = lifted
     return fields
 
 

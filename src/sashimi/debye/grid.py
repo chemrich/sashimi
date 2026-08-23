@@ -108,19 +108,24 @@ def size_grid(pqr: PQRData, spec: GridSpec) -> DebyeGrid:
     which is the one place debye is structurally simpler than both incumbents:
     the box is solved directly, so `padding` is the whole boundary story.
 
-    **That simplicity has a price, and it is the largest single stage in a
-    solve.** The boundary condition is *not* the same approximation the
-    incumbents make: focusing is what lets APBS use `bcfl sdh`, the whole
-    molecule as one sphere and `O(boundary nodes)`, because a monopole is a good
-    description at 1.7x the molecular extent. With no coarse grid debye cannot
-    approximate that crudely, so it sums the screened tail over *every atom at
-    every face node* — 1.5 billion pairs on serum albumin, 43% of a solve,
-    scaling as atoms^1.45 where every other stage is near-linear. ROADMAP.md
-    section 12's "M9 — a boundary that does not cost `O(nodes x atoms)`" is the
-    plan to stop paying it — by striding the face, not by adding a coarse grid:
-    a coarse pre-solve was measured at 2.0-2.5 s on serum albumin against a
-    strided exact face at 0.24 s, so what debye cannot afford is `sdh`'s
-    crudeness, not the exact sum itself.
+    **That simplicity used to have a price, and M9 paid it off.** The boundary
+    condition is *not* the same approximation the incumbents make: focusing is
+    what lets APBS use `bcfl sdh`, the whole molecule as one sphere and
+    `O(boundary nodes)`, because a monopole is a good description at 1.7x the
+    molecular extent. debye keeps the exact multi-atom sum — `sdh` on this box
+    fails M9's accuracy gate — but no longer evaluates it at *every* face node:
+    it samples the face every few angstroms and interpolates, which is
+    `O(samples x atoms)` with samples independent of the lattice. Before that it
+    was 1.5 billion pairs on serum albumin, 43% of a solve and scaling as
+    atoms^1.45 where every other stage is near-linear; it is now under 3%.
+    See `sources.debye_huckel_boundaries` and ROADMAP.md section 12's "M9 — a
+    boundary that does not cost `O(nodes x atoms)`", which also records why the
+    coarse grid this milestone was named for is *not* what got built.
+
+    **`padding` therefore does two jobs**, and the second one is newer: it sets
+    how far the Dirichlet face sits from the solute, and it caps how coarsely
+    that face may be sampled. A smaller box needs a finer pitch, not a coarser
+    one — see `sources.PITCH_CLEARANCE_FRACTION`.
     """
     extent = pqr.extent()
     center = pqr.center()
