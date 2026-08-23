@@ -77,13 +77,26 @@ def solver():
 
 
 def test_the_gb_corpus_is_not_empty():
-    """A guard on the selection above: a typo here would silently test nothing."""
-    assert len(GB_CASES) >= 19
+    """A guard on the selection above: a typo here would silently test nothing.
+
+    Set equality against the recordings, where this was `>= 19` under a set that
+    is 31 now — so twelve could have dropped out of the selection without a
+    word, which is the exact failure the docstring claims to prevent. The two
+    sides are derived by different routes: `GB_CASES` filters the manifest by
+    surface model and by whether GB would replace the geometry, while the
+    directory is what `sashimi corpus build --backend gb` actually wrote. They
+    agreeing is a real statement; a floor under one of them was not.
+    """
+    assert {c.name for c in GB_CASES} == {path.stem for path in GB_DIRECTORY.glob("*.json")}
+
     # And a guard on the tier split: a filter that took everything would make
     # the re-solve free by not running, which is the failure it is meant to
-    # avoid rather than the one it causes.
-    assert len(GB_RESOLVED) >= 19
-    assert len(GB_RESOLVED) < len(GB_CASES)
+    # avoid rather than the one it causes. Stated as the partition it is, so
+    # neither side can empty out.
+    assert set(GB_RESOLVED) < set(GB_CASES)
+    assert {c.name for c in GB_CASES} - {c.name for c in GB_RESOLVED} == {
+        c.name for c in GB_CASES if c.tier is CaseTier.FULL
+    }
 
 
 @pytest.mark.parametrize("case", GB_RESOLVED, ids=lambda c: c.name)

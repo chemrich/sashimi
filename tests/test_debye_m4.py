@@ -189,14 +189,28 @@ def test_the_corpus_can_state_the_probes_worth_above_twenty_atoms():
     ]
     assert not lonely, f"solute(s) large enough to gate with no surface sibling: {lonely}"
 
-    proteins = [
+    proteins = {
         molecular.name
         for _, molecular in surface_pairs()
         if molecular.structure().n_atoms >= GATEABLE_ATOMS
-    ]
-    assert len(proteins) >= 8, (
-        f"only {len(proteins)} protein-scale pair(s); the probe is worth 4% on ALA-GLY "
-        "and 17-36% on a protein, so the peptide does not stand in for them"
+    }
+    # Derived from the manifest by a second route rather than floored at 8. The
+    # `lonely` check above says no large solute *lacks* a sibling, which passes
+    # vacuously if there are no large solutes at all; this says which ones there
+    # are. `>= 8` was written when 8 was near the count and is 12 now, so four
+    # could have left the gate in silence — and a floor cannot tell "one pair
+    # was dropped" from "the manifest shrank on purpose".
+    expected = {
+        case.name
+        for case in MANIFEST
+        if case.solvent.surface_model is SurfaceModel.MOLECULAR
+        and case.name in paired
+        and case.structure().n_atoms >= GATEABLE_ATOMS
+    }
+    assert proteins == expected
+    assert proteins, (
+        "no protein-scale pair; the probe is worth 4% on ALA-GLY and 17-36% on "
+        "a protein, so the peptide does not stand in for them"
     )
 
 
