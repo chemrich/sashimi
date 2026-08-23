@@ -38,6 +38,7 @@ from sashimi.debye.options import DebyeOptions, check_equation, check_surface
 from sashimi.debye.sources import (
     debye_huckel_boundaries,
     interpolate_at_atoms,
+    plan_face_sampling,
     source_term,
 )
 from sashimi.protocol import (
@@ -135,7 +136,9 @@ class DebyeSolver:
         wanted = [(solvent, False)]
         if request.want_energy:
             wanted.append((reference_solvent, True))
-        boundaries = debye_huckel_boundaries(grid, request.structure, wanted)
+        boundaries = debye_huckel_boundaries(
+            grid, request.structure, wanted, pitch_a=self.options.boundary_pitch_a
+        )
 
         solvated, solvated_report = _solve_state(
             grid, request.structure, solvent, self.options, boundary=boundaries[0]
@@ -166,7 +169,7 @@ class DebyeSolver:
                 backend=self.label,
                 binary_path=None,
                 binary_sha256=None,
-                resolved_parameters=_resolved(grid, solvent, self.options),
+                resolved_parameters=_resolved(grid, request.structure, solvent, self.options),
                 wall_seconds=round(wall_seconds, 4),
                 energy_term=EnergyTerm.POLAR_SOLVATION,
                 accuracy_tier=AccuracyTier.REFERENCE,
@@ -195,7 +198,9 @@ def _polar_solvation_energy(
     return energy_kt * BOLTZMANN * temperature * AVOGADRO / JOULES_PER_KJ
 
 
-def _resolved(grid: DebyeGrid, solvent: SolventModel, options: DebyeOptions) -> Diagnostics:
+def _resolved(
+    grid: DebyeGrid, structure: PQRData, solvent: SolventModel, options: DebyeOptions
+) -> Diagnostics:
     return {
         "surface_model": solvent.surface_model.value,
         "solute_dielectric": solvent.solute_dielectric,
@@ -219,7 +224,16 @@ def _resolved(grid: DebyeGrid, solvent: SolventModel, options: DebyeOptions) -> 
             # to reproduce the number.
             "max_cycles": options.max_cycles,
             "smoothing_sweeps": options.smoothing_sweeps,
-            "boundary_condition": "multiple Debye-Huckel on the box face",
+            # Names the *scheme*, not just the family, because it is the only
+            # discriminating field: striding the face changes the boundary and
+            # not the box, so `grid.as_diagnostics()` is byte-identical across
+            # it. Measured before this said so, `mdh`, `sdh` and a zeroed
+            # boundary — 1.4260% apart in energy — all addressed one file, and
+            # the second solve silently reused the first's map. M8a added
+            # `dielectric_smoothing` here for exactly this reason.
+            "boundary_condition": plan_face_sampling(
+                grid, structure, options.boundary_pitch_a
+            ).label,
             "bjerrum_length_vacuum_a": round(bjerrum_length_a(solvent.temperature), 4),
         },
     }

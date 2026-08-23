@@ -159,6 +159,7 @@
       "multigrid_levels": 5
     },
     "debye": {
+      "dielectric_smoothing": 0.0,
       "tolerance": 1e-08,
       "max_cycles": 200,
       "smoothing_sweeps": 2,
