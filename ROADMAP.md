@@ -5133,9 +5133,26 @@ detected divergence from the scheme it named. *A test that compares a function
 against itself is not a comparison, and it reads exactly like one.*
 
 The fix is that the exact path **is** the pre-M9 expression rather than something
-that agrees with it, and the test now anchors on the literal digits recorded from
-`a0862ce` — the only thing that can test identity against code that no longer
-exists. Reinstating the defect reddens it; the fix greens it.
+that agrees with it — `_exact_nodes` exists to hold that call so the property
+belongs to the code instead of to a comment.
+
+**And the obvious test for it does not work, which is the more useful half.** The
+first attempt anchored on the literal digits from `a0862ce`,
+−218.62772042354118, on the reasoning that nothing else can test identity against
+code that no longer exists. It passed locally and **CI failed on all three legs**:
+linux/amd64 returns **−218.62772042354138**. *Bit-identity in this solver is a
+**per-platform** property, so an absolute anchor tests the platform as much as
+the code* — a different BLAS and a different pairwise-summation blocking are
+enough. Every "bit-identical" claim this document makes should be read as
+"bit-identical on one machine", which is still the right discipline for an
+answer-preserving change and is not a portable constant.
+
+What is portable is the *scheme*: `_exact_nodes` must be `np.argwhere`'s
+transposed view and not a C-contiguous rearrangement of the same values, and a
+second test forces the C-contiguous copy through the same call and asserts the
+answer **moves** — so if the layout ever stops mattering, the first test is
+guarding nothing and says so. Reinstating the defect reddens the pair; the fix
+greens it.
 
 ##### Two invariants carried rather than dropped
 

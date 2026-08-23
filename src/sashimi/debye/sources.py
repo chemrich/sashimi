@@ -288,6 +288,25 @@ def plan_face_sampling(
     return FaceSampling(indices=indices, exact=False, pitch_a=pitch)  # type: ignore[arg-type]
 
 
+def _exact_nodes(shape: tuple[int, int, int]) -> np.ndarray:
+    """Every boundary node, enumerated exactly as the pre-M9 code did.
+
+    **The expression matters, not just the values it produces.** `np.argwhere`
+    returns a transposed, non-contiguous view — strides (8, 180240) on a 65^3
+    box — where the `np.unique` the strided path needs returns C-contiguous
+    (24, 8). The two agree element for element and in the same order, but
+    `points` inherits the layout and numpy's pairwise summation blocks by
+    layout, so every face node lands one ULP apart. That is enough to move a
+    recorded energy, and no test that compares values on one machine can see it
+    coming.
+
+    So this is not `np.unique`'s output rearranged to match; it is the original
+    call, kept so "the exact path is the scheme the recordings were made with"
+    is a property of the code rather than a claim about it.
+    """
+    return np.argwhere(boundary_mask(shape))
+
+
 def _sampled_nodes(shape: tuple[int, int, int], sampling: FaceSampling) -> np.ndarray:
     """(S, 3) indices of the sampled boundary nodes, deduplicated and sorted.
 
@@ -477,11 +496,7 @@ def debye_huckel_boundaries(
     # A tolerance-based corpus cannot see that, and neither can a test that
     # compares this function against itself — which is how it survived a green
     # suite. `tests/test_debye_m9.py` now anchors on the literal digits.
-    indices = (
-        np.argwhere(boundary_mask(grid.shape))
-        if sampling.exact
-        else _sampled_nodes(grid.shape, sampling)
-    )
+    indices = _exact_nodes(grid.shape) if sampling.exact else _sampled_nodes(grid.shape, sampling)
     points = np.asarray(grid.origin) + indices * np.asarray(grid.spacing)
 
     values = [np.zeros(len(points), dtype=np.float64) for _ in recipes]

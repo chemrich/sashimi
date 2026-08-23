@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 
 from sashimi.artifacts import content_address
-from sashimi.corpus import MANIFEST
+from sashimi.debye import sources
 from sashimi.debye.backend import DebyeSolver
 from sashimi.debye.grid import size_grid
 from sashimi.debye.options import DebyeOptions
@@ -32,6 +32,7 @@ from sashimi.debye.sources import (
     DEFAULT_BOUNDARY_PITCH_A,
     EXACT_FACE_PAIRS,
     PITCH_CLEARANCE_FRACTION,
+    _exact_nodes,
     _sampled_nodes,
     boundary_mask,
     debye_huckel_boundaries,
@@ -67,51 +68,53 @@ def _grid(structure: PQRData, resolution: float = 1.0):
 # --- bit-identity -----------------------------------------------------------
 
 
-# The energy `peptide-molecular` had before M9, to the last digit, produced by
-# the code at `a0862ce`. **A literal, because nothing else can test this.** The
-# corpus compares with a relative tolerance, so it cannot see a one-ULP move; a
-# test that compares `debye_huckel_boundaries` against itself cannot either. The
-# first version of this module did the latter and passed while the exact path
-# was quietly one ULP off — see `sources.debye_huckel_boundaries` for the cause,
-# which was an array's memory layout and not its contents.
-PEPTIDE_ENERGY_BEFORE_M9 = -218.62772042354118
+def test_the_exact_face_uses_the_enumeration_the_recordings_were_made_with():
+    """The exact path must *be* `np.argwhere(boundary_mask(...))`, not agree with it.
 
-
-def test_the_exact_face_is_bit_identical_to_the_scheme_it_replaces():
-    """`pitch <= 0` reproduces the pre-M9 sum to the last bit, not to a tolerance.
-
-    "Close enough" is what a re-recording would have to be justified against;
-    identical needs no justification at all, and it is what lets the closed-form
-    and small-molecule cases keep the numbers they were recorded with.
+    **This cannot be tested with a literal energy.** The first version of this
+    test pinned -218.62772042354118, taken from `a0862ce` on darwin/arm64, and
+    CI failed on linux/amd64 with -218.62772042354138. Bit-identity in this
+    solver is a per-platform property, so an absolute anchor tests the platform
+    as much as the code. What is portable is the *scheme*: every recording was
+    made through this enumeration, and the two below are not interchangeable.
     """
-    case = next(c for c in MANIFEST if c.name == "peptide-molecular")
-    grid = size_grid(case.structure(), case.grid)
-    assert plan_face_sampling(grid, case.structure(), DEFAULT_BOUNDARY_PITCH_A).exact
+    shape = _grid(_load(FAS2)).shape
+    exact = _exact_nodes(shape)
+    unique = _sampled_nodes(shape, plan_face_sampling(_grid(_load(FAS2)), _load(FAS2), 0.0))
 
-    energy = DebyeSolver().solve(case.request()).energy_kj_mol
-    assert repr(energy) == repr(PEPTIDE_ENERGY_BEFORE_M9), (
-        f"the exact path moved: {energy!r} against {PEPTIDE_ENERGY_BEFORE_M9!r}. "
-        "This is a bit-level assertion on purpose — the corpus tolerance cannot "
-        "see a one-ULP move, and a one-ULP move here means the exact path is no "
-        "longer the scheme every small recording was made with."
-    )
+    assert np.array_equal(exact, unique), "same nodes, in the same order"
+    assert not exact.flags["C_CONTIGUOUS"], "argwhere returns a transposed view"
+    assert unique.flags["C_CONTIGUOUS"], "and np.unique does not"
 
 
-def test_the_exact_face_does_not_depend_on_how_its_nodes_were_enumerated():
-    """The specific defect: same indices, same order, different memory layout.
+def test_the_enumeration_is_load_bearing_and_not_cosmetic(monkeypatch):
+    """The layout above changes the answer, which is why the test before it exists.
 
-    `np.argwhere` hands back a transposed view and `np.unique` a C-contiguous
-    array. Both enumerate the same face nodes in the same order, and numpy's
-    pairwise summation still accumulates them differently, because it blocks by
-    layout. Nothing about the values says so.
+    Same nodes, same order, C-contiguous instead of transposed — and the face
+    values move. Measured on `peptide-molecular` that was one ULP on 13,043 of
+    22,530 nodes, enough to move a recorded energy. If this ever stops failing,
+    the test above has become decoration.
     """
     structure = _load(FAS2)
     grid = _grid(structure)
-    sampling = plan_face_sampling(grid, structure, 0.0)
-    argwhere = np.argwhere(boundary_mask(grid.shape))
-    unique = _sampled_nodes(grid.shape, sampling)
-    assert np.array_equal(argwhere, unique), "same nodes, same order"
-    assert argwhere.strides != unique.strides, "and that is not enough to be safe"
+    shipped = debye_huckel_boundaries(grid, structure, STATES, pitch_a=0.0)
+
+    monkeypatch.setattr(
+        sources, "_exact_nodes", lambda shape: np.ascontiguousarray(_exact_nodes(shape))
+    )
+    relaid = debye_huckel_boundaries(grid, structure, STATES, pitch_a=0.0)
+
+    assert not any(np.array_equal(a, b) for a, b in zip(shipped, relaid, strict=True)), (
+        "a C-contiguous copy of the same indices in the same order produced "
+        "bit-identical values, so the enumeration no longer decides the answer "
+        "and the test above is guarding nothing"
+    )
+    for a, b in zip(shipped, relaid, strict=True):
+        # Scaled to the field, not to each node: the face crosses zero, and a
+        # per-node relative tolerance is unbounded where it does.
+        assert np.abs(a - b).max() <= 1e-12 * np.abs(a).max(), (
+            "the difference should be rounding, not a different boundary"
+        )
 
 
 def test_a_small_solute_is_held_on_the_exact_face_whatever_the_pitch():
