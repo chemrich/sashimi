@@ -325,6 +325,68 @@ def test_the_signed_distance_agrees_with_the_boolean_it_is_derived_from():
             )
 
 
+def test_pruning_the_band_leaves_every_value_the_ramp_actually_reads():
+    """`signed_gap(band=w)` against `signed_gap()`, on the half that is consumed.
+
+    The ramp clamps: `dielectric.py` computes `clip(0.5 - gap / (2w), 0, 1)`, so
+    only `|gap| < w` reaches an answer and the exact distance everywhere else is
+    unobservable. `band` declines to compute that unobservable part, which is
+    most of the lattice — 0.2% to 3.7% of nodes are in the band across the
+    lattices below.
+
+    Two assertions, and the second is what stops the first being vacuous. Inside
+    the band the two must agree **bit for bit**, not approximately. Outside it
+    they must *differ somewhere*: if `band` were ignored — the obvious way for
+    this to rot — the pruned field would equal the exact one everywhere and the
+    first assertion would pass while the parameter did nothing.
+
+    `sign(gap)` is checked too, because it is what
+    `test_the_signed_distance_agrees_with_the_boolean_it_is_derived_from` grades
+    the whole construction on and a prune must not move it.
+    """
+    from sashimi.debye.surface import ReducedSurface  # noqa: PLC0415
+
+    pruned_somewhere = False
+    for path, resolution in (
+        ("tests/data/ala-gly.pqr", 0.5),
+        ("tests/data/ala-gly.pqr", 0.35),
+        ("tests/data/apbs-examples/fas2.pqr", 1.0),
+    ):
+        structure = read_pqr(path)
+        grid = size_grid(structure, GridSpec(resolution=resolution, padding=10.0))
+        axes = axis_coordinates(grid)
+        for smoothing in (0.25, 0.5, 1.0):
+            solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
+            surface = ReducedSurface(structure, solvent)
+            width = min(smoothing * float(min(grid.spacing)), solvent.surface_radius)
+
+            exact = surface.signed_gap(axes)
+            pruned = surface.signed_gap(axes, band=width)
+            where = f"{path} res={resolution} w={width:.4f}"
+
+            in_band = np.abs(exact) < width
+            assert in_band.any(), f"{where}: no node in the band, so this grades nothing"
+            assert np.array_equal(exact[in_band], pruned[in_band]), (
+                f"{where}: {int((exact[in_band] != pruned[in_band]).sum())} of "
+                f"{int(in_band.sum())} in-band nodes moved"
+            )
+
+            exact_fraction = np.clip(0.5 - exact / (2.0 * width), 0.0, 1.0)
+            pruned_fraction = np.clip(0.5 - pruned / (2.0 * width), 0.0, 1.0)
+            assert np.array_equal(exact_fraction, pruned_fraction), (
+                f"{where}: the consumed ramp fraction moved on "
+                f"{int((exact_fraction != pruned_fraction).sum())} nodes"
+            )
+            assert np.array_equal(np.sign(exact), np.sign(pruned)), f"{where}: sign moved"
+
+            pruned_somewhere = pruned_somewhere or bool((exact != pruned).any())
+
+    assert pruned_somewhere, (
+        "`band` changed nothing on any lattice, so the prune is not running and "
+        "the agreement above is a comparison of one code path with itself"
+    )
+
+
 def test_the_ramp_raises_the_convergence_order_on_both_surfaces():
     """M8a's gate, and the one a pose spread alone would have failed to catch.
 
