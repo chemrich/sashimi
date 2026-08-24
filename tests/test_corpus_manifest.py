@@ -318,7 +318,7 @@ def test_the_tight_delphi_tolerances_are_actually_reaching_delphi():
     actually sit inside the tight bound rather than merely inside the loose one.
     """
     checked = 0
-    for name, _, other in cross_backend_cases("delphi"):
+    for name, _, other in paired_cases(ROOT_BACKEND, "delphi"):
         case = next(c for c in MANIFEST if c.name == name)
         if case.analytic is None or not case.analytic.per_backend_rtol:
             continue
@@ -331,7 +331,16 @@ def test_the_tight_delphi_tolerances_are_actually_reaching_delphi():
         assert other["analytic"]["relative_error"] <= tight, f"{name}: {other['analytic']}"
         checked += 1
 
-    assert checked >= 15, "the tight tolerances are asserted on too little to mean anything"
+    # Every recorded pair whose case declares a per-backend tolerance, derived
+    # rather than floored. `>= 15` was written when 15 was near the real count;
+    # it is 20 now, so five could have stopped being checked in silence.
+    assert checked == sum(
+        1
+        for case in MANIFEST
+        if case.analytic is not None
+        and case.analytic.per_backend_rtol
+        and (corpus_dir_for("delphi") / f"{case.name}.json").is_file()
+    )
 
 
 def test_the_debye_tolerances_are_actually_reaching_debye():
@@ -686,15 +695,28 @@ CROSS_BACKEND_DIRECTORIES = {
 TABIPB_DEVIATION_CEILING = 0.02
 
 
-def cross_backend_cases(backend: str) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
-    """Every recorded (case, reference summary, other-backend summary) triple."""
-    directory = CROSS_BACKEND_DIRECTORIES[backend]
-    found = []
-    for case in MANIFEST:
-        path = directory / f"{case.name}.json"
-        if path.is_file():
-            found.append((case.name, load_summary(case), load_summary(case, directory)))
-    return found
+def paired_cases(a: str, b: str) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    """Every recorded (case, summary from `a`, summary from `b`) triple.
+
+    Symmetric in its two arguments, where the `cross_backend_cases` it replaces
+    hardcoded APBS on the left. That asymmetry was not a simplification — it was
+    the reason every comparison in this file ran against APBS and no other pair
+    could be expressed. `corpus_dir_for` already resolves the root backend to
+    `tests/corpus/` and every other to a subdirectory of it, so both sides are
+    the same lookup and neither is privileged.
+
+    What it unlocks is the pairing this corpus most needed and could not state:
+    debye against TABI-PB. Those two share no discretization *and* no dielectric
+    assignment, where APBS, DelPhi and debye all sample the dielectric at face
+    centres — `sashimi.debye.dielectric` calls reaching for the other two "a
+    shared bias". A grid-versus-boundary-element pair is the only comparison in
+    this repository that is independent in both respects.
+    """
+    return [
+        (case.name, load_summary(case, backend=a), load_summary(case, backend=b))
+        for case in MANIFEST
+        if all((corpus_dir_for(name) / f"{case.name}.json").is_file() for name in (a, b))
+    ]
 
 
 @pytest.mark.parametrize("backend", sorted(CROSS_BACKEND_DIRECTORIES))
@@ -717,14 +739,137 @@ def test_the_boundary_element_tier_agrees_with_the_grid_tier():
     (`tests/test_corpus_gb.py`) read as a property of the method rather than as
     corpus noise.
     """
-    recorded = cross_backend_cases("tabipb")
-    assert len(recorded) >= 6
+    recorded = paired_cases(ROOT_BACKEND, "tabipb")
+    # Set equality against the directory, not `>= 6`. The floor happened to
+    # equal the real count when it was written, which is the most misleading
+    # place for one to sit: it reads as exact and silently stops guarding the
+    # moment a seventh recording lands.
+    assert {name for name, _, _ in recorded} == {
+        path.stem for path in corpus_dir_for("tabipb").glob("*.json")
+    }
 
     for name, reference, surface in recorded:
         deviation = abs(surface["energy_kj_mol"] - reference["energy_kj_mol"]) / abs(
             reference["energy_kj_mol"]
         )
         assert deviation < TABIPB_DEVIATION_CEILING, f"{name}: {deviation:.2%}"
+
+
+# --- the one comparison that shares neither discretization nor dielectric ----
+#
+# Every other cross-backend number in this repository compares two codes that
+# both fill a volume and both sample the dielectric at face centres. APBS,
+# DelPhi and debye all do, which is why `sashimi.debye.dielectric` says reaching
+# for the first two to grade the third "measures a shared bias".
+#
+# TABI-PB shares neither. It meshes the dielectric boundary and solves an
+# integral equation on it, so a grid code agreeing with it has agreed with
+# something that could not have inherited its errors. That makes these eighteen
+# ratios the most independent statement the corpus can make, and until now only
+# one of the three pairings — APBS's — was checked at all.
+#
+# Measured 2026-08-23, TABI-PB as the denominator in every row so the three
+# grid codes are directly comparable to each other. The pre-existing
+# `TABIPB_DEVIATION_CEILING` test above keeps APBS as its denominator and is
+# untouched; these numbers therefore differ from it in the third digit by
+# convention rather than by disagreement.
+#
+# What the columns say, and it is not what anyone would have guessed:
+#
+# - **debye is the closest of the three to TABI-PB on five of the six cases** —
+#   0.48% to 0.86% where APBS is 1.01% to 1.56% and DelPhi 1.71% to 3.75%.
+# - **And the furthest on the sixth**, `fas2-molecular`, the only real protein
+#   in the boundary-element set: 2.82% against APBS's 1.27% and DelPhi's 1.53%.
+#
+# So the one case where an independent referee is worth most is the one case
+# debye does worst on, and no story about a uniformly better or worse solver
+# fits both halves. `tests/test_corpus_debye.py` records the same structure
+# sitting -1.53% from APBS and -4.41% from DelPhi, so the disagreement is real
+# and not an artifact of the denominator.
+#
+# **Pinned two-sided, with no ceiling.** A bar would have to sit above 2.82% to
+# admit `fas2-molecular` today, which is above every other number here and
+# therefore not a bar at all; and a ceiling derived from the measurement it
+# grades is the threshold-fitted-to-the-result shape ROADMAP.md section 12
+# records this milestone being caught by three times. A pin cannot be satisfied
+# by loosening it.
+CROSS_FAMILY_DEVIATION: dict[tuple[str, str], float] = {
+    ("apbs", "fas2-molecular"): 0.01273,
+    ("apbs", "ion-protein-complex-molecular"): 0.01006,
+    ("apbs", "peptide-molecular"): 0.01456,
+    ("apbs", "peptide-molecular-cold"): 0.01461,
+    ("apbs", "peptide-molecular-high-salt"): 0.01561,
+    ("apbs", "peptide-molecular-no-salt"): 0.01447,
+    ("debye", "fas2-molecular"): 0.02817,
+    ("debye", "ion-protein-complex-molecular"): 0.00862,
+    ("debye", "peptide-molecular"): 0.00583,
+    ("debye", "peptide-molecular-cold"): 0.00578,
+    ("debye", "peptide-molecular-high-salt"): 0.00477,
+    ("debye", "peptide-molecular-no-salt"): 0.00729,
+    ("delphi", "fas2-molecular"): 0.01525,
+    ("delphi", "ion-protein-complex-molecular"): 0.01709,
+    ("delphi", "peptide-molecular"): 0.03652,
+    ("delphi", "peptide-molecular-cold"): 0.03652,
+    ("delphi", "peptide-molecular-high-salt"): 0.03745,
+    ("delphi", "peptide-molecular-no-salt"): 0.03502,
+}
+
+# Both sides are checked-in recordings, so every ratio is exact arithmetic on
+# two constants and this only has to absorb float formatting.
+CROSS_FAMILY_BAND = 0.0005
+
+GRID_BACKENDS = ("apbs", "debye", "delphi")
+
+
+def test_every_grid_backend_is_pinned_against_the_boundary_element_tier():
+    """Set equality, so a seventh TABI-PB recording cannot land unpinned."""
+    expected = {
+        (backend, path.stem)
+        for backend in GRID_BACKENDS
+        for path in corpus_dir_for("tabipb").glob("*.json")
+        if (corpus_dir_for(backend) / path.name).is_file()
+    }
+    assert set(CROSS_FAMILY_DEVIATION) == expected
+
+
+@pytest.mark.parametrize("backend", GRID_BACKENDS)
+def test_the_grid_tier_sits_where_it_was_measured_against_the_surface_tier(backend: str):
+    """Each grid code against TABI-PB, case by case, two-sided.
+
+    Two-sided on purpose. Moving *closer* to the boundary-element answer is the
+    outcome a change to the dielectric treatment would be hoping for, and it is
+    exactly the outcome that should be read by a human rather than absorbed
+    silently by a one-sided bound.
+    """
+    off = []
+    for name, surface, grid in paired_cases("tabipb", backend):
+        found = abs(grid["energy_kj_mol"] - surface["energy_kj_mol"]) / abs(
+            surface["energy_kj_mol"]
+        )
+        expected = CROSS_FAMILY_DEVIATION[(backend, name)]
+        if abs(found - expected) > CROSS_FAMILY_BAND:
+            off.append(f"{name}: {found:.5f} != {expected:.5f}")
+
+    assert not off, "\n  ".join([f"{backend} moved against TABI-PB:", *off])
+
+
+def test_debye_is_closest_to_the_independent_family_except_where_it_matters_most():
+    """The finding above, asserted so that either half changing gets read.
+
+    debye is the closest of the three grid codes to TABI-PB on five of six
+    cases and the furthest on `fas2-molecular`, the only real protein among
+    them. Both halves are pinned: a change that made debye uniformly closest
+    would fail here, and so would one that made it uniformly worst. Neither is
+    a regression on its own — but neither should land without somebody saying
+    which of the two stories is now true.
+    """
+    closest = {
+        name: min(GRID_BACKENDS, key=lambda b: CROSS_FAMILY_DEVIATION[(b, name)])
+        for _, name in CROSS_FAMILY_DEVIATION
+    }
+
+    assert closest.pop("fas2-molecular") == "apbs"
+    assert set(closest.values()) == {"debye"}, closest
 
 
 def test_the_expensive_boundary_element_recordings_are_present():
@@ -735,7 +880,7 @@ def test_the_expensive_boundary_element_recordings_are_present():
     absent", the exact shape of the bug that let the DelPhi tier skip every test
     while CI stayed green. Their presence is checked here instead.
     """
-    recorded = {name: surface for name, _, surface in cross_backend_cases("tabipb")}
+    recorded = {name: surface for name, _, surface in paired_cases(ROOT_BACKEND, "tabipb")}
 
     for name in ("fas2-molecular", "ion-protein-complex-molecular"):
         assert name in recorded, f"{name} has no boundary-element recording"
@@ -771,7 +916,7 @@ def test_the_two_grid_codes_agree_where_they_can_be_compared():
     a worse copy of APBS, it is a second opinion that happens to be sharper on
     the one case with an analytic answer.
     """
-    recorded = cross_backend_cases("delphi")
+    recorded = paired_cases(ROOT_BACKEND, "delphi")
     # Set equality against the directory, not `>= 35`. The floor this replaces
     # was written when 35 was the real count; the directory holds 58 now, so it
     # had stopped guarding twenty-three of them and would have let any of those
@@ -817,7 +962,9 @@ def test_no_recorded_delphi_answer_is_absurd():
     out to want Celsius, the two would have become bit-identical and this test
     would have called them the same physics and passed.
     """
-    energies = {name: other["energy_kj_mol"] for name, _, other in cross_backend_cases("delphi")}
+    energies = {
+        name: other["energy_kj_mol"] for name, _, other in paired_cases(ROOT_BACKEND, "delphi")
+    }
     by_case = {c.name: c for c in MANIFEST}
 
     def physics_key(name: str) -> tuple[Any, ...]:

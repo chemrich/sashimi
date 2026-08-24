@@ -281,19 +281,45 @@ DELPHI_PER_PUSH = (
     "born-ion-molecular-fine",  # 1.13 s
     "kirkwood-molecular-03",  # 1.14 s
 )  # 15.3 s in total
-DELPHI_ON_DEMAND = (
-    "ion-protein-complex-molecular",  # 3.9 s
-    "lysozyme-molecular",  # 5.8 s
-    "barstar-molecular",  # 7.1 s
-    "fas2-molecular",  # 11.5 s
-    "fkbp-apo-molecular",  # 12.8 s
-    "fkbp-dmso-molecular",  # 13.0 s
-    "hca-molecular",  # 13.9 s
-    "protein-rna-molecular",  # 14.9 s
-)  # 83 s in total; `sashimi corpus verify --backend delphi --tier full
-#     --directory tests/corpus/delphi --case <name>`. Their presence and their
-#     agreement with the APBS recordings are checked without a binary in
-#     tests/test_corpus_manifest.py.
+
+# Everything recorded that is not re-solved per push. **Derived, where this and
+# the tuple above were both hand-kept lists** — and between them they named 35
+# of the 58 recordings in `tests/corpus/delphi/`, so twenty-three sat in
+# neither: re-solved by nothing here and named by nothing here. Six of those
+# carry a *tight* per-backend closed-form tolerance (`born-ion-vdw-r1` and
+# `-r6` at 0.001, the four `kirkwood-vdw-*` rungs at 0.003 to 0.01) which
+# `tests/test_corpus_manifest.py` does check against the recordings, but which
+# no binary in this file was ever asked to reproduce.
+#
+# Taking the complement is what makes the split total: a recording added later
+# joins this set by existing, instead of falling out of both and looking like
+# neither. The fast list stays hand-kept because it encodes measured cost, and
+# nothing in the manifest knows what a case costs.
+#
+# These are verified on demand rather than per push — 83 s in total —
+# with `sashimi corpus verify --backend delphi --tier full --directory
+# tests/corpus/delphi --case <name>`. Their presence and their agreement with
+# the APBS recordings are checked without a binary in
+# `tests/test_corpus_manifest.py`.
+DELPHI_ON_DEMAND = tuple(
+    sorted(
+        {path.stem for path in DELPHI_DIRECTORY.glob("*.json")} - set(DELPHI_PER_PUSH),
+    )
+)
+
+
+def test_every_delphi_recording_is_either_re_solved_or_named():
+    """The partition is total, and it is asserted rather than assumed.
+
+    "Too slow to check per push" decaying into "quietly absent" is the shape of
+    the bug that let the whole DelPhi tier skip while CI stayed green. A case in
+    neither tuple is a third state that reads like neither.
+    """
+    recorded = {path.stem for path in DELPHI_DIRECTORY.glob("*.json")}
+
+    assert set(DELPHI_PER_PUSH) <= recorded, set(DELPHI_PER_PUSH) - recorded
+    assert set(DELPHI_PER_PUSH) | set(DELPHI_ON_DEMAND) == recorded
+    assert not set(DELPHI_PER_PUSH) & set(DELPHI_ON_DEMAND)
 
 
 @pytest.mark.parametrize("name", DELPHI_PER_PUSH)
