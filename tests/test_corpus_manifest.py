@@ -300,10 +300,40 @@ def test_the_sharp_boundary_ladder_is_wide_enough_to_grade_a_solver_on():
     born = [c for c in sharp if c.analytic is not None and c.analytic.source.startswith("Born")]
     kirkwood = [c for c in sharp if c.analytic is not None and c.analytic.source.startswith("Kirk")]
 
-    assert len(born) >= 9, "the Born sweep needs its radius, charge and dielectric arms"
-    assert len(kirkwood) >= 3, "M2's ladder is three rungs"
+    # The arms themselves, not a count of cases. `>= 9` and `>= 3` were the
+    # previous form and neither asserted what this docstring claims: fourteen
+    # Born cases at one radius, one charge and one dielectric would have passed
+    # the first, and that is precisely the coincidence the paragraph above says
+    # a single agreeing number cannot rule out. A count is also the wrong shape
+    # for a set that grows — 9 was near the truth when written and the truth is
+    # 14 now, so five could have been deleted in silence.
+    radii = {round(float(r), 3) for c in born for r in c.structure().radii}
+    charges = {round(float(q), 3) for c in born for q in c.structure().charges}
+    dielectrics = {c.solvent.solute_dielectric for c in born}
+
+    assert len(radii) >= 3, f"the radius arm needs more than {sorted(radii)}"
+    assert min(charges) < 0, "no negative charge, so a sign error has nowhere to show"
+    assert max(charges) >= 2, "no divalent, so the q^2 scaling is untested here"
+    assert len(dielectrics) >= 2, f"the dielectric arm needs more than {sorted(dielectrics)}"
     # And a convergence pair, which is the only way to state "monotonic".
     assert {c.grid.resolution for c in born} >= {0.5, 0.25}
+
+    # M2's ladder, by the offset that defines a rung rather than by how many
+    # files carry one. Derived from the geometry — the charged atom's distance
+    # from the origin over the sphere radius — so it cannot drift from a prose
+    # `source` string, and each rung must exist on both portable surfaces
+    # because the probe is what tells the two apart.
+    rungs: dict[float, set[str]] = {}
+    for case in kirkwood:
+        structure = case.structure()
+        coords = np.asarray(structure.coords)
+        charge_at = int(np.argmax(np.abs(np.asarray(structure.charges))))
+        offset = float(np.linalg.norm(coords[charge_at])) / float(max(structure.radii))
+        rungs.setdefault(round(offset, 3), set()).add(case.solvent.surface_model.value)
+
+    assert len(rungs) >= 4, f"M2's ladder needs more rungs than {sorted(rungs)}"
+    assert max(rungs) >= 0.9, "no rung near the boundary, which is where the method strains"
+    assert all(len(surfaces) == 2 for surfaces in rungs.values()), rungs
 
 
 def test_the_tight_delphi_tolerances_are_actually_reaching_delphi():
