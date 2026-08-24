@@ -189,7 +189,10 @@ def dielectric_faces(
             # its own, out of the same three families that decide `inside`. Both
             # go through `signed_gap`, so the ramp no longer knows or cares which
             # boundary it is ramping across.
-            gap = surface.signed_gap(axes)
+            # `band=width` because the `clip` on the next line is what makes the
+            # field outside it unobservable — the two numbers must stay the same
+            # number, which is why it is passed rather than defaulted.
+            gap = surface.signed_gap(axes, band=width)
             fraction = np.clip(0.5 - gap / (2.0 * width), 0.0, 1.0)
             eps = 1.0 / (
                 fraction / solvent.solute_dielectric + (1.0 - fraction) / solvent.solvent_dielectric

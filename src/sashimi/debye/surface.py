@@ -1486,7 +1486,7 @@ class ReducedSurface:
         """The rims' blocking atoms as one CSR, built once. See `rim_arrays`."""
         return _blocker_table(self.rims)
 
-    def signed_gap(self, axes: list[FloatArray]) -> FloatArray:
+    def signed_gap(self, axes: list[FloatArray], band: float | None = None) -> FloatArray:
         """Signed distance to the solvent-excluded surface: negative inside the solute.
 
         **This falls out of the construction rather than being a second one.**
@@ -1512,6 +1512,18 @@ class ReducedSurface:
         not obvious: the boolean version stops asking once a node is claimed —
         a boolean or does not care which feature won. A minimum does, so every
         rim that reaches a node has to be offered and the early-out is gone.
+
+        **`band` trades an unobservable part of the field for most of that
+        cost.** Every consumer of this clamps: `dielectric.py` computes
+        `clip(0.5 - gap / (2 * width), 0, 1)`, so only `|gap| < width` reaches
+        an answer at all — 23.0% of the inflated region on fas2 at 1.0 A. Given
+        that width as `band`, this leaves the rest saturated instead of exact,
+        and the two prunes below are theorems rather than heuristics.
+
+        The default is `None`, which computes the exact field everywhere and is
+        what `tests/test_debye_m4.py` grades `sign(gap) == inside` on over the
+        whole lattice. A caller that clamps should pass its own width; a caller
+        that wants the field itself — plotting it, or grading it — must not.
         """
         structure = self.structure
         if self.solvent.surface_model is not SurfaceModel.MOLECULAR or self.probe <= 0.0:
@@ -1534,9 +1546,42 @@ class ReducedSurface:
         # Beyond this the ramp saturates either way. Finite rather than `inf` so
         # anything that plots the field gets a number.
         far = 2.0 * self.probe
+        # **Initialised over the whole inflated region, and pruned only after.**
+        # The saturated fill is what makes a node deep in the solute read
+        # `gap = -probe`; dropping it from `region` instead would leave it at
+        # `0.0` and read `gap = +probe`, which is solvent. So the prune below
+        # narrows what the three families are *asked* about, never what the
+        # array is initialised to.
         nearest = np.where(region, far, 0.0).astype(np.float64)
+        if band is not None:
+            # **Erode by the band.** Every legal probe centre `a` lies outside
+            # every inflated sphere, so for any node `x`
+            #
+            #     |x - a| >= |a - c_i| - |x - c_i| >= r_i + probe - |x - c_i|
+            #
+            # and taking the nearest atom gives `gap(x) <= d_vdw(x)`, the signed
+            # distance to the van der Waals union. A node with
+            # `d_vdw < -band` therefore has `gap < -band` whatever the families
+            # would have said, and every consumer of this clamps outside the
+            # band — so its exact value is unobservable and the saturated fill
+            # already there is the right answer.
+            #
+            # The test is boolean, so it is a mask over shrunken spheres rather
+            # than a second distance field: `inside_union_of_spheres` is
+            # windowed and compiled where `_union_gap` is neither.
+            deep = inside_union_of_spheres(
+                axes, structure.coords, np.maximum(structure.radii - band, 0.0)
+            )
+            region = region & ~deep
         if region.any():
             _radial_distance(axes, self.spheres, region, nearest)
+            if band is not None:
+                # **And re-prune, because `nearest` only ever decreases.** A node
+                # the radial family has already brought under `probe - band` has
+                # `gap > band` for good, so the two remaining families cannot
+                # move it back into the band and need not be asked. This is the
+                # cheaper half of the prune and it costs one comparison.
+                region = region & (nearest >= self.probe - band)
             _toroidal_distance(axes, self, region, nearest)
             _vertex_distance(axes, self, region, nearest)
         np.minimum(nearest, far, out=nearest)
