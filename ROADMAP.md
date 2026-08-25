@@ -4860,11 +4860,15 @@ are `ramp ÷ hard`, one per referee (fine-hard | fine-ramp).
 | 1.0 | 1.33× – 1.55× | 2.98× – 4.96× |
 | 2.0 | 1.87× – 2.10× | 6.13× – 9.08× |
 
-**Monotone in width, and the direction holds against every referee including the
-ramp's own fine solve.** At protean's 1.0 Å on `fas2` the differences at
-`w ≤ 0.5` sit inside the referee ambiguity (0.0057 against gaps of 0.0017–0.0054)
-and no verdict is claimed there; at `w ≥ 0.75` and at 0.5 Å everywhere the gap
-clears it.
+**Monotone in width, and from `w = 0.5` up the direction holds against every
+referee including the ramp's own fine solve.** Two scopes on that, both from the
+tables above rather than around them. **`w = 0.25` straddles** — 0.62–1.68× on
+`ala-gly` and 0.78–1.49× on `fas2` — so its sign depends on the phase and on
+which referee is asked, and no verdict is claimed for it at any resolution. And
+at protean's **1.0 Å** the `w ≤ 0.5` gaps sit inside the referee ambiguity
+(0.0057 against 0.0017–0.0054), so none is claimed there either. What is claimed
+is `w ≥ 0.5` at 0.5 Å and `w ≥ 0.75` at 1.0 Å, where the gap clears the
+ambiguity and every referee agrees on the sign.
 
 ##### The two axes disagree on one fixture, and that is the finding
 
