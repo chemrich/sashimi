@@ -404,10 +404,16 @@ def test_pruning_the_band_leaves_every_value_the_ramp_actually_reads():
 def test_the_ramp_raises_the_convergence_order_on_both_surfaces():
     """M8a's gate, and the one a pose spread alone would have failed to catch.
 
-    A hard face-centre dielectric converges at order 0.3 (van der Waals) and
-    1.0 (molecular) on this structure. Ramping the solute fraction across a cell
-    from the signed distance takes both above 2 — which is the interface
-    treatment, not the solver, being what bounded the accuracy.
+    A hard face-centre dielectric converges at order 1.009 on `molecular` and
+    **does not converge at all on van der Waals** — its corrections shrink by
+    1.2031x, under `MIN_SHRINKAGE`, so no order exists to quote. Ramping the
+    solute fraction across a cell from the signed distance takes both to
+    2.31-2.48 — which is the interface treatment, not the solver, being what
+    bounded the accuracy.
+
+    *The docstring here used to read "order 0.3 (van der Waals)", matching
+    ROADMAP.md section 12's M8a table. That number came from a ladder the
+    repaired `converging` refuses; it is withdrawn rather than restated.*
 
     **Both widths, on both surfaces**, because an earlier draft of this test
     graded each surface at its own width on the strength of a finding that was a
@@ -425,7 +431,26 @@ def test_the_ramp_raises_the_convergence_order_on_both_surfaces():
     ladder = (1.0, 0.5, 0.25)
     structure = read_pqr("tests/data/ala-gly.pqr")
 
-    def order(model: SurfaceModel, width: float) -> float:
+    # **Achieved spacings, not requested.** ROADMAP.md section 12 says M8a was
+    # measured "against achieved spacings rather than requested ones" and this
+    # test did not: it passed `(1.0, 0.5, 0.25)`, a ratio of exactly 2, where
+    # `size_grid` actually lands on 0.8695 / 0.4545 / 0.2432 — ratios 1.913 and
+    # 1.869. `sashimi.invariants._achieved_spacing` exists for that reason, and
+    # reading the exponent against the wrong ratio biases it: every order below
+    # moves 0.10-0.16 between the two conventions.
+    achieved = tuple(
+        float(
+            np.prod(
+                np.asarray(
+                    size_grid(structure, GridSpec(resolution=r, padding=10.0)).spacing, float
+                )
+            )
+            ** (1.0 / 3)
+        )
+        for r in ladder
+    )
+
+    def grade(model: SurfaceModel, width: float) -> Refinement:
         solver = DebyeSolver(options=DebyeOptions(dielectric_smoothing=width))
         energies = []
         for spacing in ladder:
@@ -438,13 +463,34 @@ def test_the_ramp_raises_the_convergence_order_on_both_surfaces():
             answer = solver.solve(request).energy_kj_mol
             assert answer is not None
             energies.append(float(answer))
-        grade = Refinement(backend="debye", spacings=ladder, energies=tuple(energies))
-        assert grade.converging, f"{model} at width {width} is not converging: {energies}"
-        return grade.order
+        return Refinement(backend="debye", spacings=achieved, energies=tuple(energies))
 
     for model in (SurfaceModel.VAN_DER_WAALS, SurfaceModel.MOLECULAR):
-        blunt = order(model, 0.0)
+        blunt = grade(model, 0.0)
+        # **The hard scheme need not be fittable, and on one surface it is not.**
+        # This used to `assert blunt.converging` for every surface, which passed
+        # only because `converging` bounded the magnitude of successive
+        # differences and nothing else. Repairing that guard (see
+        # `sashimi.invariants.MIN_SHRINKAGE`) refuses the hard van der Waals
+        # ladder outright: its corrections shrink by 1.2031x, under the 1.25
+        # floor, so no order can be read from it at all.
+        #
+        # That is a *stronger* statement than a low order, not a weaker one, and
+        # it is why the comparison below is written as two separate claims
+        # rather than one chained inequality. ROADMAP.md section 12 records the
+        # consequence: M8a's headline "0.32 -> 2.65" quotes a baseline that the
+        # repaired instrument will not fit.
+        if blunt.converging:
+            assert blunt.order < 1.5, (
+                f"the hard scheme on {model.value} now reaches {blunt.order:.3f}, "
+                "so the ramp is no longer the thing raising the order"
+            )
         for width in (0.25, 0.5):
-            assert order(model, width) > 1.5 > blunt, (
-                f"the ramp no longer raises the order on {model.value} at width {width}"
+            ramped = grade(model, width)
+            assert ramped.converging, (
+                f"{model.value} at width {width} no longer converges: {ramped.energies}"
+            )
+            assert ramped.order > 1.5, (
+                f"the ramp no longer raises the order on {model.value} at width "
+                f"{width}: {ramped.order:.3f}"
             )

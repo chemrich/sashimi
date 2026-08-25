@@ -63,6 +63,7 @@ __all__ = [
     "DEFAULT_LADDER",
     "MIN_POSES",
     "MIN_REFINEMENTS",
+    "MIN_SHRINKAGE",
     "POSE_SEED",
     "POSE_SHIFT_CELLS",
     "ChargeScaling",
@@ -116,6 +117,22 @@ MIN_POSES = 2
 # assuming it is the whole question: debye's is 1.17 on `ala-gly`, not the 2 a
 # reader would guess from a second-order operator.
 MIN_REFINEMENTS = 3
+
+# How much successive Richardson corrections must shrink before a limit read
+# from them is worth reporting. The correction is `1 / (ratio - 1)` times the
+# last difference, so a ratio near 1 is an unbounded amplifier: the ladder that
+# extrapolated to a positive solvation energy had **1.0327** and a correction
+# 30.6x its own last difference.
+#
+# **Chosen from a gap, not from the worst case it has to reject.** Over 24
+# Born-sphere windows graded against the closed form, the shrinkage ratios run
+# 1.0327 (the disaster), then 1.3968, 1.4430, 1.6520 (a 0.033% fit) and up. Any
+# floor from 1.10 to 1.333 keeps the same sixteen windows, takes the worst
+# surviving error from 269.688% to 1.341%, and discards no fit better than 0.5%.
+# 1.25 sits inside that plateau with margin on both sides — 1.21x above the
+# nearest rejection and 1.12x below the nearest keep. Raising it to 2.0 starts
+# costing real fits: it drops a window that lands 0.033% from exact.
+MIN_SHRINKAGE = 1.25
 
 # Halving, because Richardson's ratio is cleanest on a geometric sequence.
 DEFAULT_LADDER = (1.0, 0.5, 0.25)
@@ -254,15 +271,49 @@ class Refinement:
 
     @property
     def converging(self) -> bool:
-        """Whether successive corrections shrink, which Richardson assumes.
+        """Whether successive corrections shrink enough, and in one direction.
 
         Without this the fit is happy to report an order from a ladder that is
         diverging or oscillating — and ROADMAP.md section 12 records that
         nothing converges monotonically at `d/a >= 0.5` on a sharp boundary, so
         the case is real rather than defensive.
+
+        **Three conditions, because for a long time it was one and the other two
+        are what the disasters needed.** The original `abs(a) > abs(b) > 0.0`
+        bounds the magnitude of successive differences and nothing else, and a
+        width sweep on 2026-08-24 found it labelling `converging=True` on a
+        `fas2` ladder whose extrapolated limit was **+2902 kJ/mol** — a positive
+        solvation energy, which linear response forbids for any solute.
+
+        - **Same sign.** Under `E(h) = L + C h^p` both differences equal `C`
+          times a positive quantity, so sharing a sign is an *identity* of the
+          model being fitted and opposite signs refute it outright. `abs()` is
+          exactly what discarded that. This is the condition the docstring above
+          already claimed when it said "oscillating", and did not implement.
+        - **Shrinking by a stated factor.** Any shrinkage at all admits a ladder
+          that has barely moved, and the Richardson correction it licenses is
+          `1 / (|d_prev / d_last| - 1)` times the last difference — which
+          diverges as that ratio approaches 1. The +2902 case had a ratio of
+          **1.0327**: differences shrank by 3%, and the correction came out
+          **30.6x** the last difference and 2.1x the energy it corrected.
+        - Both are needed, and neither subsumes the other. Measured over 24
+          Born-sphere windows where the exact answer is known, the two disasters
+          are caught by *different* clauses: a 269.688% error at ratio 1.0327
+          with matching signs, and a 7.078% error at ratio 8.75 with opposite
+          ones.
+
+        `MIN_SHRINKAGE` is not an order band. An order floor is ladder-dependent
+        — the same bound implies `p >= 1.0` at a refinement ratio of 2 and
+        `p >= 1.5` at 1.5874 — and ROADMAP.md section 12 already records that
+        the fitted order is a property of the ladder, so a band on it would
+        reject legitimate first-order fits on a coarse-ratio ladder. The ratio
+        of successive differences is the directly observed quantity and needs no
+        such translation.
         """
         steps = self._differences
-        return all(abs(a) > abs(b) > 0.0 for a, b in pairwise(steps))
+        return all(
+            abs(a) >= MIN_SHRINKAGE * abs(b) > 0.0 and a * b > 0.0 for a, b in pairwise(steps)
+        )
 
     @property
     def order(self) -> float:
