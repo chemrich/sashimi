@@ -4388,10 +4388,15 @@ so
     |limit - E_finest| <= |d_last| / 0.25 = 4 x |d_last|
 
 for any ladder this guard accepts. A step at the noise floor moves the limit by
-at most four noise units. Verified to **4e-16** over the sixteen surviving
-Born-sphere windows, whose largest observed amplifier is **2.2575** against the
-bound of 4. **The failure a noise floor would prevent is already excluded by the
-clause beside it.**
+at most four noise units. **The failure a noise floor would prevent is already
+excluded by the clause beside it.**
+
+The bound is attained rather than generous. Of the shrink ratios recorded beside
+`MIN_SHRINKAGE`, the nearest keep — 1.3968 — licenses an amplifier of **2.5202**
+where the rejected 1.0327 would have licensed **30.58**; over 50,000 randomised
+accepted ladders the worst observed is **3.9877**. The identity itself holds to
+**8e-11** relative in double precision, which is what "exact in real arithmetic"
+costs when `x ** (log r / log x)` is evaluated in IEEE.
 
 **Two: there is no gap to choose a floor from, and the floor is anti-correlated
 with accuracy.** The sixteen survivors' relative last steps run **0.0247% to
@@ -4420,19 +4425,27 @@ the difference spans, twelve poses, `ala-gly`, both surfaces, three widths:
 0.55–1.17×, i.e. at or below it — but `PoseSpread` already says why the range is
 the wrong statistic ("the range of a small sample is dominated by its two
 extremes... quote it, but gate on `dispersion`"), and a floor built on it would
-be built on the volatile summary. **A phase spread must be quoted with the
-spacing it was taken at**, which is the part of this worth keeping: the one
-number recorded in the repository, `DEBYE_POSE_DISPERSION = 0.0091`, is measured
-at 0.5 Å and is 4–25× the dispersion at the rungs a ladder's last difference
-spans.
+be built on the volatile summary.
+
+**A phase spread must be quoted with the configuration it was taken at**, which
+is the part of this worth keeping. `DEBYE_POSE_DISPERSION = 0.0091` is the
+repository's one recorded number and it is the `molecular`, hard, 0.5 Å cell of
+the table above — 0.915%, which is that row and not a universal. Used as a floor
+across the other five it is 1.1–5.1× too large. *An earlier draft of this
+paragraph said "4–25×", comparing it against rungs it was never measured at;
+the table above refutes it and is the reason the claim is stated this way now.*
 
 **And a fourth thing fell out that is not about the floor at all: `limit` does
 not depend on the spacings.** Because `step` cancels, `Refinement.limit` is a
-function of the three energies alone — verified bit for bit, naming the ratio
-1.9131, 2.0 or 11.0011 returns the same float. So `_achieved_spacing`, added
-because "Richardson divides by the refinement ratio, so the ratio has to be the
-real one", earns its keep on **`order` only**; M8a's orders moving 0.10–0.16
-between the requested and achieved conventions is the whole of its effect.
+function of the three energies alone. So `_achieved_spacing`, added because
+"Richardson divides by the refinement ratio, so the ratio has to be the real
+one", earns its keep on **`order` only**; M8a's orders moving 0.10–0.16 between
+the requested and achieved conventions is the whole of its effect.
+
+*Exact in real arithmetic and not in IEEE double — over 20,000 randomised
+accepted ladders two spacing triples return a different `limit` float on 0.66%
+of them, worst relative difference 7e-15. The independence is a property of the
+formula, not of its evaluation.*
 
 The corollary matters more than the trivia: the extrapolation is exact only on a
 **geometric** ladder. Under `E(h) = L + C h^p` the ratio of successive

@@ -357,11 +357,18 @@ class Refinement:
 
             correction = d_last / (|d_prev / d_last| - 1)
 
-        — a function of the three energies alone. Verified bit for bit: naming
-        the ratio 1.9131, 2.0 or 11.0011 on the same ladder returns the same
-        float. So `_achieved_spacing` earns its keep on `order`, which is what
-        moves 0.10-0.16 between the requested and achieved conventions, and
-        nowhere else.
+        — a function of the three energies alone. So `_achieved_spacing` earns
+        its keep on `order`, which is what moves 0.10-0.16 between the requested
+        and achieved conventions, and nowhere else.
+
+        *Exact in real arithmetic, and **not** bit-identical in IEEE double:
+        `x ** (log r / log x)` reintroduces a rounding, so over 20,000 randomised
+        accepted ladders two different spacing triples return a different `limit`
+        float on **0.66%** of them, worst relative difference 7e-15. The
+        independence is a property of the formula rather than of its evaluation,
+        and anything comparing two limits should carry a tolerance. An earlier
+        draft of this paragraph said "verified bit for bit", on three spacing
+        triples that happen to agree.*
 
         The corollary is the one to carry: this is exact only where the ladder is
         *geometric*. Under `E(h) = L + C h^p` the ratio of successive differences

@@ -329,10 +329,11 @@ def test_richardson_finds_a_limit_that_is_already_known(radius, ladder, toleranc
 
     *This used to add "and beats the finest rung it was built from **every
     time**". It does not: re-measured over 24 Born windows, three of the sixteen
-    survivors land no closer than their own finest rung — `r=3, w=0.5` at 0.596%
-    against 0.306%, and `r=3, w=1.0` at 1.275% against 0.415%. The assertion
-    below still holds for these two ladders and is kept as a per-case bar; what
-    is withdrawn is the universal.*
+    survivors land no closer than their own finest rung — `r=3, w=0.25` at
+    0.949% against that rung's 0.892%, `r=3, w=0.5` at 0.596% against 0.306%,
+    and `r=3, w=1.0` at 1.275% against 0.415%. The assertion below still holds
+    for these two ladders and is kept as a per-case bar; what is withdrawn is
+    the universal.*
     """
     from sashimi.analytic import born_solvation_energy  # noqa: PLC0415
     from sashimi.invariants import grade_refinement  # noqa: PLC0415
@@ -452,9 +453,13 @@ def test_the_limit_is_a_function_of_the_energies_and_not_the_spacings():
     Neither is true of `limit`, and a reader who believes otherwise will look
     for a bias here that is not here.
 
-    Asserted bit for bit — `==`, not `approx` — because the claim is an
-    algebraic identity and an approximate one would pass on any two ratios that
-    happened to be close.
+    Asserted with `==` on these three triples, which do agree exactly — but the
+    identity is exact in **real** arithmetic and not in IEEE double, because
+    `x ** (log r / log x)` reintroduces a rounding. Over 20,000 randomised
+    accepted ladders two spacing triples return a different `limit` float on
+    **0.66%** of them, worst relative difference 7e-15. So this pins the
+    identity on a fixed set rather than asserting a universal, and a caller
+    comparing two limits should carry a tolerance.
     """
     from sashimi.invariants import Refinement  # noqa: PLC0415
 
@@ -497,44 +502,66 @@ def test_min_shrinkage_bounds_how_far_the_extrapolation_can_move():
     times its own last difference**. A step at the noise floor moves the limit
     by at most four noise units; there is no unbounded amplifier left to catch.
 
-    Two supporting measurements, recorded rather than run here because they cost
-    solves. Over the twenty-four Born-sphere windows the guard was calibrated
-    on, the sixteen survivors' largest observed amplifier is **2.2575**, against
-    the bound of 4. And the relative last steps of those sixteen run
-    **0.0247% to 2.7903% continuously**, with the four most accurate fits
-    holding four of the five *smallest* steps — so a floor is anti-correlated
-    with accuracy on the one set where the truth is known, and any floor that
-    rejects the worst survivor rejects all four best ones.
+    How tight the bound is, from the shrink ratios recorded beside
+    `MIN_SHRINKAGE`: the nearest keep, 1.3968, licenses an amplifier of
+    **2.5202** where the rejected 1.0327 would have licensed **30.58**. Over
+    50,000 randomised accepted ladders the worst observed is **3.9877**, so the
+    bound is attained rather than generous.
+
+    *A second argument — that the surviving windows' relative last steps run
+    0.0247% to 2.7903% continuously, with the four most accurate fits holding
+    four of the five smallest steps — is real and is **not** reproducible from
+    anything checked in: the 24-window generator lives in a scratch directory,
+    not the repository. It is recorded in ROADMAP.md as what it is.*
 
     `MIN_SHRINKAGE` is what makes this hold, so the bound is asserted at the
     boundary as well as inside it.
     """
     from sashimi.invariants import MIN_SHRINKAGE, Refinement  # noqa: PLC0415
 
+    # **The bound is a literal, and that is the whole point of this test.** The
+    # first draft computed it as `1 / (MIN_SHRINKAGE - 1)` and drew its ladders
+    # from the same constant, so both sides moved together and the assertion
+    # held for *any* value of it — verified by mutation: at `MIN_SHRINKAGE = 1.05`,
+    # where the true bound is 20x, that version stayed green. It was the shape
+    # `sashimi-guards-that-guard-nothing` is about, in a test written to close a
+    # question about guards.
+    bound = 4.0
     spacings = (1.1988, 0.7552, 0.4757)
-    amplifier = 1.0 / (MIN_SHRINKAGE - 1.0)
 
-    # Ladders spanning the accepted range, from barely-shrinking to sharply so.
-    for ratio in (MIN_SHRINKAGE, 1.4, 2.0, 8.0, 64.0):
+    assert bound >= 1.0 / (MIN_SHRINKAGE - 1.0), (
+        f"MIN_SHRINKAGE = {MIN_SHRINKAGE} licenses an amplifier of "
+        f"{1.0 / (MIN_SHRINKAGE - 1.0):.4g}, over the {bound:g} this test and "
+        "the comment beside the constant both assert"
+    )
+
+    # Ratios fixed in the test rather than derived from the constant, and
+    # spanning both sides of it, so relaxing the guard admits the small ones and
+    # they violate the literal bound.
+    accepted = 0
+    for ratio in (1.05, 1.1, 1.2, MIN_SHRINKAGE, 1.4, 2.0, 8.0, 64.0):
         last = -3.0
         grade = Refinement(
             backend="debye",
             spacings=spacings,
             energies=(-200.0 - last * ratio - last, -200.0 - last, -200.0),
         )
-        assert grade.converging, f"ratio {ratio} should be accepted, or this grades nothing"
+        if not grade.converging:
+            continue
+        accepted += 1
         moved = abs(grade.limit - grade.energies[-1])
-        assert moved <= amplifier * abs(last) * (1.0 + 1e-12), (
-            f"ratio {ratio}: the limit moved {moved / abs(last):.4g} last-differences, "
-            f"over the {amplifier:.4g} `MIN_SHRINKAGE` is supposed to bound it to"
+        assert moved <= bound * abs(last) * (1.0 + 1e-9), (
+            f"ratio {ratio}: the guard accepts it and the limit moves "
+            f"{moved / abs(last):.4g} last-differences, over the bound of {bound:g}"
         )
+    assert accepted >= 5, f"only {accepted} ladders were accepted, so this grades almost nothing"
 
-    # The bound is attained at the floor, so it is not slack: a guard that
-    # allowed a smaller shrinkage would allow a larger amplifier, which is the
-    # whole argument for the number.
+    # And the bound is attained at the floor rather than slack, which is the
+    # argument for the constant: measured over 50,000 randomised accepted
+    # ladders the worst amplifier is 3.9877.
     tight = Refinement(
         backend="debye",
         spacings=spacings,
         energies=(-200.0 + 3.0 * MIN_SHRINKAGE + 3.0, -200.0 + 3.0, -200.0),
     )
-    assert abs(tight.limit - tight.energies[-1]) == pytest.approx(amplifier * 3.0, rel=1e-9)
+    assert abs(tight.limit - tight.energies[-1]) == pytest.approx(bound * 3.0, rel=1e-9)
