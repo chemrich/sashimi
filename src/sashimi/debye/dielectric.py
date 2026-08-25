@@ -92,32 +92,6 @@ def bjerrum_length_a(temperature: float) -> float:
     return metres / ANGSTROM
 
 
-def _surface_gap(axes: list[FloatArray], structure: PQRData, reach: float) -> FloatArray:
-    """Signed distance to the van der Waals surface, clamped beyond `reach`.
-
-    `min_i(|x - c_i| - r_i)`, which is exact for a union of spheres and is why
-    this is offered on that boundary and refused on the other one. Computed over
-    each sphere's own index window, like `inside_union_of_spheres` — anything
-    further than `reach` from every atom is solvent by a margin the ramp does
-    not care about, so it keeps the clamp and is never visited.
-    """
-    shape = tuple(len(axis) for axis in axes)
-    gap = np.full(shape, reach, dtype=np.float64)
-    for centre, radius in zip(structure.coords, structure.radii, strict=True):
-        window = []
-        for axis in range(DIMENSIONS):
-            span = radius + reach
-            lo = int(np.searchsorted(axes[axis], centre[axis] - span, side="left"))
-            hi = int(np.searchsorted(axes[axis], centre[axis] + span, side="right"))
-            window.append(slice(lo, hi))
-        if any(w.start >= w.stop for w in window):
-            continue
-        offsets = [(axes[axis][window[axis]] - centre[axis]) ** 2 for axis in range(DIMENSIONS)]
-        squared = offsets[0][:, None, None] + offsets[1][None, :, None] + offsets[2][None, None, :]
-        np.minimum(gap[tuple(window)], np.sqrt(squared) - radius, out=gap[tuple(window)])
-    return gap
-
-
 def dielectric_faces(
     grid: DebyeGrid,
     structure: PQRData,
@@ -184,11 +158,16 @@ def dielectric_faces(
             # distance carries, so it is the width's ceiling.
             width = min(smoothing * float(min(grid.spacing)), solvent.surface_radius)
             # **The distance is the surface's own, not a stand-in for it.** M8
-            # shipped this for `van-der-waals` only, where `min(|x - c| - r)` is
-            # exact; M8a gives the solvent-excluded surface a signed distance of
-            # its own, out of the same three families that decide `inside`. Both
-            # go through `signed_gap`, so the ramp no longer knows or cares which
+            # shipped this for `van-der-waals` only, on `min(|x - c| - r)`; M8a
+            # gives the solvent-excluded surface a signed distance of its own,
+            # out of the same three families that decide `inside`. Both go
+            # through `signed_gap`, so the ramp no longer knows or cares which
             # boundary it is ramping across.
+            # *`min(|x - c| - r)` was called exact here and is not: it is exact
+            # outside a union of spheres and an upper bound inside it, so the
+            # van der Waals ramp was reading a bound as a depth on 19% of its
+            # interior band faces. `ReducedSurface._union_signed_gap` measures
+            # to the union's own rims and seats instead.*
             # `band=width` because the `clip` on the next line is what makes the
             # field outside it unobservable — the two numbers must stay the same
             # number, which is why it is passed rather than defaulted.

@@ -446,11 +446,16 @@ def test_the_ramp_reaches_the_default_surface_and_uses_its_own_distance():
     """M8a removed the refusal this test used to assert, and that is the milestone.
 
     M8 shipped the ramp for `van-der-waals` only, because `min(|x - c| - r)` is
-    the distance to a union of spheres and *not* to the solvent-excluded
-    surface — so `dielectric_faces` refused rather than ramping against the
-    wrong boundary. `ReducedSurface.signed_gap` gives the solvent-excluded
-    surface a distance of its own, out of the same three families that decide
-    `inside`, and the refusal is gone.
+    about a union of spheres and *not* about the solvent-excluded surface — so
+    `dielectric_faces` refused rather than ramping against the wrong boundary.
+    `ReducedSurface.signed_gap` gives the solvent-excluded surface a distance of
+    its own, out of the same three families that decide `inside`, and the
+    refusal is gone.
+
+    *That reading was too kind to the branch it kept: `min(|x - c| - r)` is not
+    the distance to a union of spheres either, only an upper bound on it inside
+    the union. Both branches go through the three families now — see
+    `tests/test_debye_m4.py::test_the_union_distance_measures_to_the_union_and_not_to_one_sphere`.*
 
     Asserted as a *difference* from the hard scheme rather than as "it returns":
     a ramp that silently fell back to the hard assignment would return perfectly

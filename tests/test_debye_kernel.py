@@ -488,8 +488,9 @@ def test_the_compiled_union_of_spheres_is_identical(structure: str, monkeypatch)
     ("structure", "resolution"),
     [(PEPTIDE, 0.5), ("tests/data/apbs-examples/fas2.pqr", 1.0)],
 )
+@pytest.mark.parametrize("model", [SurfaceModel.MOLECULAR, SurfaceModel.VAN_DER_WAALS])
 def test_the_compiled_toroidal_distance_agrees_to_the_last_bit(
-    structure: str, resolution: float, monkeypatch
+    structure: str, resolution: float, model: SurfaceModel, monkeypatch
 ):
     """`signed_gap` down both paths, on real geometry, to the last bit.
 
@@ -505,6 +506,13 @@ def test_the_compiled_toroidal_distance_agrees_to_the_last_bit(
     correct numbers into the wrong array — the shape of the defect
     `test_the_signed_distance_agrees_with_the_boolean_it_is_derived_from`
     found in the radial family, where every value landed in a temporary.
+
+    **Both surfaces**, because the van der Waals branch reaches this kernel too
+    now that it measures to the union's own rims rather than to the nearest
+    sphere. It hands the same loop a *different* reach — the ramp's band, where
+    the solvent-excluded branch hands it the probe — so it is a second set of
+    bin bounds through the same arithmetic, and the ulp bar applies to it for
+    the same reason.
     """
     from sashimi.debye.grid import axis_coordinates, size_grid  # noqa: PLC0415
     from sashimi.protocol import GridSpec  # noqa: PLC0415
@@ -513,7 +521,7 @@ def test_the_compiled_toroidal_distance_agrees_to_the_last_bit(
     axes = axis_coordinates(size_grid(pqr, GridSpec(resolution=resolution, padding=10.0)))
 
     def build():
-        surface = ReducedSurface(pqr, SolventModel(surface_model=SurfaceModel.MOLECULAR))
+        surface = ReducedSurface(pqr, SolventModel(surface_model=model))
         return surface.signed_gap(axes)
 
     reference, compiled = _both_ways(monkeypatch, build)

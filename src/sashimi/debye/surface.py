@@ -83,7 +83,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 
 import numpy as np
@@ -1001,6 +1001,7 @@ def _toroidal_distance(
     surface: ReducedSurface,
     shell: np.ndarray,
     nearest: FloatArray,
+    reach: float | None = None,
 ) -> None:
     """Family two, as a distance. Mutates `nearest`.
 
@@ -1012,6 +1013,27 @@ def _toroidal_distance(
     skips a node another rim already claimed, because a boolean or does not care
     which rim won. A minimum does: every rim that reaches a node has to be
     offered, so `decided` has no analogue here.
+
+    **`reach` is how far out an answer is wanted, and it is the probe only by
+    coincidence.** A rim can only be a node's nearest boundary feature if the
+    node is within `ring_radius + reach` of that rim's origin, so the search
+    radius is the largest distance the caller will still read. For the
+    solvent-excluded surface that is the probe, which the distance saturates at.
+    `ReducedSurface._union_signed_gap` measures to the *bare* spheres, whose
+    probe is zero, and passes its band instead — a rim search of zero would find
+    nothing at all.
+
+    **A node on a rim's own axis is declined, and that is a real hole.** It is
+    equidistant from every point of the circle, so `length > DEGENERATE` is
+    false and there is no projection to test for legality; the node keeps the
+    saturated fill. `_toroidally_reachable` declines it in the same place, so
+    `inside` and `sign(gap)` agree with each other and nothing catches it. A
+    rim's axis is the line through two overlapping atom centres, so on real
+    coordinates the set is measure zero — but it is not empty on a symmetric
+    fixture, and closing it means asking whether *any* point of the circle is
+    legal rather than one, in this loop and in `kernel.distance_rims` alike.
+    `tests/test_debye_m4.py::test_a_node_on_a_rim_axis_is_the_one_place_the_distance_saturates`
+    pins its shape.
     """
     spheres = surface.spheres
     coords, inflated = spheres.coords, spheres.inflated
@@ -1020,9 +1042,10 @@ def _toroidal_distance(
     if not rims or not len(nodes):
         return
 
+    look = surface.probe if reach is None else reach
     origins, normals, ring_radii = surface.rim_arrays
-    reach = ring_radii + surface.probe
-    bins = _Bins(nodes.points, float(np.median(reach)))
+    spans = ring_radii + look
+    bins = _Bins(nodes.points, float(np.median(spans)))
     best = np.full(len(nodes), np.inf, dtype=np.float64)
 
     # The compiled path, when `sashimi-electro[fast]` is installed — the same
@@ -1047,7 +1070,7 @@ def _toroidal_distance(
             surface.blocker_table,
             coords,
             inflated,
-            surface.probe,
+            look,
             best,
         )
         marked = nearest[nodes.index[0], nodes.index[1], nodes.index[2]]
@@ -1057,11 +1080,11 @@ def _toroidal_distance(
     span = nodes.points.max(axis=0) - nodes.points.min(axis=0)
     volume = float(np.prod(np.maximum(span, bins.cell)))
     density = len(nodes) / volume
-    expected = density * (2.0 * reach + bins.cell) ** DIMENSIONS
+    expected = density * (2.0 * spans + bins.cell) ** DIMENSIONS
 
     for first, last in _batches(expected, PAIR_BATCH):
         batch = slice(first, last)
-        rim, node = bins.near_many(origins[batch], reach[batch])
+        rim, node = bins.near_many(origins[batch], spans[batch])
         if not len(rim):
             continue
         owner = rim + first
@@ -1097,8 +1120,16 @@ def _vertex_distance(
     surface: ReducedSurface,
     shell: np.ndarray,
     nearest: FloatArray,
+    reach: float | None = None,
 ) -> None:
-    """Family three, as a distance: the nearest legal seat. Mutates `nearest`."""
+    """Family three, as a distance: the nearest legal seat. Mutates `nearest`.
+
+    `reach` sizes the bins, and `gather` walks the twenty-six around a node's
+    own — so a seat within `reach` of a node is always found, and that is the
+    property, not the cell size. It is the probe only for the solvent-excluded
+    surface; see `_toroidal_distance`, and note that the bare spheres' probe is
+    zero, which is not a legal cell width.
+    """
     seats = surface.seats
     if not len(seats):
         return
@@ -1106,7 +1137,7 @@ def _vertex_distance(
     if not len(nodes):
         return
     best = np.full(len(nodes), np.inf, dtype=np.float64)
-    bins = _Bins(seats, surface.probe)
+    bins = _Bins(seats, surface.probe if reach is None else reach)
     keys = bins.keys_of(nodes.points)
     order = np.lexsort((keys[:, 2], keys[:, 1], keys[:, 0]))
     ordered = keys[order]
@@ -1515,6 +1546,22 @@ class ReducedSurface:
         """The rims' blocking atoms as one CSR, built once. See `rim_arrays`."""
         return _blocker_table(self.rims)
 
+    @cached_property
+    def _bare(self) -> ReducedSurface:
+        """The same solute with the probe taken away, for its own boundary.
+
+        **A union of spheres is the solvent-excluded surface of a zero probe**,
+        so the features of the van der Waals boundary are the ones this class
+        already builds, with the inflation removed: the rims become the spheres'
+        own intersection circles and the seats their triple points. That is what
+        `_union_signed_gap` measures to, and it is why the interior repair is
+        not a second construction any more than `signed_gap` was.
+
+        Never asked for `inside` or `signed_gap` — only for its geometry — so
+        the recursion this would otherwise invite does not arise.
+        """
+        return ReducedSurface(self.structure, replace(self.solvent, surface_radius=0.0))
+
     def signed_gap(self, axes: list[FloatArray], band: float | None = None) -> FloatArray:
         """Signed distance to the solvent-excluded surface: negative inside the solute.
 
@@ -1549,14 +1596,20 @@ class ReducedSurface:
         that width as `band`, this leaves the rest saturated instead of exact,
         and the two prunes below are theorems rather than heuristics.
 
-        The default is `None`, which computes the exact field everywhere and is
-        what `tests/test_debye_m4.py` grades `sign(gap) == inside` on over the
-        whole lattice. A caller that clamps should pass its own width; a caller
-        that wants the field itself — plotting it, or grading it — must not.
+        The default is `None`, which asks for the field over the whole lattice
+        and is what `tests/test_debye_m4.py` grades `sign(gap) == inside` on. A
+        caller that clamps should pass its own width; a caller that wants the
+        field itself — plotting it, or grading it — must not.
+
+        *"The exact field everywhere" is what this said, and it was never that:
+        both branches saturate. The solvent-excluded one fills to `2 * probe`
+        and the union one to twice the largest radius, so a node deeper than the
+        fill reads the fill. What is exact is the band, on both branches, which
+        is the part any consumer reads.*
         """
         structure = self.structure
         if self.solvent.surface_model is not SurfaceModel.MOLECULAR or self.probe <= 0.0:
-            return _union_gap(axes, structure.coords, structure.radii)
+            return self._union_signed_gap(axes, band)
 
         inflated_mask = inside_union_of_spheres(
             axes, structure.coords, structure.radii + self.probe
@@ -1611,10 +1664,69 @@ class ReducedSurface:
                 # move it back into the band and need not be asked. This is the
                 # cheaper half of the prune and it costs one comparison.
                 region = region & (nearest >= self.probe - band)
-            _toroidal_distance(axes, self, region, nearest)
-            _vertex_distance(axes, self, region, nearest)
+            # **The reach is `probe + band`, not `probe`.** `gap = probe -
+            # nearest`, so a consumer reading `|gap| < band` is reading `nearest`
+            # out to `probe + band` — and a rim or seat further than one probe
+            # away can still be a band node's nearest legal feature. Searching
+            # only to the probe leaves `nearest` too large there, which reads as
+            # *deeper into the solute* than the node is: the same shape as the
+            # bound `_union_signed_gap` repairs, one branch over.
+            # `test_the_distance_reaches_past_the_probe_where_the_boolean_twin_stops`
+            # in `tests/test_debye_kernel.py` already asserts that the population
+            # past one probe is not empty; what was missing was searching it.
+            # Measured on `fas2`: 51 faces at 1.0 A and 95 at 0.5 A move, worst
+            # fraction change 0.38, and the energy by 0.024% and 0.012%, at no
+            # cost. With no band the fill is the ceiling, so the reach is `far`.
+            look = far if band is None else self.probe + band
+            _toroidal_distance(axes, self, region, nearest, reach=look)
+            _vertex_distance(axes, self, region, nearest, reach=look)
         np.minimum(nearest, far, out=nearest)
         return np.asarray(self.probe - nearest, dtype=np.float64)
+
+    def _union_signed_gap(self, axes: list[FloatArray], band: float | None) -> FloatArray:
+        """Signed distance to a union of spheres — on *both* sides of it.
+
+        **`min_i(|x - c_i| - r_i)` is a distance only outside the union.** It
+        measures to the nearest sphere *surface*, and inside the union that
+        surface may be buried under a neighbour, in which case the real boundary
+        is further away and the depth is under-reported. Two balls of radius 2 at
+        `(±1, 0, 0)` read **-1.0** at the origin where the true signed distance
+        is **-sqrt(3) = -1.7320508** — 42.3% short, because the nearest actual
+        boundary is the intersection circle out at radius sqrt(3). It is a *bound*
+        inside, never an equality, and the shipped `van-der-waals` ramp read it
+        as one.
+
+        The repair reuses `_bare`: the three families already compute
+        `dist(x, A)` for the accessible set `A`, and with the probe removed `A`
+        *is* the complement of the union, so `-dist(x, A)` is the interior
+        distance. Outside the union the minimum is already exact and is kept.
+
+        **Only the observable part is redone.** The true depth is never smaller
+        than the bound, so a node the bound already puts past `band` is past it
+        for good and `dielectric.py` clips it to solid solute either way. With
+        no band the repair runs out to `2 * max radius` and saturates beyond,
+        which is the same shape as the solvent-excluded branch's `2 * probe`.
+        """
+        coords, radii = self.structure.coords, self.structure.radii
+        reach = band if band is not None else float(np.max(radii, initial=0.0))
+        if reach <= 0.0:
+            return _union_gap(axes, coords, radii)
+        far = 2.0 * reach
+        # Clamped at the fill the band cannot read past, which is what lets the
+        # bound be windowed. `band=None` asks for the field itself, so it gets
+        # the clamp at `far` rather than at the band.
+        gap = _union_gap(axes, coords, radii, reach=band if band is not None else far)
+        # Nodes whose *bound* is already past the band cannot come back into it.
+        region = (gap < 0.0) & (gap > -(band if band is not None else far))
+        if not region.any():
+            return gap
+        bare = self._bare
+        depth = np.where(region, far, 0.0).astype(np.float64)
+        _radial_distance(axes, bare.spheres, region, depth)
+        _toroidal_distance(axes, bare, region, depth, reach=reach)
+        _vertex_distance(axes, bare, region, depth, reach=reach)
+        np.minimum(depth, far, out=depth)
+        return np.asarray(np.where(region, -depth, gap), dtype=np.float64)
 
     def inside(self, axes: list[FloatArray]) -> np.ndarray:
         """Boolean mask over the lattice spanned by `axes`: inside the solute.
@@ -1657,18 +1769,55 @@ class ReducedSurface:
         return np.asarray(inside_vdw | (inflated_mask & ~reachable), dtype=bool)
 
 
-def _union_gap(axes: list[FloatArray], coords: FloatArray, radii: FloatArray) -> FloatArray:
-    """Signed distance to a union of spheres: `min_i(|x - c_i| - r_i)`, exactly.
+def _union_gap(
+    axes: list[FloatArray],
+    coords: FloatArray,
+    radii: FloatArray,
+    reach: float | None = None,
+) -> FloatArray:
+    """`min_i(|x - c_i| - r_i)`: the union's signed distance outside, a bound inside.
 
-    The van der Waals case, and the one `dielectric.py` used before the
-    solvent-excluded surface had a distance of its own.
+    Outside the union this is the distance, exactly. Inside it is only an upper
+    bound on the signed distance — it measures to the nearest sphere surface,
+    and that surface may be buried under a neighbour. `ReducedSurface._union_signed_gap`
+    is the two-sided quantity and this is the half of it that needs no features;
+    nothing else should call this expecting a distance.
+
+    **`reach` clamps and, in doing so, windows.** Unclamped this is
+    `O(nodes x atoms)` with every atom evaluated against the whole lattice —
+    8.1 s on `fas2` at 0.5 A, which is most of what the van der Waals ramp
+    costs. Given a reach, each sphere is evaluated over its own index window
+    instead, exactly as `inside_union_of_spheres` does, and anything further
+    than `reach` from every atom keeps the fill. **The clamp cannot move a value
+    the band reads**: a node inside the union sits inside some sphere, so it is
+    inside that sphere's window whatever the reach, and one outside the union
+    and further than `reach` from every sphere is solvent by a margin the ramp
+    has already clipped away.
     """
     shape = tuple(len(axis) for axis in axes)
-    gap = np.full(shape, np.inf, dtype=np.float64)
+    if reach is None:
+        gap = np.full(shape, np.inf, dtype=np.float64)
+        for centre, radius in zip(coords, radii, strict=True):
+            offsets = [(axes[axis] - centre[axis]) ** 2 for axis in range(DIMENSIONS)]
+            squared = (
+                offsets[0][:, None, None] + offsets[1][None, :, None] + offsets[2][None, None, :]
+            )
+            np.minimum(gap, np.sqrt(squared) - radius, out=gap)
+        return gap
+
+    gap = np.full(shape, reach, dtype=np.float64)
     for centre, radius in zip(coords, radii, strict=True):
-        offsets = [(axes[axis] - centre[axis]) ** 2 for axis in range(DIMENSIONS)]
+        window = []
+        for axis in range(DIMENSIONS):
+            span = radius + reach
+            lo = int(np.searchsorted(axes[axis], centre[axis] - span, side="left"))
+            hi = int(np.searchsorted(axes[axis], centre[axis] + span, side="right"))
+            window.append(slice(lo, hi))
+        if any(w.start >= w.stop for w in window):
+            continue
+        offsets = [(axes[axis][window[axis]] - centre[axis]) ** 2 for axis in range(DIMENSIONS)]
         squared = offsets[0][:, None, None] + offsets[1][None, :, None] + offsets[2][None, None, :]
-        np.minimum(gap, np.sqrt(squared) - radius, out=gap)
+        np.minimum(gap[tuple(window)], np.sqrt(squared) - radius, out=gap[tuple(window)])
     return gap
 
 
