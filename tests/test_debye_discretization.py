@@ -499,11 +499,13 @@ def test_the_ramp_costs_accuracy_on_the_field_it_buys_on_the_energy():
     1.52x and 3.96x from a referee one rung finer, so the cheap referee
     understates the effect rather than manufacturing it.
 
-    Two things this deliberately does *not* do. It does not sweep grid phase —
-    ROADMAP.md carries five paddings and this is one, so the bar at `w = 0.5` is
-    a direction and only `w = 1.0` carries a magnitude. And it does not claim the
-    ramp is a worse scheme: it is a better one for a solvation energy, which is
-    the other half of the same measurement.
+    Two things this deliberately does *not* do. It does not sweep grid phase, and
+    it does not grade `w = 0.5` at all — ROADMAP.md carries the control that says
+    why: against a referee only 2x finer the sign at `w = 0.5` follows the phase,
+    because each scheme's fine solve is nearest its own coarse solve. Only
+    `w = 1.0` is graded, where every referee and every phase agree. And it does
+    not claim the ramp is a worse scheme: it is a better one for a solvation
+    energy, which is the other half of the same measurement.
 
     The shell is a fixed **physical** band outside the solvent-accessible
     surface, where `min_i(|x - c_i| - (r_i + probe))` is exact, so it is more
@@ -551,10 +553,14 @@ def test_the_ramp_costs_accuracy_on_the_field_it_buys_on_the_energy():
 
     hard = error(0.0)
     assert hard > 0.0, "the coarse solve reproduced the referee exactly, so nothing is being graded"
-    assert error(0.5) > hard, (
-        "the ramp is no longer further from the referee than the hard assignment at "
-        "w = 0.5, which is the finding the default rests on"
-    )
-    assert error(1.0) > 2.0 * hard, (
-        "the ramp at w = 1.0 is within 2x the hard assignment's field error; it was 3.62x"
+    # **Only `w = 1.0`, and the reason is that a bar at `w = 0.5` would be phase
+    # fragile.** Against this referee it reads 1.24x at the padding above and
+    # **0.74-0.95x** at the five paddings where the lattices nest exactly — the
+    # sign follows the phase, because a referee only 2x finer than the candidate
+    # is nearer its own coarse solve than the other scheme's. At `w = 1.0` the
+    # same referee reads 1.93-2.33x over those five paddings and 3.62x here, so
+    # this bar is the one the instrument can carry.
+    assert error(1.0) > 1.5 * hard, (
+        "the ramp at w = 1.0 is within 1.5x the hard assignment's field error; it was 3.62x "
+        "here and 1.93-2.33x over the nested paddings"
     )

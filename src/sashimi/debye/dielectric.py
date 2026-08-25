@@ -42,11 +42,15 @@ the numbers and the retraction. The short version:
 **And the field axis, which this file has named as the precondition since M1,
 has now been graded — and the ramp loses it.** Same fixture, same surface, same
 lattices, RMS over a shell 2-3 A outside the solvent-accessible surface against
-each scheme's own refined solve: the ramp at w = 0.5 is **1.5-2.9x further from
-the referee than the hard assignment** on ALA-GLY and 1.2-2.6x on `fas2`, growing
-monotonically with the width, and holding against a referee built from the ramp
-itself. On the Born sphere with an exact reference and a 21-padding phase sweep
-it is roughly neutral and raises the floor, which is the shape M1c recorded.
+each scheme's own refined solve: the ramp is **1.4-13x further from the referee
+than the hard assignment at w >= 0.75**, growing monotonically with the width, on
+both ALA-GLY and `fas2`. At w = 0.5 every referee at h <= 0.15 says worse by
+1.3-2.9x and a merely 2x-finer one says better, so that width is *bounded rather
+than settled* — a referee sharing a construction with a candidate sits nearest
+that candidate. And on the Born sphere with an exact reference and a 21-padding
+phase sweep the ramp does not improve the near field at all: it raises the floor
+and leaves the worst and the median where they were, which is the shape M1c
+recorded.
 
 **So the two axes disagree, and this file's own sentence is why that matters:**
 the field is the axis debye's consumer reads. `DebyeOptions.dielectric_smoothing`
