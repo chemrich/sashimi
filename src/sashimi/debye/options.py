@@ -69,17 +69,19 @@ class DebyeOptions:
     # the face centre's own side of the surface, which is what APBS does with
     # `srfm mol` and what every recorded corpus energy was measured with.
     #
-    # **Non-zero changes the answer**, so it is a knob and not a default, and
-    # since M8 shipped it the reason has been *coverage* rather than the M1c
-    # measurement this comment used to point at. ROADMAP.md section 12 carries
-    # the three that decide it: the **field** axis, which is what debye's
-    # consumer reads and where the ramp's case is weakest; the **molecular
-    # surface** beyond two tests on one 20-atom dipeptide; and the width, whose
-    # one pinning test is spacing-specific.
+    # **Non-zero changes the answer**, so it is a knob and not a default — and
+    # since 2026-08-25 that is a measurement rather than missing coverage. The
+    # ramp buys the **energy** and costs the **field**, on one fixture at one
+    # lattice: on `ala-gly` at 0.4545 A it is 4.9x closer to the converged
+    # energy than the hard assignment and 1.5-2.9x further from a refined
+    # referee on the potential 2-3 A outside the surface, growing with the
+    # width. debye's consumer colours a surface, so it reads the half the ramp
+    # loses.
     #
-    # And do not read a pose-dispersion improvement as the accuracy case. Q0
-    # separated the two halves by construction, and dispersion is the half that
-    # does not decide an interface scheme.
+    # **Turn it on for a solvation energy on a coarse grid**, where it is worth
+    # about a factor of two in resolution. Do not turn it on to display a field.
+    # `sashimi.debye.dielectric` carries the reasoning and ROADMAP.md section 12
+    # "The field axis, graded" the tables.
     dielectric_smoothing: float = 0.0
 
     # How far apart, in angstroms, the box face is sampled before the

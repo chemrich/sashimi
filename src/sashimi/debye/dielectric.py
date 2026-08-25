@@ -28,24 +28,35 @@ the numbers and the retraction. The short version:
   Blended **harmonically** — the textbook mean for flux normal to a layered
   interface — it made the Born energy **8x better**: 0.853% -> 0.107% at 0.25 A,
   monotonic, no sign flips, across the whole ladder.
-- That energy result is **open, and the evidence for it has since strengthened.**
-  It was first written up as a fixture artifact, on the strength of real-structure
-  energies drifting from APBS (ALA-GLY -0.409% -> +3.565%, barnase -1.102% ->
-  +5.153% at w = 1) — and APBS makes the same hard assignment under test, so that
-  comparison cannot referee it. A reference-free refinement study on ALA-GLY then
-  found all three schemes extrapolating to within 0.25% of one limit, with
-  harmonic reaching it several times sooner: at h = 0.13 A hard is still 1.1% out
-  where harmonic is inside 0.16%.
+- That energy result was **open for two milestones and is now settled the ramp's
+  way.** It was first written up as a fixture artifact, on the strength of
+  real-structure energies drifting from APBS (ALA-GLY -0.409% -> +3.565%,
+  barnase -1.102% -> +5.153% at w = 1) — and APBS makes the same hard assignment
+  under test, so that comparison cannot referee it. A reference-free refinement
+  study on ALA-GLY then found all three schemes extrapolating to within 0.25% of
+  one limit, with harmonic reaching it several times sooner. Measured properly
+  on 2026-08-25 against the shared limit of a four-rung ALA-GLY ladder: at
+  0.4545 A the hard scheme is 10.34 kJ/mol out and the ramp at w = 0.5 is 2.13,
+  **4.9x closer**, and 8.8x closer at 0.2432 A.
 
-Both bullets above are graded against exact references — the Born potential and
-the Born energy respectively. What separates them is that the *field* result
-needs no other evidence, while the *energy* result's real-geometry check had to
-be redone once the first reference turned out to share the bias under test.
+**And the field axis, which this file has named as the precondition since M1,
+has now been graded — and the ramp loses it.** Same fixture, same surface, same
+lattices, RMS over a shell 2-3 A outside the solvent-accessible surface against
+each scheme's own refined solve: the ramp at w = 0.5 is **1.5-2.9x further from
+the referee than the hard assignment** on ALA-GLY and 1.2-2.6x on `fas2`, growing
+monotonically with the width, and holding against a referee built from the ramp
+itself. On the Born sphere with an exact reference and a 21-padding phase sweep
+it is roughly neutral and raises the floor, which is the shape M1c recorded.
 
-So the face-centre sample stays, on the field axis, which is the axis debye's
-consumer reads. **Anything that revisits this needs a reference that does not
-itself discretize a volumetric dielectric** — TABI-PB, a closed form, or a truly
-converged grid. Reaching for APBS or DelPhi here measures a shared bias.
+**So the two axes disagree, and this file's own sentence is why that matters:**
+the field is the axis debye's consumer reads. `DebyeOptions.dielectric_smoothing`
+stays off by default for that reason rather than for a coverage one — and the
+face-centre sample stays the default with it. **Anything that revisits this needs
+a reference that does not itself discretize a volumetric dielectric** — TABI-PB,
+a closed form, or a truly converged grid; refinement is admissible here only
+because the ramp's band is `w*h` and vanishes with `h`, so the two schemes share
+a continuum limit. Reaching for APBS or DelPhi measures a shared bias.
+ROADMAP.md section 12, "The field axis, graded", carries the tables.
 """
 
 from __future__ import annotations

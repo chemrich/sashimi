@@ -2848,7 +2848,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. ~~Revisit when fractional-volume dielectric averaging damps the oscillation.~~ **The lever exists now: M8/M8a shipped the sub-cell ramp and #75/#77 made it affordable, so "revisit when the oscillation is damped" has a mechanism rather than an intention. What stands in the way is that the field axis M6 lives on is where the ramp's case is weakest, and the molecular-surface evidence is two tests on one dipeptide.** See the section below |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. See the sections below |
-| M8 ✅ | **The interface, graded without a reference** | **met for `van-der-waals` 2026-08-22, and the default surface is not that.** Two halves. The *instrument*: a pose spread sees only the phase-dependent half of the discretization error, so `grade_refinement` adds the other by Richardson over h, h/2, h/4 — validated against the Born closed form at **0.08–0.48%**, with a `converging` guard that refuses a ladder reading −172.6, −177.0, −171.7 rather than fitting it. *Both halves of that sentence were corrected 2026-08-24: the extrapolation does **not** beat its finest rung every time — three of sixteen Born windows do not — and the guard was a half-guard that admitted a 269.688% error until `MIN_SHRINKAGE` and a sign test were added.* The *scheme*: a hard face-centre dielectric replaced by a solute fraction ramped across **one cell** from the exact signed distance and blended harmonically — **4–17× against the Born closed form and 3.6–5.6× on pose dispersion**, with the ramp at 0.5 Å closer to converged than the hard assignment at 0.25 Å. Shipped off by default and bit-identical when off. Three claims of this document died in the process: the fitted convergence order is a property of the ladder and not the method, `posed`'s translation moves nothing because the box follows the solute, and averaging the indicator over a band of *whole* cells is worse than not averaging at all |
+| M8 ✅ | **The interface, graded without a reference** | **met for `van-der-waals` 2026-08-22, and the default surface is not that.** Two halves. The *instrument*: a pose spread sees only the phase-dependent half of the discretization error, so `grade_refinement` adds the other by Richardson over h, h/2, h/4 — validated against the Born closed form at **0.08–0.48%**, with a `converging` guard that refuses a ladder reading −172.6, −177.0, −171.7 rather than fitting it. *Both halves of that sentence were corrected 2026-08-24: the extrapolation does **not** beat its finest rung every time — three of sixteen Born windows do not — and the guard was a half-guard that admitted a 269.688% error until `MIN_SHRINKAGE` and a sign test were added.* The *scheme*: a hard face-centre dielectric replaced by a solute fraction ramped across **one cell** from the exact signed distance and blended harmonically — **4–17× against the Born closed form and 3.6–5.6× on pose dispersion**, with the ramp at 0.5 Å closer to converged than the hard assignment at 0.25 Å. Shipped off by default and bit-identical when off. Three claims of this document died in the process: the fitted convergence order is a property of the ladder and not the method, `posed`'s translation moves nothing because the box follows the solute, and averaging the indicator over a band of *whole* cells is worse than not averaging at all. **The precondition M1c set — the field axis — was graded 2026-08-25 and the ramp loses it**: on `ala-gly` and `fas2` the potential 2-3 Å outside the surface is 1.2-2.9× further from a refined referee at `w = 0.5` and monotonically worse with width, against every referee including one built from the ramp itself, while the energy on the same fixture and lattice is 4.9-8.8× closer. The two axes disagree and debye's consumer reads the field, so **the default stays off for a measured reason rather than a coverage one** |
 | M8a ✅ | **The solvent-excluded distance** | **met 2026-08-22**, and it moved the number M8 could not: the ramp raises the energy's convergence order to **2.31–2.48**, from **1.009** on molecular and from a hard van der Waals ladder that the repaired `converging` **refuses to fit at all** — an interface treatment ceasing to bound the accuracy. *Re-measured 2026-08-24: the recorded "0.32" baseline came from a ladder whose corrections shrink by 1.2031x, under `MIN_SHRINKAGE`, so it never described a fit and is withdrawn; the conclusion survives, the left-hand number does not.* `ReducedSurface.signed_gap` is `probe - dist(x, A)`, out of the same three families that decide `inside`, and `sign(gap)` reproduces `inside` node for node. Both ramp widths work on both surfaces. *Their limits agreeing to 0.14% and 0.16% was offered as evidence they are real rather than fitted and is **struck**: the width is in cells, so the band vanishes with h and the limits must agree whatever the ramp does.* *An earlier draft reported the best width as surface-dependent; that was a one-sided distance of its own making and is withdrawn below.* *And the branch that repair left alone was not a distance either: `min_i(|x - c_i| - r_i)` is an upper bound inside a union of spheres, so the `van-der-waals` ramp read a bound as a depth on **19.0%** of its interior band faces until 2026-08-25. Repaired by taking the same three families with the probe removed — a union of spheres is the solvent-excluded surface of a zero probe — which moves `fas2` by **+44.79 kJ/mol at 1.0 Å and +10.06 at 0.5 Å**, 19.8% and 7.0% of the ramp's own offset, and makes the ramp **cheaper** (2.62× → 1.28× of hard at 0.5 Å) because the clamp it needs is what lets the bound be windowed. The molecular branch had the same defect in its search *reach* — `probe` where the consumer reads to `probe + band` — worth 0.012–0.024% and free to fix. The Born ion is bit-identical across both, which is why neither was ever seen.* Pose dispersion alone would have ratified the bug, which is what Q0's other half is for |
 | M9 ✅ | **A boundary that does not cost `O(nodes × atoms)`** | *Shipped 2026-08-23 — #68 the decision, #70 the implementation.* The exact multi-atom Debye-Hückel sum evaluated on a **strided sub-lattice of the box face** and interpolated up, in place of one sum per face node; pitch in ångströms, capped at 0.6× the solute's clearance. Serum albumin's boundary goes **12.94 s → 0.24 s** and the whole solve 30.05 → 17.94 s. *Named "focusing" until the step (c) review priced a coarse pre-solve at 2.0–2.5 s against the strided face's 0.24 s, at no better accuracy and for a second grid hierarchy — the milestone kept its purpose and lost its mechanism.* **Exit criterion retired 2026-08-23, and it is worth reading as a record rather than a bar.** *Met:* total CPU strictly lower than the `mdh` baseline on **every** rung of the 906→18,242 ladder, 1.18–1.74× and widening with size; and, on the 3–4 Å shell against the exact sum on the same box and lattice, **r = 1.000000, sign 100.00%, magnitude within 0.04% and energy within 0.052%** on fas2, 1a63 and serum albumin, against bars of 0.999 / 99% / 1.02× / 0.5%. *Struck, each measured — and the first one for a corrected reason:* **atoms^≤1.05**, not because it is unreachable but because **it measures the ladder as much as the solver**. Two of the nine rungs use different input conventions — `2LZT-ASP66` has a mean radius of 1.031 Å against ~1.55 elsewhere, and `hca` is 17.8% hydrogen against ~49% — and dropping them to leave seven homogeneous rungs moves the fit from 1.075 to **1.048 ± 0.026** for `sdh` and 1.084 to **1.057 ± 0.023** for the shipped solver, halving the standard error and reproducing across two independent runs. *That composition effect is 0.027, against M9's own improvement of 0.113 in the same units — a quarter of the signal, coming from the choice of structures rather than from the solver.* So the honest reading is that the floor sits **at** the bar rather than above it and the shipped solver is one standard error over — marginal, not impossible. **An earlier version of this row said the bar sat below the floor and was wrong**; it was fitted across a ladder that mixes radius sets. **fas2 within 0.5% of its TABI-PB recording**, because the whole span from the exact boundary to `sdh` is 1.090 pp where the bar needs 2.375, so it graded discretization; and **`residue_potentials` as the observable**, because `sdh` passes it on all three structures at r ≥ 0.99998 — residue pooling averages away the near-surface `l ≥ 1` error that is the whole defect. **The three struck clauses share one cause, and it is the lesson of this milestone:** each graded something other than the quantity M9 changes — the wrong axis, the wrong referee, the wrong observable — while the *thresholds* were right every time. **A gate is a threshold and an observable, and the observable is the half that failed three times.** The Born ion and `ala-gly` pose dispersion remain regression anchors and were never bars: one atom makes `sdh` and `mdh` bit-identical, and a net-neutral dipeptide makes an `sdh` boundary identically zero. §12 carries the measurements and the forensics |
 
@@ -4749,6 +4749,169 @@ to within 0.01**. There is no surface-dependent width.
 have ratified the bug: at 0.5 cells on `molecular` the dispersion improved 2.2×
 while the answer walked away from its own limit. Q0's second half is what
 refused it, and a `/code-review` pass is what found the cause.
+
+#### The field axis, graded — and it is the axis the ramp loses
+
+**2026-08-25.** M1c set this as the explicit precondition and no ramp validation
+since has measured a field: *"harmonic at w = 0.5 barely improves the worst
+near-field error even while it transforms the energy, and debye's consumer reads
+the field."* It has been measured now, on three geometries with two independent
+references, and **the answer is no**. The energy verdict and the field verdict
+disagree — on the same fixture, the same surface and the same lattice — and
+protean consumes the one the ramp loses.
+
+##### What was measured, and the two traps it had to clear
+
+Every near-field number in this document has had to clear the same two traps, so
+they are stated before the tables rather than after.
+
+**Grid phase**, which swings every finite-difference backend's near field 5–21×
+— larger than anything separating the solvers. Handled by sweeping the padding
+at fixed resolution, which moves where the solute falls within its cells, and
+reporting worst *and* median over the sweep rather than the swing ratio. M1c's
+own lesson is that the ratio flatters a change that only raises the floor.
+
+**The referee sharing the bias under test.** APBS and DelPhi C++ both assign the
+dielectric hard at face centres, so neither can referee an interface change, and
+TABI-PB reaches one protein at one mesh density. What is left is refinement, and
+it is admissible for a reason specific to this knob: the ramp's band is `w·h` and
+vanishes with `h`, so the two schemes discretize the same sharp-interface
+continuum problem and share a limit. **Both schemes are run as the referee**, at
+two fine resolutions each, and a verdict is only reported where it holds at all
+four — including the ramp's own fine solve, which is the referee that should
+favour it.
+
+The referee's own behaviour, on `ala-gly`, RMS over the shell:
+
+| | 0.20 → 0.15 | 0.15 → 0.12 | 0.12 → 0.10 |
+|---|---|---|---|
+| same scheme, hard | 0.00068 | 0.00039 | 0.00022 |
+| same scheme, ramp | 0.00094 | 0.00069 | 0.00040 |
+
+| the two schemes at one resolution | 0.20 | 0.15 | 0.12 | 0.10 |
+|---|---|---|---|---|
+| hard against ramp | 0.00392 | 0.00263 | 0.00221 | 0.00189 |
+
+Each scheme converges; the two are still 0.0019 apart at `h = 0.1` and closing
+slowly. **So the yardstick is ambiguous at the level of the coarse hard error
+itself**, which is why the verdict below is only claimed where the gap between
+the two candidates exceeds that ambiguity — `w ≥ 0.5`, and comfortably at
+`w ≥ 0.75`.
+
+##### Arm A — the Born sphere, against the exact potential
+
+Worst-direction error at a **fixed physical radius** `a + 1.5 Å`, 21 paddings
+from 10 to 20 Å at a 0.5 Å request, `van-der-waals`:
+
+| a | w | worst | median | best | swing |
+|---|---|---|---|---|---|
+| 2.0 | 0 (hard) | 3.290% | 2.210% | 1.234% | 2.67× |
+| 2.0 | 0.5 | 2.928% | 2.585% | 2.065% | 1.42× |
+| 2.0 | 0.75 | **2.557%** | 2.256% | 1.565% | 1.63× |
+| 2.0 | 1.0 | 2.706% | 2.192% | 1.921% | 1.41× |
+| 3.0 | 0 (hard) | 2.444% | 1.968% | 0.433% | 5.65× |
+| 3.0 | 0.5 | 2.162% | 1.863% | 1.354% | 1.60× |
+| 3.0 | 0.75 | **1.880%** | **1.563%** | 1.425% | 1.32× |
+| 3.0 | 1.0 | 2.021% | 1.847% | 1.309% | 1.54× |
+
+The worst case improves 12–23% at `w ∈ [0.5, 1.0]` and the swing collapses — but
+**the swing collapses because the floor rises**, 1.234% → 2.065% and 0.433% →
+1.354%. That is M1c's shape, reproduced with a wider sweep. `w = 0.25` and
+`w = 2.0` are neutral to worse on both radii and are omitted for space.
+
+**The same geometry graded by Arm B's statistic says the improvement is a tail
+effect.** RMS over a 2–3 Å shell against the exact potential, same 21-padding
+class:
+
+| a | w | worst | median | best | ratio to hard: worst / median / best |
+|---|---|---|---|---|---|
+| 2.0 | 0.5 | 0.00231 | 0.00184 | 0.00137 | 1.80× / 1.19× / 0.73× |
+| 3.0 | 0.5 | 0.00195 | 0.00164 | 0.00131 | 2.88× / 0.96× / 0.69× |
+| 3.0 | 0 (hard) | 0.00202 | 0.00156 | 0.00061 | — |
+
+Median unchanged, floor doubled. **On a sphere the ramp is roughly neutral on the
+field and it raises the best case it used to have.**
+
+##### Arm B — a real solute, against a refined referee in both schemes
+
+RMS over a shell **2–3 Å outside the solvent-accessible surface** — a fixed
+physical band, so the same shell is graded at every resolution, and guaranteed
+more than two coarse cells outside the solvent-excluded surface at both. Ratios
+are `ramp ÷ hard`, one per referee (fine-hard | fine-ramp).
+
+`ala-gly`, molecular, coarse 0.5 Å, five paddings 10–14 Å (achieved h 0.4672 to
+0.4986, which is a full cell-fraction of phase):
+
+| w | ratio range over phase and referee |
+|---|---|
+| 0.25 | 0.62× – 1.68× |
+| 0.5 | **1.53× – 2.92×** |
+| 0.75 | 2.41× – 4.54× |
+| 1.0 | 3.16× – 6.63× |
+| 2.0 | 6.42× – 12.92× |
+
+`fas2` (906 atoms), molecular, one padding, four referees:
+
+| w | coarse 1.0 Å | coarse 0.5 Å |
+|---|---|---|
+| 0.25 | 0.78× – 0.86× | 0.79× – 1.49× |
+| 0.5 | 0.90× – 1.07× | **1.22× – 2.57×** |
+| 0.75 | 1.12× – 1.31× | 2.04× – 3.72× |
+| 1.0 | 1.33× – 1.55× | 2.98× – 4.96× |
+| 2.0 | 1.87× – 2.10× | 6.13× – 9.08× |
+
+**Monotone in width, and the direction holds against every referee including the
+ramp's own fine solve.** At protean's 1.0 Å on `fas2` the differences at
+`w ≤ 0.5` sit inside the referee ambiguity (0.0057 against gaps of 0.0017–0.0054)
+and no verdict is claimed there; at `w ≥ 0.75` and at 0.5 Å everywhere the gap
+clears it.
+
+##### The two axes disagree on one fixture, and that is the finding
+
+`ala-gly`, molecular, four rungs, the same solver and the same lattices the field
+was graded on:
+
+| achieved h | points | hard | w = 0.25 | w = 0.5 | w = 0.75 | w = 1.0 |
+|---|---|---|---|---|---|---|
+| 0.8695 | 35,937 | −230.4391 | −219.8791 | −218.1461 | −222.8878 | −231.9687 |
+| 0.4545 | 240,825 | −218.6277 | −211.0382 | −210.4139 | −211.8714 | −214.8247 |
+| 0.2432 | 1,537,305 | −212.4877 | −209.1629 | −208.7639 | −209.0317 | −209.5954 |
+| 0.1230 | 11,735,977 | −210.5782 | −208.6384 | **−208.2861** | −208.3020 | −208.3832 |
+
+All five columns converge on ≈ −208.3, which is the shared limit the field
+argument also rests on. Against it, at 0.4545 Å the hard scheme is **10.34
+kJ/mol** out and the ramp at `w = 0.5` is **2.13** — **4.9× closer**; at 0.2432 Å
+it is 4.20 against 0.48, **8.8× closer**. *And `w = 0.5` is the energy optimum,
+beating 0.25 and 0.75 at every rung — so the width that is best for the energy is
+the one that is about twice as bad on the field.*
+
+**A volume integral and a boundary value are not the same quantity, and an
+interface scheme is allowed to trade one for the other.** That is what this one
+does. Q0 already separated the phase-dependent error from the systematic one and
+warned against gating on the wrong half; this is the same lesson on a second
+axis, and the observable — not the threshold — is again where it turns.
+
+##### The decision
+
+**`dielectric_smoothing` stays off by default, and the reason is now a
+measurement rather than coverage.** The knob is worth keeping and is worth
+recommending to a caller who wants a *solvation energy* on a coarse grid: 4.9–8.8×
+at half the resolution is a real result and it survived every attempt above to
+break it. It should not be recommended to a caller colouring a surface, which is
+protean, which is what this project exists to serve.
+
+**What would reopen it**, in the order that would settle it fastest:
+
+- **A scheme that is sub-cell at the interface and hard at the sample.** The
+  degradation is monotone in `w` and vanishes as `w → 0` bit-identically, so the
+  two effects are separable in principle; nothing here says the energy gain
+  requires the field loss.
+- **A genuinely independent referee.** Every number above is debye against
+  debye, mitigated by running both schemes and requiring the verdict at both
+  ends. A TABI-PB exterior field would settle it, and it needs the boundary
+  integral `tabipb/vtk.py` already parses the inputs for.
+- **A second protein.** Two structures agree here and one of them is a
+  dipeptide.
 
 #### The other half of that bug: a bound the van der Waals ramp read as a depth
 

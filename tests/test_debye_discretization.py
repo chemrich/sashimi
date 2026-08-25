@@ -40,7 +40,7 @@ from sashimi.debye.sources import (
     interpolate_at_atoms,
 )
 from sashimi.errors import GridTooLarge, InputError
-from sashimi.protocol import GridSpec, PQRData, SolventModel, SurfaceModel
+from sashimi.protocol import DIMENSIONS, GridSpec, PQRData, SolventModel, SurfaceModel
 
 VDW = SolventModel(
     solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
@@ -479,3 +479,82 @@ def test_the_ramp_reaches_the_default_surface_and_uses_its_own_distance():
         # would be the way this stopped being true.
         assert smooth.min() >= min(solvent.solute_dielectric, solvent.solvent_dielectric)
         assert smooth.max() <= max(solvent.solute_dielectric, solvent.solvent_dielectric)
+
+
+def test_the_ramp_costs_accuracy_on_the_field_it_buys_on_the_energy():
+    """The field axis, which M1c set as the precondition for moving the default.
+
+    Every validation of `dielectric_smoothing` before 2026-08-25 was on the
+    **energy** — a volume integral — and debye's consumer colours a surface, so
+    what it reads is the **potential near the boundary**. Measured on both, on
+    one fixture at one lattice, the two disagree: on `ala-gly` at 0.4545 A the
+    ramp at `w = 0.5` is **4.9x closer** to the converged energy than the hard
+    assignment and **1.5-2.9x further** from a refined referee on the potential
+    2-3 A outside the surface. ROADMAP.md section 12, "The field axis, graded",
+    carries the sweeps; this pins the direction so it cannot quietly reverse.
+
+    **The referee is the ramp's own fine solve**, which is the conservative
+    choice: a fine hard solve inherits hard's construction and would flatter the
+    result. It reads 1.24x at `w = 0.5` and 3.62x at `w = 1.0` here, against
+    1.52x and 3.96x from a referee one rung finer, so the cheap referee
+    understates the effect rather than manufacturing it.
+
+    Two things this deliberately does *not* do. It does not sweep grid phase —
+    ROADMAP.md carries five paddings and this is one, so the bar at `w = 0.5` is
+    a direction and only `w = 1.0` carries a magnitude. And it does not claim the
+    ramp is a worse scheme: it is a better one for a solvation energy, which is
+    the other half of the same measurement.
+
+    The shell is a fixed **physical** band outside the solvent-accessible
+    surface, where `min_i(|x - c_i| - (r_i + probe))` is exact, so it is more
+    than two coarse cells clear of the dielectric interface — the radius rule
+    `sashimi.field.MIN_CELLS_OUT` exists for.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    from sashimi.debye.backend import DebyeSolver  # noqa: PLC0415
+    from sashimi.debye.options import DebyeOptions  # noqa: PLC0415
+    from sashimi.debye.surface import _union_gap  # noqa: PLC0415
+    from sashimi.pqr import read_pqr  # noqa: PLC0415
+    from sashimi.protocol import FiniteDifferenceRequest  # noqa: PLC0415
+
+    structure = read_pqr("tests/data/ala-gly.pqr")
+    solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
+
+    def potential(resolution: float, width: float):
+        request = FiniteDifferenceRequest(
+            structure=structure,
+            solvent=solvent,
+            grid=GridSpec(resolution=resolution, padding=10.0),
+            want_potential=True,
+            want_energy=False,
+        )
+        answer = DebyeSolver(options=DebyeOptions(dielectric_smoothing=width)).solve(request)
+        assert answer.potential is not None
+        return answer.potential
+
+    grid = size_grid(structure, GridSpec(resolution=0.5, padding=10.0))
+    axes = axis_coordinates(grid)
+    accessible = _union_gap(axes, structure.coords, structure.radii + solvent.surface_radius)
+    index = np.nonzero((accessible >= 2.0) & (accessible <= 3.0))
+    points = np.stack([axes[axis][index[axis]] for axis in range(DIMENSIONS)], axis=1)
+    assert len(points) > 1000, f"only {len(points)} shell nodes, so this grades nothing"
+    assert 2.0 * float(max(grid.spacing)) <= 2.0, "the shell is inside the two-cell rule"
+
+    referee = potential(0.25, 0.5).value_at(points)
+    assert np.isfinite(referee).all(), "the referee does not cover the shell"
+
+    def error(width: float) -> float:
+        got = potential(0.5, width).value_at(points)
+        assert np.isfinite(got).all()
+        return float(np.sqrt(np.mean((got - referee) ** 2)))
+
+    hard = error(0.0)
+    assert hard > 0.0, "the coarse solve reproduced the referee exactly, so nothing is being graded"
+    assert error(0.5) > hard, (
+        "the ramp is no longer further from the referee than the hard assignment at "
+        "w = 0.5, which is the finding the default rests on"
+    )
+    assert error(1.0) > 2.0 * hard, (
+        "the ramp at w = 1.0 is within 2x the hard assignment's field error; it was 3.62x"
+    )
