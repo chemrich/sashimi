@@ -490,7 +490,7 @@ def test_the_ramp_costs_accuracy_on_the_field_it_buys_on_the_energy():
     one fixture at one lattice, the two disagree: on `ala-gly` at 0.4545 A the
     ramp at `w = 0.5` is **4.9x closer** to the converged energy than the hard
     assignment and **1.5-2.9x further** from a refined referee on the potential
-    2-3 A outside the surface. ROADMAP.md section 12, "The field axis, graded",
+    2-3 A outside the surface. ROADMAP.md section 12, "The field axis, measured",
     carries the sweeps; this pins the direction so it cannot quietly reverse.
 
     **The referee is the ramp's own fine solve**, which is the conservative
@@ -552,7 +552,14 @@ def test_the_ramp_costs_accuracy_on_the_field_it_buys_on_the_energy():
         return float(np.sqrt(np.mean((got - referee) ** 2)))
 
     hard = error(0.0)
-    assert hard > 0.0, "the coarse solve reproduced the referee exactly, so nothing is being graded"
+    # Not `hard > 0.0` — a 65^3 coarse solve cannot reproduce an interpolated
+    # 121^3 field bit for bit and there is no reachable state where that fires.
+    # What can go wrong is the shell drifting somewhere the two agree anyway, so
+    # the floor is a size the effect has to clear.
+    assert hard > 1e-3, (
+        f"the hard scheme is only {hard:.2e} from the referee, so the shell has moved "
+        "somewhere the coarse and fine solves agree and nothing is being graded"
+    )
     # **Only `w = 1.0`, and the reason is that a bar at `w = 0.5` would be phase
     # fragile.** Against this referee it reads 1.24x at the padding above and
     # **0.74-0.95x** at the five paddings where the lattices nest exactly — the

@@ -60,7 +60,7 @@ a reference that does not itself discretize a volumetric dielectric** — TABI-P
 a closed form, or a truly converged grid; refinement is admissible here only
 because the ramp's band is `w*h` and vanishes with `h`, so the two schemes share
 a continuum limit. Reaching for APBS or DelPhi measures a shared bias.
-ROADMAP.md section 12, "The field axis, graded", carries the tables.
+ROADMAP.md section 12, "The field axis, measured", carries the tables.
 """
 
 from __future__ import annotations

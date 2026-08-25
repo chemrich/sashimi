@@ -82,7 +82,7 @@ class DebyeOptions:
     # **Turn it on for a solvation energy on a coarse grid**, where it is worth
     # about a factor of two in resolution. Do not turn it on to display a field.
     # `sashimi.debye.dielectric` carries the reasoning and ROADMAP.md section 12
-    # "The field axis, graded" the tables.
+    # "The field axis, measured" the tables.
     dielectric_smoothing: float = 0.0
 
     # How far apart, in angstroms, the box face is sampled before the
