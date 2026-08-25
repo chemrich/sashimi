@@ -33,6 +33,12 @@ __all__ = [
 # stencil is APBS's discretization rather than a boundary, and M1c measured what
 # debye would gain by smoothing its own dielectric — the worst near-field error
 # moves 4.138% -> 3.085%, which is why M4a was dropped. `GAUSSIAN` is DelPhi's.
+#
+# *debye has since built a dielectric smoothing of its own — a sub-cell ramp
+# from a signed distance, `DebyeOptions.dielectric_smoothing` below — and it is
+# not this. The refusal stands because a surface model names a **boundary** and
+# `SMOOTHED_MOLECULAR` names a discretization of one, which is a difference the
+# ramp does not close: a caller asking for it is asking for APBS's stencil.*
 SUPPORTED_SURFACES: frozenset[SurfaceModel] = frozenset(
     {SurfaceModel.VAN_DER_WAALS, SurfaceModel.MOLECULAR}
 )
@@ -63,9 +69,17 @@ class DebyeOptions:
     # the face centre's own side of the surface, which is what APBS does with
     # `srfm mol` and what every recorded corpus energy was measured with.
     #
-    # **Non-zero changes the answer**, so it is a knob and not a default. See
-    # `sashimi.debye.dielectric` for what M1c measured and ROADMAP.md section 12
-    # for the gate it has to pass before the default could move.
+    # **Non-zero changes the answer**, so it is a knob and not a default, and
+    # since M8 shipped it the reason has been *coverage* rather than the M1c
+    # measurement this comment used to point at. Three things are ungraded and
+    # ROADMAP.md section 12 carries each: the **field** axis, which is what
+    # debye's consumer reads and what no ramp validation has ever measured; the
+    # **molecular surface** beyond two tests on one 20-atom dipeptide; and the
+    # width, whose one pinning test is spacing-specific.
+    #
+    # And do not read a pose-dispersion improvement as the accuracy case. Q0
+    # separated the two halves by construction, and dispersion is the half that
+    # does not decide an interface scheme.
     dielectric_smoothing: float = 0.0
 
     # How far apart, in angstroms, the box face is sampled before the

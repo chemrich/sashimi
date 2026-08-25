@@ -1282,6 +1282,13 @@ TABI-PB's energy converges monotonically with mesh density (−221.57 → −216
 refinement, and it reports kJ/mol directly — the only backend needing no unit
 conversion.
 
+*That ladder is ALA-GLY's, and it has since been read as licence to treat the
+checked-in TABI-PB numbers as converged references. They are single rungs:
+`tests/corpus/tabipb/fas2-molecular.json` records `sdens 2.0` and no ladder
+exists for it. A backend whose energy converges **with** mesh density is one
+whose single-density recording is a rung — see "The referee gap" below, and do
+not gate against it.*
+
 **What a BEM solver costs, stated rather than hidden.** It cannot answer
 `sashimi_potential_at`: there is no volume to interpolate. It cannot solve the
 Born ion at all, because NanoShaper will not triangulate fewer than four atoms —
@@ -2412,8 +2419,16 @@ error, which is the "closed form describing different physics" trap
 
 ### The open lead M1c turned up: harmonic averaging and debye's energy
 
-Filed rather than pursued, because it is a different question from the one M1c
-was asked and it should not be smuggled in under a dropped milestone.
+> **This lead was taken.** Read Q0/Q1 and M8a below for what it became, and
+> "The referee gap" and the ramp sections for where it ended up. The knob is
+> `DebyeOptions.dielectric_smoothing`, shipped 2026-08-22 and off by default.
+> The section is kept because the reasoning in it — an exact reference, a
+> reference-free ladder, and a disqualified APBS comparison — is the reasoning
+> the later work turned out to be right about.
+
+~~Filed rather than pursued, because it is a different question from the one M1c
+was asked and it should not be smuggled in under a dropped milestone.~~
+**Pursued, at M8.**
 
 Harmonically blending the dielectric over a band made the Born solvation energy
 **8× more accurate** — the one measurement in this milestone with an exact
@@ -2431,8 +2446,15 @@ near-field error (4.044% against 4.138%) even while it transforms the energy, an
 debye's consumer reads the *field*. An energy-only win is worth having and is not
 worth regressing M1b for.
 
-**The knob is not landed.** A default-off parameter that a measurement rejected
-is the same shape as the `relaxation` knob `debye/options.py` refuses to carry.
+~~**The knob is not landed.** A default-off parameter that a measurement rejected
+is the same shape as the `relaxation` knob `debye/options.py` refuses to carry.~~
+
+**Landed 2026-08-22 as `DebyeOptions.dielectric_smoothing`, off by default**, and
+the analogy to `relaxation` does not hold: `relaxation` changed no answer, where
+this changes every answer it is switched on for. What keeps it a knob is
+coverage — of the field axis, which the paragraph above correctly names as the
+precondition, and of the molecular surface, whose entire evidence is two tests
+on one 20-atom dipeptide. Not the energy verdict, which has since reversed.
 
 ### M2 — the off-centre charge, and the four cases that had to exist first
 
@@ -2824,7 +2846,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | M4 ✅ | Solvent-excluded surface | **met**: the probe's worth, `(E_molecular − E_vdw)/\|E_vdw\|`, with debye **no further from APBS than DelPhi C++ is** — relational, so it carries no constant and cannot be met by drifting toward either incumbent. **Passes on all twelve real structures measured, 906 → 8,279 atoms**, and debye lands *strictly between* the two incumbents on every one, 2–8× closer to APBS. The original criterion here — "inside the 2.3% band APBS and DelPhi already occupy" — was **wrong and is retracted**: that 2.3% traced to a passing remark about pyDelPhi in §7, not to a measurement, and across the 33 shared `molecular` cases the band is 0.41%–5.74%. Needed nine new cases first, the fourth milestone in a row to find its criterion unstateable by the corpus it had — every closed-form case is blind to the probe, because a lone convex sphere's SES *is* that sphere. **Not below ~900 atoms**, where the probe is worth less than the lattice swing around it: recorded, as M2 and M3 each did |
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
-| M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. Revisit when fractional-volume dielectric averaging damps the oscillation. See the section below |
+| M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. ~~Revisit when fractional-volume dielectric averaging damps the oscillation.~~ **The lever exists now: M8/M8a shipped the sub-cell ramp and #75/#77 made it affordable, so "revisit when the oscillation is damped" has a mechanism rather than an intention. Two things stand in the way and both are coverage: the field axis M6 lives on is the one axis the ramp has never been graded on, and the molecular-surface evidence is two tests on one dipeptide.** See the section below |
 | M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. See the sections below |
 | M8 ✅ | **The interface, graded without a reference** | **met for `van-der-waals` 2026-08-22, and the default surface is not that.** Two halves. The *instrument*: a pose spread sees only the phase-dependent half of the discretization error, so `grade_refinement` adds the other by Richardson over h, h/2, h/4 — validated against the Born closed form at **0.08–0.48%**, with a `converging` guard that refuses a ladder reading −172.6, −177.0, −171.7 rather than fitting it. *Both halves of that sentence were corrected 2026-08-24: the extrapolation does **not** beat its finest rung every time — three of sixteen Born windows do not — and the guard was a half-guard that admitted a 269.688% error until `MIN_SHRINKAGE` and a sign test were added.* The *scheme*: a hard face-centre dielectric replaced by a solute fraction ramped across **one cell** from the exact signed distance and blended harmonically — **4–17× against the Born closed form and 3.6–5.6× on pose dispersion**, with the ramp at 0.5 Å closer to converged than the hard assignment at 0.25 Å. Shipped off by default and bit-identical when off. Three claims of this document died in the process: the fitted convergence order is a property of the ladder and not the method, `posed`'s translation moves nothing because the box follows the solute, and averaging the indicator over a band of *whole* cells is worse than not averaging at all |
 | M8a ✅ | **The solvent-excluded distance** | **met 2026-08-22**, and it moved the number M8 could not: the ramp raises the energy's convergence order to **2.31–2.48**, from **1.009** on molecular and from a hard van der Waals ladder that the repaired `converging` **refuses to fit at all** — an interface treatment ceasing to bound the accuracy. *Re-measured 2026-08-24: the recorded "0.32" baseline came from a ladder whose corrections shrink by 1.2031x, under `MIN_SHRINKAGE`, so it never described a fit and is withdrawn; the conclusion survives, the left-hand number does not.* `ReducedSurface.signed_gap` is `probe - dist(x, A)`, out of the same three families that decide `inside`, and `sign(gap)` reproduces `inside` node for node. Both ramp widths work on both surfaces. *Their limits agreeing to 0.14% and 0.16% was offered as evidence they are real rather than fitted and is **struck**: the width is in cells, so the band vanishes with h and the limits must agree whatever the ramp does.* *An earlier draft reported the best width as surface-dependent; that was a one-sided distance of its own making and is withdrawn below.* Pose dispersion alone would have ratified the bug, which is what Q0's other half is for |
@@ -3064,6 +3086,12 @@ would let a coarser grid do — fractional-volume dielectric averaging, which
 `sashimi/debye/dielectric.py` names in its own docstring and which M4a dropped
 on cost/benefit rather than on infeasibility. M6 is the first evidence it would
 pay off on a quantity a user actually looks at.
+
+*Written before M8. The lever was taken, and not in the shape named here: a
+volume fraction over a band of whole cells is **worse than the hard assignment**
+(Q1 below), where a solute fraction ramped across a single cell from the signed
+distance is several times better. The mechanism is the harmonic mean on band
+faces rather than the averaging.*
 
 ### M7 groundwork — where the time goes, and how to measure it at all
 
@@ -3666,8 +3694,18 @@ skip is a documented flavour limitation. **Separately and pre-existing: 23 of th
 58 C++ recordings are named by no per-push or on-demand list** — 21
 `van-der-waals`, `barnase-molecular`, and `serum-albumin`, which is the top rung
 of the ladder above. `corpus verify --backend delphi --tier full` reaches them;
-no `delphi`-marked test does. That is the same dead-weight failure
-`tests/test_delphi_solver.py` records having made once at M0, and it is open.
+no `delphi`-marked test does. ~~That is the same dead-weight failure
+`tests/test_delphi_solver.py` records having made once at M0, and it is open.~~
+
+**Closed 2026-08-24 (#73), and the fix is the shape rather than the list.**
+`DELPHI_ON_DEMAND` is now the *complement* of the hand-kept per-push tuple over
+the recorded directory, so the split is total by construction and a recording
+added later joins it by existing rather than falling out of both lists and
+looking like neither. `test_every_delphi_recording_is_either_re_solved_or_named`
+asserts the partition; the assertion that can actually fail is
+`set(DELPHI_PER_PUSH) <= recorded`, which reddens when the fast tuple names a
+case with no recording — the disjointness and the union hold by construction and
+are there to say so rather than to catch anything.
 
 ### Quality where there is no reference: two invariants, across every backend
 
@@ -4216,9 +4254,15 @@ but the cheap boundary condition focusing licenses.*
 
 **And the quality gap is now much larger than the speed gap.** debye's pose
 dispersion is 1.416% against APBS's 0.764% at protein scale — unchanged by any
-of this, because every kernel here is bit-identical by construction. Two blocks
+of this, because every kernel here is bit-identical by construction. ~~Two blocks
 of work have gone into speed and the discretization lever named at M1c is still
-unspent.
+unspent.~~
+
+**Spent at M8 and M8a (2026-08-22), and the framing above is the half that did
+not survive.** Pose dispersion is the *phase-dependent* part of the
+discretization error and not the whole of it — Q0 below — so "debye's dispersion
+is 1.416% against APBS's 0.764%" is a real gap and is not the gap the ramp
+closes. What the ramp closes is the systematic half.
 
 ### The order changed: functionality before shipping
 
@@ -4293,7 +4337,12 @@ commits and comments:
 | 8 debye | Phase 10 (handoff) | Phase 4 |
 | 9 Integration | Phase 4 | — |
 
-### Q0 and Q1 — the instrument, and the interface scheme it graded
+### M8 and M8a (Q0 and Q1) — the instrument, and the interface scheme it graded
+
+*Two names for one piece of work, and the phase table uses the other pair.* The
+questions were posed as Q0 and Q1 and the results are recorded in the table as
+**M8** and **M8a**; nothing said so, and every other milestone in §12 has a row.
+The heading now carries both.
 
 **2026-08-22.** Two blocks of performance work left debye's discretization
 untouched, by construction: every kernel was required to be bit-identical, and a
@@ -4400,8 +4449,14 @@ to a layered interface.
 | 3.0 | 0.250 | 0.806% | **0.100%** | 0.130% |
 | 3.0 | 0.125 | 0.453% | 0.098% | **0.060%** |
 
-**4–17× better**, and the width is load-bearing: a whole cell is worse than half
-a cell, and two cells is worse than not ramping at all.
+**4–17× better** across both columns; **5–8×** at the `w = 0.5` the tests
+exercise. ~~and the width is load-bearing: a whole cell is worse than half a
+cell, and two cells is worse than not ramping at all.~~
+
+*The width claim had no table behind it and one spacing-specific test. A sweep on
+2026-08-24 was built on a broken observable and is withdrawn below; what replaces
+it is fixed-h error against a reference, and there the ordering is neither
+monotone nor the same on both axes.*
 
 **The reference-free gate agrees**, which matters because the closed form is a
 sphere and the metric is blind to spheres. Pose dispersion on `ala-gly`, twelve
@@ -4541,9 +4596,19 @@ lone sphere the solvent-excluded surface *is* the van der Waals surface —
 `tests/test_debye_m4.py::test_a_lone_sphere_has_the_same_two_boundaries` asserts
 the two masks are equal node for node, with no tolerance. So **every Born-based
 validation of the ramp exercises M8a's solvent-excluded distance not at all**,
-and prices its cost at ~1× where a real solute pays 11–20×. The measurement that
-would decide the default is fixed-h error on a protein against a reference, and
-it has not been run.
+and ~~prices its cost at ~1× where a real solute pays 11–20×. The measurement
+that would decide the default is fixed-h error on a protein against a reference,
+and it has not been run.~~
+
+**prices its cost at ~1× where a real solute paid 11–20× when this was written
+and pays about 2.5× now (#75, #77).** The caveat itself stands and is worth
+keeping in front of anyone quoting the Born evidence for the ramp. What has
+changed is that the measurement it names — fixed-`h` error on a real solute
+against a reference — is *reachable* without a second solver: the ramp's band is
+`w·h` and vanishes with `h`, so the two schemes share a continuum limit and each
+scheme's own refinement ladder is an admissible referee for the other. That
+route was not available when this paragraph was written, because the reference
+was assumed to have to be a different code.
 
 #### Three defects, and the shape they had in common
 
@@ -5017,6 +5082,13 @@ either.
 
 ##### The referee plan is not sufficient, whichever design is built
 
+> **Read "The referee gap, closed from recordings already in the repo" below
+> before quoting the count here.** It stands as written — the word is
+> *independent*, and APBS and DelPhi share debye's face-centre assignment, so
+> neither is one. What #72 established is that the relationship between the 58
+> and the two same-family referees they already had was never written down, and
+> that writing it down is worth more than the count suggested.
+
 Of 58 debye recordings, **6** have a TABI-PB counterpart and **22** carry a gated
 closed form; **30 have neither, including all 16 above 906 atoms** —
 serum-albumin, hca, protein-rna, lysozyme, barnase, fkbp-apo, fkbp-dmso and
@@ -5376,6 +5448,106 @@ until a structure that size exists in the corpus.
 *So there is no M10 here.* The honest next targets are the ones that are not
 about speed at all — §12's referee gap, where 30 of 58 debye recordings have no
 independent check and none above 906 atoms has any, and phase 5's release.
+
+*Updated 2026-08-25. The gap is narrower and more precisely stated than that.
+Every one of the 58 already had **two same-family referees** in this repository
+and nobody had written the relationship down; #72 did, and the section below
+carries what it says. What is genuinely open is **no cross-family referee above
+906 atoms** — TABI-PB's coverage tops out at `fas2` — and **no referee of any
+kind for an interface change**, which is the ramp's problem and not a coverage
+one. Reaching higher is now known to be a cost question rather than a
+feasibility one: TABI-PB solved `barstar-molecular` at 1,403 atoms in 90.8 s.*
+
+### The referee gap, closed from recordings already in the repo
+
+**2026-08-24 (#72, #73, #74).** Two sections above name "30 of 58 debye
+recordings have no independent check" as the largest remaining accuracy
+question. The count is right and the word doing the work is *independent* —
+APBS, DelPhi C++ and debye all assign the dielectric hard at face centres, so
+none of them is one for the other. What was missed is separate and cheaper:
+**every one of the 58 already had two same-family referees in this repository,
+and nobody had written the relationship down.** An APBS recording sits in
+`tests/corpus/` and a DelPhi C++ one in `tests/corpus/delphi/` for all 58, of the
+same manifest case, reporting the same `POLAR_SOLVATION` term.
+
+`DEBYE_DEVIATION` is 58 cases × 2 referees of exact arithmetic on checked-in
+constants — **no solving and no binary**, so it runs on CI's `none` leg and is
+platform-independent where an assertion on a freshly-solved number is not. Like
+`GB_DEVIATION` it is the one check that survives
+`corpus build --backend debye --force`: a rebuild makes every other test in that
+file agree with the new numbers and makes this one fail by however far debye
+moved. **Signed**, because the sign is the finding.
+
+**What the 58 rows say, none of it previously recorded.**
+
+- **debye sits below both incumbents rather than scattering around them.** More
+  negative than DelPhi C++ on **58 of 58**, without exception, and than APBS on
+  **39 of 58**. The nineteen it is not are the one- and two-atom synthetic
+  geometries and the smallest molecules; `ion-protein-complex-vdw` agrees with
+  APBS to the table's precision.
+- **The three codes bracket.** `E_delphi > E_apbs > E_debye` on all **18** cases
+  at or above 906 atoms — nine structures, both surfaces, no exception. *The
+  count above reads "16 above 906 atoms" and this reads 18; the difference is
+  strictly-greater against at-or-equal, which is `fas2`'s two rows. Both are
+  right and neither should be silently harmonised into the other.* Asserted
+  as an *ordering* rather than a magnitude, deliberately: an ordering is not
+  something a tolerance can be widened to admit, and a magnitude bar here would
+  be the shared-bias trap `debye/dielectric.py` warns about.
+- **The two surfaces disagree in opposite directions, and that is the sharpest
+  thing in the table.** Over the twelve pairs where rolling the probe is worth
+  more than 1% — `corpus.probe_worth`, the quantity M4 was gated on —
+  `|debye − DelPhi|` is larger on **`van-der-waals` in 12 of 12**, while
+  `|debye − APBS|` is larger on **`molecular` in 11 of 12**. Two codes, two
+  surfaces, the asymmetry running the opposite way for each. A uniform bias in
+  any one solver cannot produce that: it locates the residual in how the three
+  **construct the boundary**, not in how they solve on it.
+- **`serum-albumin-vdw` is the argmax against both referees**, −9.09% against
+  APBS and −17.51% against DelPhi, with `serum-albumin` second on both at −6.64%
+  and −10.41%. The corpus's largest solute is its widest disagreement, and it is
+  the sole exception to the surface asymmetry. Excluding both its rows the
+  widest real structure is `barnase-molecular` at −3.12% against APBS and
+  `fkbp-dmso-vdw` at −8.87% against DelPhi. Pinned rather than excluded, so a
+  change that makes it ordinary fails and gets read.
+
+**The one independent pairing this repository has is debye against TABI-PB**,
+which shares neither the discretization nor the dielectric assignment.
+`paired_cases(a, b)` (#73) exists to express it, where the `cross_backend_cases`
+it replaces hardcoded APBS on the left and so could not state any pair not
+involving APBS. Measured: **debye is closest to TABI-PB on five of six cases and
+furthest on `fas2-molecular`**, the only real protein in that set. Both halves
+are pinned, because either one changing is a story somebody should tell.
+
+**And the one independent referee is not converged.** Its `fas2-molecular`
+recording is a single mesh density, `sdens 2.0`. §12 records above that a
+boundary-element energy converges *with* mesh density — the ALA-GLY ladder reads
+−221.57 → −211.39 over `sdens` 1.5 → 4.0 — so one density is a rung and not a
+limit, and on the one protein in that set there is no ladder at all. **Do not
+gate against it**, which is also the retrospective justification for M9 striking
+its "`fas2` within 0.5% of its TABI-PB recording" clause: the referee was
+unsettled as well as the bar being unpassable.
+
+**What is left of the gap, precisely.** Not "30 recordings with no check" —
+**no cross-family referee above 906 atoms**, and **no referee of any kind for an
+interface change**. TABI-PB's coverage tops out at `fas2` itself; its other cases
+are 260 and 20 atoms. Reaching higher is a cost question rather than a
+feasibility one.
+
+**Four count floors were replaced while this was written (#74)**, and it is the
+guards-that-guard-nothing thread again. `assert len(born) >= 9`,
+`assert len(kirkwood) >= 3` and two siblings each happened to equal the real
+count when written, which is the most misleading place for a floor to sit: it
+reads as exact and stops guarding the moment one more case lands. They are now
+the properties they were standing in for — set equality against the recorded
+directory, and the arm structure the Born sweep is supposed to have.
+
+*The 58 × 2 table also carries ordinary readings worth keeping: the Born ladder
+is about `a/h` and not about debye — against APBS the `molecular` rungs run
+−5.56% at a = 1 Å, −2.42% at 2, −1.08% at 4 and −0.18% at 6, which is a
+monotone `a/h` sequence and not a property of the solver; Kirkwood's `07` rungs
+jump to +2.4% on both surfaces where `03` and
+`05` sit inside 0.35%, which is the off-centre charge nearing the boundary; and
+the small molecules are a few tenths of a kJ/mol on a small number — methanol's
++3.67% is against an energy of about −20 kJ/mol.*
 
 ### Phase 9 — the case for replacing protean's default, measured on both axes
 
