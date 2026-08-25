@@ -366,3 +366,65 @@ def test_a_ladder_outside_the_asymptotic_regime_is_refused_rather_than_fitted():
 
     grade = grade_refinement(_backend("debye"), _born_system(2.0, 1.0), spacings=(1.0, 0.5, 0.25))
     assert not grade.converging, f"expected a non-monotone ladder, got {grade.energies}"
+
+
+def test_converging_refuses_the_two_shapes_that_produced_impossible_limits():
+    """The half-guard that shipped, and the two disasters it let through.
+
+    `converging` bounded only the *magnitude* of successive differences for as
+    long as it existed. A width sweep on 2026-08-24 found it labelling a `fas2`
+    ladder `converging=True` whose Richardson limit was **+2902 kJ/mol** — a
+    positive polar solvation energy, which linear response forbids for any
+    solute at `eps_solvent > eps_solute`.
+
+    Both shapes below are held as synthetic ladders rather than as solves. The
+    numbers are the *scheme* — a ratio and a sign — not a recorded answer, so
+    this cannot drift with a backend and cannot become a per-platform digit
+    anchor the way ROADMAP.md section 12 records an absolute energy doing.
+
+    Measured over 24 Born-sphere windows where the exact answer is known, these
+    two clauses catch **different** disasters and neither subsumes the other:
+    269.688% at a shrink ratio of 1.0327 with matching signs, and 7.078% at a
+    ratio of 8.75 with opposite ones.
+    """
+    from sashimi.invariants import MIN_SHRINKAGE, Refinement  # noqa: PLC0415
+
+    spacings = (1.1988, 0.7552, 0.4757)
+
+    def grade(energies: tuple[float, float, float]) -> Refinement:
+        return Refinement(backend="debye", spacings=spacings, energies=energies)
+
+    # Shape one: differences share a sign and shrink, but by only 3%. This is
+    # the `fas2` w=2.0 ladder's shape, and the amplifier it licenses is 30.6x.
+    barely = grade((-1000.0, -1900.0, -2771.0))
+    steps = barely._differences
+    assert steps[0] * steps[1] > 0.0, "this fixture is meant to have matching signs"
+    # Near 1 is the property; the exact digit is not. `fas2` read 1.0327 and
+    # this reads 1.0333, and pinning either would be a fitted constant standing
+    # in for "the corrections hardly moved".
+    assert 1.0 < abs(steps[0] / steps[1]) < 1.05
+    assert not barely.converging, "a ladder whose corrections barely shrink is not a fit"
+
+    # Shape two: differences reverse sign — a zigzag, which refutes
+    # `E(h) = L + C h^p` outright rather than fitting it badly.
+    #
+    # **Deliberately shrinking by 9x, far clear of `MIN_SHRINKAGE`, so this
+    # isolates the sign clause.** The first draft of this fixture used `fas2`'s
+    # own w=2.0 energies, whose ratio is 1.1377 — under the floor, so the shrink
+    # clause rejected them whatever their sign did and the sign clause was never
+    # exercised. The Born set's 7.078% disaster is the shape that matters here:
+    # a ratio of 8.75 with opposite signs, which only the sign test refuses.
+    zigzag = grade((-1000.0, -1900.0, -1800.0))
+    steps = zigzag._differences
+    assert abs(steps[0]) > abs(steps[1]) > 0.0, "the old magnitude-only test passed this"
+    assert abs(steps[0] / steps[1]) > MIN_SHRINKAGE, (
+        "this fixture must clear the shrink floor, or it does not test the sign clause"
+    )
+    assert steps[0] * steps[1] < 0.0, "this fixture is meant to oscillate"
+    assert not zigzag.converging, "an oscillating ladder is what the docstring always claimed"
+
+    # And a ladder that is genuinely converging still passes, so the guard has
+    # not simply been tightened into rejecting everything.
+    clean = grade((-200.0, -208.0, -210.0))
+    assert abs(clean._differences[0] / clean._differences[1]) > MIN_SHRINKAGE
+    assert clean.converging
