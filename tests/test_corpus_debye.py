@@ -464,9 +464,15 @@ def test_the_corpus_largest_solute_is_its_widest_disagreement():
     """Serum albumin, pinned deliberately because it is the outlier.
 
     18,242 atoms, and `serum-albumin-vdw` is the argmax of |deviation| against
-    *both* referees — 9.09% against APBS and 17.51% against DelPhi, where the
-    next widest real structure is 2.03% and 8.87%. It is also the one case that
-    breaks the surface asymmetry above.
+    *both* referees — 9.09% against APBS and 17.51% against DelPhi, with
+    `serum-albumin` second on both at 6.64% and 10.41%. It is also the one case
+    that breaks the surface asymmetry above.
+
+    *Excluding both albumin rows, the widest real structure is
+    `barnase-molecular` at 3.12% against APBS and `fkbp-dmso-vdw` at 8.87%
+    against DelPhi. This paragraph used to read "2.03% and 8.87%", which pairs
+    lysozyme's van der Waals row with fkbp's — two different cases, and the
+    first is not the maximum.*
 
     Some of this is resolution rather than physics: debye and APBS do not solve
     on the same lattice, and `h_debye/h_apbs` is 1.1828 here — the largest ratio

@@ -71,11 +71,11 @@ class DebyeOptions:
     #
     # **Non-zero changes the answer**, so it is a knob and not a default, and
     # since M8 shipped it the reason has been *coverage* rather than the M1c
-    # measurement this comment used to point at. Three things are ungraded and
-    # ROADMAP.md section 12 carries each: the **field** axis, which is what
-    # debye's consumer reads and what no ramp validation has ever measured; the
-    # **molecular surface** beyond two tests on one 20-atom dipeptide; and the
-    # width, whose one pinning test is spacing-specific.
+    # measurement this comment used to point at. ROADMAP.md section 12 carries
+    # the three that decide it: the **field** axis, which is what debye's
+    # consumer reads and where the ramp's case is weakest; the **molecular
+    # surface** beyond two tests on one 20-atom dipeptide; and the width, whose
+    # one pinning test is spacing-specific.
     #
     # And do not read a pose-dispersion improvement as the accuracy case. Q0
     # separated the two halves by construction, and dispersion is the half that
