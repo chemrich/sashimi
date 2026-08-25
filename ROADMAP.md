@@ -4638,8 +4638,11 @@ instead of reading the probe, because the bare surface's probe is zero and a rim
 search of zero radius finds nothing.
 
 Graded against a closed form for two overlapping balls, written out
-independently in the test: **exact to 3.6e-15**, where the bound is out by up to
-0.46 Å on the same lattice.
+independently in the test: **exact**, 0.0 over 35,821 graded nodes, where the
+bound is out by up to **0.6715 Å** on the same lattice. *An earlier draft quoted
+3.6e-15 and 0.46 Å; those are from a random-cluster check, not from the fixture
+the test runs, and the test's own guard asserts the bound is out by more than
+0.5 — which 0.46 would have reddened.*
 
 **What it moves, measured.** `fas2`, van der Waals, `w = 0.5` cells:
 
@@ -4662,13 +4665,19 @@ achieved 0.1033 Å, 19.7 M points):
 | 0.1230 | 11,735,977 | −219.1037 | −216.4673 | −216.4580 |
 | 0.1033 | 19,750,185 | −218.4740 | −216.4666 | −216.4596 |
 
-The two ramp columns agree to **0.007 kJ/mol (0.003%)** at the finest rung and
-the repaired one is nearer the shared plateau at every rung. **The hard column
-is the one that has not arrived**: at 19.7 M points it is still 2.01 kJ/mol —
-**0.93%** — from where the ramp settles at 240,825, which is 82× fewer points.
-That is a sharper statement of "the ramp at 0.5 Å is closer to converged than
-hard at 0.25 Å" than the original, and it is on a real solute rather than a
-sphere.
+The two ramp columns agree to **0.007 kJ/mol (0.003%)** at the finest rung, and
+the repaired one is nearer the shared plateau at the **first three** rungs. *At
+rungs four and five the two columns differ by 0.009 and 0.007 kJ/mol while each
+column's own rung-to-rung drift is the same size, and the plateau is estimated
+from those same two columns — so the comparison there is circular and is not
+claimed.*
+
+**The hard column is the one that has not arrived.** At 19.75 M points it is
+2.01 kJ/mol from the finest ramp rung; the ramp at 240,825 points is 1.61 from
+the same place. *That is a 1.25× edge, not the "82× fewer points" an earlier
+draft claimed — the ramp does not settle at 240,825, it drifts a further 1.61
+kJ/mol after it, and the 2.01 is measured against the ramp at 19.75 M.* The
+direction is the original finding and the margin is much smaller than stated.
 
 **The cost went down, not up.** The bound was `O(nodes × atoms)` with every atom
 evaluated against the whole lattice — 6.8 s on `fas2` at 0.5 Å, most of what the
@@ -4684,8 +4693,13 @@ Min-of-3, interleaved, warm JIT, `fas2` van der Waals:
 
 Ratios rather than seconds, because §12 already records identical code varying
 1.9× on load; the hard column is the control and it reads 0.46/0.45 s and
-3.58/3.60 s across the two trees. At 1.0 Å the bound was never the bottleneck;
-at 0.5 Å it was. *A first pass at this table compared a tree with the compiled
+3.58/3.60 s across the two trees.
+
+*The bound is the same share of the ramp at both resolutions — 0.87 s of 1.26 s
+at 1.0 Å and 6.8 s of 9.9 s at 0.5 Å, about 69% each. What differs is the price
+of what replaces it: the three families cost ~0.55 s at 1.0 Å against the 0.87 s
+they remove, and ~1.06 s at 0.5 Å against 6.8 s. An earlier draft said "at 1.0 Å
+the bound was never the bottleneck", which is not what the profile says.* *A first pass at this table compared a tree with the compiled
 kernel against one without — the worktree had not been synced with the `fast`
 extra — which flattered the change. Check `kernel.available()` on both sides of
 a before-and-after.*
@@ -4702,10 +4716,12 @@ above, on the default surface.
 `tests/test_debye_kernel.py::test_the_distance_reaches_past_the_probe_where_the_boolean_twin_stops`
 already asserts that the population between one probe and the fill is not empty
 — that is the precondition for the compiled kernel's missing probe cull. What
-was missing was *searching* it. Measured on `fas2`, both widths: **7 to 95 faces
-per lattice** change their blend fraction, worst change **0.38**, and the energy
-moves **0.024%** at 1.0 Å and **0.012%** at 0.5 Å, at **no cost** (2.65× → 2.46×
-and 1.93× → 1.85× of hard, which is inside the noise). Small, and it is the same
+was missing was *searching* it. Measured on `fas2` at `w = 0.5` cells, summed
+over the three staggered lattices: **51 faces** move at 1.0 Å and **95** at
+0.5 Å — 1 to 34 per lattice — worst fraction change **0.38**, and the energy
+moves **0.024%** and **0.012%**, at **no cost** (2.65× → 2.46× and 1.93× → 1.85×
+of hard, inside the noise). Both counts grow with the width: at `w = 1.0` cells
+it is 763 and 817 faces and a worst change of 0.44. Small, and it is the same
 defect: a search radius smaller than what the consumer reads.
 
 **A limitation recorded rather than closed.** A node on a rim's own axis is

@@ -1674,9 +1674,11 @@ class ReducedSurface:
             # `test_the_distance_reaches_past_the_probe_where_the_boolean_twin_stops`
             # in `tests/test_debye_kernel.py` already asserts that the population
             # past one probe is not empty; what was missing was searching it.
-            # Measured on `fas2`: 51 faces at 1.0 A and 95 at 0.5 A move, worst
+            # Measured on `fas2` at w = 0.5 cells, summed over the three
+            # staggered lattices: 51 faces at 1.0 A and 95 at 0.5 A move, worst
             # fraction change 0.38, and the energy by 0.024% and 0.012%, at no
-            # cost. With no band the fill is the ceiling, so the reach is `far`.
+            # cost. Both grow with the width — at w = 1.0 it is 763 and 817 faces
+            # and 0.44. With no band the fill is the ceiling, so the reach is `far`.
             look = far if band is None else self.probe + band
             _toroidal_distance(axes, self, region, nearest, reach=look)
             _vertex_distance(axes, self, region, nearest, reach=look)
@@ -1725,6 +1727,28 @@ class ReducedSurface:
         _radial_distance(axes, bare.spheres, region, depth)
         _toroidal_distance(axes, bare, region, depth, reach=reach)
         _vertex_distance(axes, bare, region, depth, reach=reach)
+        # **Where all three families decline, report the larger of the bound and
+        # the reach — not the fill.** Two nodes are reachable this way: one
+        # sitting exactly on an atom centre, where `_radial_distance` has no
+        # direction to project along (`span > DEGENERATE` is false), and one on
+        # a rim's axis, which is equidistant from the whole circle. The fill
+        # asserts `depth >= 2 * reach`, which nothing supports for either, and on
+        # a lone sphere it read **-2a** at the centre of this repository's own
+        # Born fixture against a true **-a**.
+        #
+        # The two terms are the two things actually known. `-gap` is the bound,
+        # exact wherever the nearest sphere surface is exposed — which is the
+        # lone-sphere centre, so that case comes out right to the last bit.
+        # `reach` is what saturation *means*: every consumer clamps there, so a
+        # node reported at the reach is outside the band whichever branch asked,
+        # which is what keeps `band=w` and `band=None` agreeing on the fraction.
+        # A rim-axis node still over-reports — 2.0 against a true 1.732 on the
+        # two-ball fixture — and is bounded by the reach rather than by twice it.
+        #
+        # Compared against `far` before the cap, because a family that answers
+        # writes a distance and only the untouched fill is still exactly `far`.
+        declined = region & (depth == far)
+        depth = np.where(declined, np.maximum(-gap, reach), depth)
         np.minimum(depth, far, out=depth)
         return np.asarray(np.where(region, -depth, gap), dtype=np.float64)
 
@@ -1785,8 +1809,8 @@ def _union_gap(
 
     **`reach` clamps and, in doing so, windows.** Unclamped this is
     `O(nodes x atoms)` with every atom evaluated against the whole lattice —
-    8.1 s on `fas2` at 0.5 A, which is most of what the van der Waals ramp
-    costs. Given a reach, each sphere is evaluated over its own index window
+    **6.8 s** on `fas2` at 0.5 A and 0.87 s at 1.0 A, which is about 69% of the
+    ramped solve at both. Given a reach, each sphere is evaluated over its own index window
     instead, exactly as `inside_union_of_spheres` does, and anything further
     than `reach` from every atom keeps the fill. **The clamp cannot move a value
     the band reads**: a node inside the union sits inside some sphere, so it is

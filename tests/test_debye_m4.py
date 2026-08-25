@@ -468,11 +468,22 @@ def test_a_node_on_a_rim_axis_is_the_one_place_the_distance_saturates():
     the fill. That is why the test above offsets its lattice, and it is worth
     knowing before the next reader picks a symmetric fixture.
 
+    **What such a node returns is the search reach, not the saturated fill**, and
+    that distinction is a repair of its own. The fill asserts `depth >= 2 * reach`,
+    which for a node no family reached is an assertion nothing supports. What is
+    reported instead is the larger of the bound and the reach — the two things
+    actually known — so this node reads `-2.0` against a true `-1.7320508`
+    rather than the fill's `-4.0`. It is still an over-report, and it is bounded
+    by the reach rather than by twice it.
+
+    *The same fallback is what makes the lone-sphere case exact: there the bound
+    is the larger term and it is the truth. See the test below.*
+
     The assertion is the *shape* of the hole, not its size: every node that
     misses the closed form must lie on the axis. A repair that made the families
     answer these would only tighten it.
     """
-    from sashimi.debye.surface import ReducedSurface  # noqa: PLC0415
+    from sashimi.debye.surface import ReducedSurface, _union_gap  # noqa: PLC0415
 
     centre_a, radius = np.array([-1.0, 0.0, 0.0]), 2.0
     centre_b = np.array([1.0, 0.0, 0.0])
@@ -500,8 +511,16 @@ def test_a_node_on_a_rim_axis_is_the_one_place_the_distance_saturates():
         f"{int(missed.sum())} nodes miss the closed form and not all are on the rim axis; "
         f"furthest off it by {np.abs(off_axis).max():.3g} A"
     )
-    # Every one of them saturates rather than returning something plausible.
-    assert (gap[missed] == -2.0 * radius).all()
+    # And every one of them comes back at the larger of the bound and the reach
+    # rather than at the fill, so the repair never asserts twice the depth it
+    # searched to.
+    bound = _union_gap(axes, structure.coords, structure.radii)
+    expected = -np.maximum(-bound[missed], radius)
+    assert np.array_equal(gap[missed], expected), (
+        "a declined node did not come back at max(bound, reach); the fill asserts "
+        "a depth no family measured"
+    )
+    assert (np.abs(gap[missed]) < 2.0 * radius).all()
 
 
 def test_a_lone_sphere_has_nothing_to_bury_and_so_moves_not_one_bit():
@@ -532,13 +551,31 @@ def test_a_lone_sphere_has_nothing_to_bury_and_so_moves_not_one_bit():
         axes = axis_coordinates(grid)
         width = min(0.5 * float(min(grid.spacing)), solvent.surface_radius)
 
-        gap = ReducedSurface(structure, solvent).signed_gap(axes, band=width)
+        surface = ReducedSurface(structure, solvent)
         bound = _union_gap(axes, structure.coords, structure.radii)
+
+        gap = surface.signed_gap(axes, band=width)
         band = np.abs(bound) < width
         assert band.any(), f"a = {radius}: no node in the band, so this grades nothing"
         assert np.array_equal(gap[band], bound[band]), (
             f"a = {radius}: {int((gap[band] != bound[band]).sum())} of {int(band.sum())} "
             "band nodes moved on a solute with no concavity to find"
+        )
+
+        # **The whole interior, not just the band, and that is the assertion
+        # that matters.** Grading the band alone misses the node sitting exactly
+        # on the atom centre — which is never in the band, and which the first
+        # version of the repair returned `-2a` for against a true `-a`, because
+        # `_radial_distance` has no direction to project along there and the
+        # saturated fill survived. `band=None` is the path a caller plotting or
+        # grading the field takes, so it is the one this has to cover.
+        exact = surface.signed_gap(axes)
+        inside = bound < 0.0
+        assert inside.any()
+        assert np.array_equal(exact[inside], bound[inside]), (
+            f"a = {radius}: {int((exact[inside] != bound[inside]).sum())} of "
+            f"{int(inside.sum())} interior nodes moved, worst by "
+            f"{float(np.abs(exact[inside] - bound[inside]).max()):.4g} A"
         )
 
 
@@ -613,11 +650,13 @@ def test_pruning_the_band_leaves_every_value_the_ramp_actually_reads():
     `band=None` search different distances, so they can only agree in the band
     if every feature that could win is offered under the narrower one.
 
-    That makes it the guard for the `molecular` reach as well, which was `probe`
-    where the consumer reads `nearest` out to `probe + band`. **Run as a
-    mutation rather than asserted:** putting the reach back to `probe` reddens
-    this on `fas2` at 0.5 A with 1,633 in-band nodes compared, so the guard can
-    fail rather than only pass.
+    **What it does not say is that either reach is big enough.** It grades the
+    two against each other, so a reach that is uniformly too small passes: put
+    `look = self.probe` back on both branches — exactly the state before this
+    change — and it stays green. What it catches is the two branches searching
+    *different* distances, which is the shape a partial fix would have. Run as a
+    mutation: `look = far if band is None else self.probe` reddens it on
+    `ala-gly` at 0.5 A, by **one node of 1,633**.
     """
     from sashimi.debye.surface import ReducedSurface  # noqa: PLC0415
 
