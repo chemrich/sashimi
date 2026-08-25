@@ -95,6 +95,7 @@ __all__ = [
     "decide_radial",
     "decide_rims",
     "decide_seated",
+    "distance_rims",
     "enumerate_rims",
     "mark_union",
     "neighbour_lists",
@@ -312,6 +313,172 @@ def _compiled() -> Any:  # noqa: PLR0915
                                 decided[node] = True
 
     return kernel
+
+
+@cache
+def _compiled_distance() -> Any:  # noqa: PLR0915
+    """The distance twin of `_compiled`. Built once, lazily, for the same reason."""
+    from numba import njit  # noqa: PLC0415 — the whole point is that this is lazy
+
+    @njit(cache=True, fastmath=False, nogil=True)
+    def kernel(  # type: ignore[no-untyped-def]  # noqa: PLR0917
+        points,
+        order,
+        starts,
+        stops,
+        codes,
+        low_key,
+        high_key,
+        strides,
+        bin_origin,
+        cell,
+        origins,
+        normals,
+        ring_radii,
+        probe,
+        blocker_flat,
+        blocker_offset,
+        blocker_count,
+        coords,
+        inflated,
+        best,
+    ):  # pragma: no cover - compiled; exercised through `distance_rims`
+        """One rim per iteration, keeping the distance the boolean twin discards.
+
+        **Three lines of `_compiled` are deliberately absent, and each would be a
+        wrong answer rather than a slow one.**
+
+        - *No `if decided[node]: continue`.* A boolean or does not care which rim
+          claimed a node; a minimum does, so every rim that reaches a node has to
+          be offered. `surface._toroidal_distance` says the same thing about why
+          it has no `decided` array at all.
+        - *No probe cull.* `_compiled` skips a pair once
+          `gap*gap + axial*axial > probe*probe`, which is exactly the boolean
+          question. The distance is consumed out to `2 * probe`
+          (`surface.ReducedSurface.signed_gap`), so those pairs reach the answer.
+          Transcribing that line moves 1,571 nodes on `fas2` at 1.0 A, 733 of
+          them inside the ramp band — which is why it is the control mutation
+          `tests/test_debye_kernel.py` reinstates to prove the gate can fail.
+        - *No `squared_probe` at all*, so the omission cannot be undone by
+          accident later.
+
+        Everything else is transcribed operation for operation, because the
+        contract here is bit-identity and this loop returns **geometry**: `best`
+        is compared against a ramp width downstream, so an ulp is a different
+        dielectric map rather than a rounding difference. `ring * rx / length`
+        keeps the reference's association, three-term sums stay left to right,
+        and every square is a multiplication — see this module's header for the
+        `x ** 2` defect that rule comes from.
+        """
+        degenerate = 1e-12
+        for r in range(origins.shape[0]):
+            ox, oy, oz = origins[r, 0], origins[r, 1], origins[r, 2]
+            nx, ny, nz = normals[r, 0], normals[r, 1], normals[r, 2]
+            ring = ring_radii[r]
+            reach = ring + probe
+            lo0 = max(int(np.floor((ox - reach - bin_origin[0]) / cell)), low_key[0])
+            lo1 = max(int(np.floor((oy - reach - bin_origin[1]) / cell)), low_key[1])
+            lo2 = max(int(np.floor((oz - reach - bin_origin[2]) / cell)), low_key[2])
+            hi0 = min(int(np.floor((ox + reach - bin_origin[0]) / cell)), high_key[0])
+            hi1 = min(int(np.floor((oy + reach - bin_origin[1]) / cell)), high_key[1])
+            hi2 = min(int(np.floor((oz + reach - bin_origin[2]) / cell)), high_key[2])
+            if lo0 > hi0 or lo1 > hi1 or lo2 > hi2:
+                continue
+            first_blocker = blocker_offset[r]
+            last_blocker = first_blocker + blocker_count[r]
+
+            for i in range(lo0, hi0 + 1):
+                for j in range(lo1, hi1 + 1):
+                    for k in range(lo2, hi2 + 1):
+                        code = (
+                            (i - low_key[0]) * strides[0]
+                            + (j - low_key[1]) * strides[1]
+                            + (k - low_key[2]) * strides[2]
+                        )
+                        at = np.searchsorted(codes, code)
+                        if at >= codes.shape[0] or codes[at] != code:
+                            continue
+                        for slot in range(starts[at], stops[at]):
+                            node = order[slot]
+                            dx = points[node, 0] - ox
+                            dy = points[node, 1] - oy
+                            dz = points[node, 2] - oz
+                            if dx * dx + dy * dy + dz * dz > reach * reach:
+                                continue
+                            axial = dx * nx + dy * ny + dz * nz
+                            rx = dx - axial * nx
+                            ry = dy - axial * ny
+                            rz = dz - axial * nz
+                            length = np.sqrt(rx * rx + ry * ry + rz * rz)
+                            if length <= degenerate:
+                                continue
+                            px = ox + ring * rx / length
+                            py = oy + ring * ry / length
+                            pz = oz + ring * rz / length
+                            legal = True
+                            for b in range(first_blocker, last_blocker):
+                                atom = blocker_flat[b]
+                                ax = px - coords[atom, 0]
+                                ay = py - coords[atom, 1]
+                                az = pz - coords[atom, 2]
+                                if ax * ax + ay * ay + az * az < inflated[atom] * inflated[atom]:
+                                    legal = False
+                                    break
+                            if legal:
+                                gap = length - ring
+                                apart = np.sqrt(gap * gap + axial * axial)
+                                # Sequential, not a scatter-reduce, and that is
+                                # measured rather than assumed: the reference's
+                                # `np.minimum.at` has unique indices within every
+                                # call, and `apart` is `sqrt(square + square)` so
+                                # it can be neither NaN nor -0.0 — the two values
+                                # that would make a minimum order-dependent.
+                                best[node] = min(best[node], apart)
+
+    return kernel
+
+
+def distance_rims(  # noqa: PLR0917 — mirrors the reference loop's inputs
+    points: FloatArray,
+    bins: Any,
+    origins: FloatArray,
+    normals: FloatArray,
+    ring_radii: FloatArray,
+    blockers: tuple[np.ndarray, np.ndarray, np.ndarray],
+    coords: FloatArray,
+    inflated: FloatArray,
+    probe: float,
+    best: FloatArray,
+) -> None:
+    """Nearest legal rim projection per node, as a distance. Mutates `best`.
+
+    `decide_rims` with the verdict replaced by the quantity the verdict was read
+    from. `best` arrives pre-filled with `inf` and is lowered in place, so the
+    caller's `np.minimum` against the accumulated `nearest` is unchanged.
+    """
+    blocker_flat, blocker_offset, blocker_count = blockers
+    _compiled_distance()(
+        np.ascontiguousarray(points),
+        bins.order,
+        bins.starts,
+        bins.stops,
+        bins.codes,
+        bins.low_key,
+        bins.high_key,
+        bins.strides,
+        bins.bin_origin,
+        bins.cell,
+        np.ascontiguousarray(origins),
+        np.ascontiguousarray(normals),
+        np.ascontiguousarray(ring_radii),
+        float(probe),
+        blocker_flat,
+        blocker_offset,
+        blocker_count,
+        np.ascontiguousarray(coords),
+        np.ascontiguousarray(inflated),
+        best,
+    )
 
 
 def decide_rims(  # noqa: PLR0917 — mirrors the reference loop's inputs

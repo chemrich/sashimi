@@ -1025,6 +1025,35 @@ def _toroidal_distance(
     bins = _Bins(nodes.points, float(np.median(reach)))
     best = np.full(len(nodes), np.inf, dtype=np.float64)
 
+    # The compiled path, when `sashimi-electro[fast]` is installed — the same
+    # branch `_toroidally_reachable` takes, for a much larger prize. This family
+    # is **91.8% of what the sub-cell dielectric ramp costs** (`fas2`, 1.0 A,
+    # molecular: 10.74 s of an 11.69 s difference, with `_legal` 69.8% of the
+    # solve inside it), because the boolean twin above goes through a kernel and
+    # this one never did. It owns the bin walk rather than only the arithmetic:
+    # `_Bins.near_many` is about a fifth of the numpy path, so compiling the
+    # arithmetic alone would leave that fifth as most of what remains.
+    #
+    # `tests/test_debye_kernel.py` asserts the distances are bit-identical on
+    # real geometry, and CI runs the numpy path on two legs and this on the
+    # third, so the branch is a speed choice and nothing else.
+    if kernel.available():
+        kernel.distance_rims(
+            nodes.points,
+            bins,
+            origins,
+            normals,
+            ring_radii,
+            surface.blocker_table,
+            coords,
+            inflated,
+            surface.probe,
+            best,
+        )
+        marked = nearest[nodes.index[0], nodes.index[1], nodes.index[2]]
+        nearest[nodes.index[0], nodes.index[1], nodes.index[2]] = np.minimum(marked, best)
+        return
+
     span = nodes.points.max(axis=0) - nodes.points.min(axis=0)
     volume = float(np.prod(np.maximum(span, bins.cell)))
     density = len(nodes) / volume
