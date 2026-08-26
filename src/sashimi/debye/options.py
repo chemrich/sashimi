@@ -83,6 +83,15 @@ class DebyeOptions:
     # about a factor of two in resolution. Do not turn it on to display a field.
     # `sashimi.debye.dielectric` carries the reasoning and ROADMAP.md section 12
     # "The field axis, measured" the tables.
+    #
+    # Two coverage gaps stand behind the field one and neither is closed: the
+    # **molecular surface** is exercised by two tests on one 20-atom dipeptide,
+    # and the **width** has one pinning test that is spacing-specific.
+    #
+    # And do not read a pose-dispersion improvement as the accuracy case. A pose
+    # spread is the *phase-dependent* half of the discretization error and on
+    # debye it is the smaller half — Q0, and `sashimi.invariants` says the same
+    # in its header. It is not the half an interface scheme is decided on.
     dielectric_smoothing: float = 0.0
 
     # How far apart, in angstroms, the box face is sampled before the
