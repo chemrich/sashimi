@@ -6378,7 +6378,8 @@ statistics moved by exactly RT at that case's own temperature, including the
 it. §2 names it as half of what a BEM solver natively produces, so the type
 should grow one — a protocol change, deliberately not bundled with a
 corpus-changing units fix. It is in the same kJ/mol/e per Å and will need the
-same divisor.
+same divisor — **and it is the interior derivative, not the exterior one, which
+is measured and designed against two sections below.**
 
 And the exclusion above should be narrowed from the family to the measurement:
 grading a BEM answer against a closed form on the interface is sound, and only
@@ -6463,6 +6464,102 @@ mix-up would be bit-identical and these are not. Two codes sharing no source
 agreeing that closely is either a shared discretization convention or a shared
 ancestry in one, and §12's referee work assumes they are independent. Worth
 knowing before either is used to referee the other.
+
+### The exterior field evaluator, designed against a measurement
+
+**Not built. This section is the design, and the reason it is written down before
+any code is that two of its three physical premises turned out to be wrong when
+measured, and both were wrong in ways that read as correct.**
+
+The motivation is §12's oldest open item. `_analytic_field_summary` grades a
+field against a closed form, and closed forms exist for two geometries; every
+other question about the near field is settled by comparing solvers, and **APBS,
+DelPhi C++ and debye all assign the dielectric hard at face centres, so none of
+them is one for the other.** A boundary-element answer has no volumetric lattice
+at all. It is the only prospective referee in this repository that does not share
+that construction — which is what makes it worth the care below.
+
+**What TABI-PB's `NormalPotential` actually is.** The interior normal derivative
+`dphi_1/dn`, in kJ/(mol e Å), and *not* the exterior one. The measurement that
+settles it is a sweep of the solute dielectric on the four-atom Born sphere from
+`studies/tabipb_units/born_sphere.py`, because the two candidates differ by
+exactly `eps_s/eps_p` and nothing else in the problem does:
+
+| `eps_p` | ratio to `-q/(4 pi eps0 eps_s a^2)` | `eps_s/eps_p` | ratio to `-q/(4 pi eps0 eps_p a^2)` |
+|---|---|---|---|
+| 1.0 | 79.219 | 78.54 | 1.00864 |
+| 2.0 | 39.608 | 39.27 | 1.00862 |
+| 4.0 | 19.803 | 19.635 | 1.00854 |
+
+The exterior column tracks `eps_s/eps_p` and the interior column does not move.
+The residual 1.0086 is discretization and goes as h²: **1.00862, 1.00393,
+1.00247, 1.00156** at `sdens` 3, 5, 8, 12, converging on exactly 1.
+
+Two consequences. The divisor is `RT`, the same one the potential needed, so
+`to_kt_per_e` extends to it unchanged. And **an acceptance gate written against
+`eps_s` fails by a factor of 39 at sashimi's defaults while looking like a
+textbook identity** — the same shape of error as the units bug above, one
+derivative along. The exterior derivative is recovered from continuity of the
+flux, `eps_p dphi_in/dn = eps_s dphi_out/dn`, and never read from the file.
+
+**The representation formula, corrected.** For the exterior domain with `n`
+outward from the solute, Green's second identity gives
+
+    phi(x) = integral over Gamma of [ phi dG/dn - G dphi_out/dn ] dS,   G = 1/(4 pi R)
+
+The kernel is the plain Laplace one. Putting `eps_s` in `G` is wrong: the
+exterior problem is homogeneous, so the representation is purely geometric and
+the dielectric enters only through the Cauchy data. Screened, `G` becomes
+`exp(-kappa R)/(4 pi R)` and nothing else changes.
+
+Both errors were measured rather than argued, on a real mesh with centroid
+quadrature, outward normals and area weights:
+
+| what was evaluated | ratio to the exact Born potential |
+|---|---|
+| the sign-flipped, `eps_s`-weighted kernel | **-0.50395** |
+| that, with only the derivative convention fixed | -0.01283 |
+| the expression above | **+1.00790** |
+
+The first two are not near-misses; they are `-1/eps_p` and a cancellation. A
+formula of this shape either reproduces a monopole or it does not.
+
+**What it would be good for, measured before it is built.** The corrected
+evaluator's exterior error at `a + 1.5 Å` is **1.278%, 0.790%, 0.502%, 0.338%**
+at `sdens` 3, 5, 8, 12.
+
+**That error is not quadrature error, and this is the finding that decides how
+the tool can be used.** It equals TABI-PB's own Gauss-law flux error to three
+significant figures at every density; it is *bit-identical* under a 16x-refined
+quadrature rule; and it is flat from `a + 0.5 Å` to `a + 30 Å`, with the same
+sign in every direction. It is a spurious monopole fixed by the discrete surface
+data. **Neither refining the quadrature nor standing further off does anything
+about it** — the only knob is mesh density, and the referee inherits the
+accuracy of the code it is refereeing.
+
+**So it is a referee for magnitudes, not yet for the interface question.** The
+sub-cell ramp signal it would have to resolve on `ala-gly` is 0.45-1.6% of a
+referee field magnitude of 0.38 (§12's field-axis entry), against 0.338% of its
+own at `sdens` 12. That is the same order, not a decade below it. Worth stating
+plainly rather than discovering after the work: **this does not obviously settle
+the ramp question, which is the thing it was wanted for.** It is a genuine
+independent check on near-field magnitude, and `ala-gly` carries net charge
+0.0000 e, where the spurious monopole has nothing to couple to — a caveat that
+happens to point the right way, and one to test rather than assume.
+
+**Two ceilings.** TABI-PB tops out at `fas2`, 906 atoms, which is exactly where
+the referee gap begins ("none above 906 atoms has any"), so this deepens the
+referee below the gap rather than closing it. And there is no Kirkwood fixture
+for it: `kirkwood_pqr` emits two atoms and the mesher refuses fewer than four,
+so an off-centre BEM reference needs the same hand-built tetrahedron trick, or a
+different geometry.
+
+**What building it costs.** `normal_derivative` on `SurfacePotential` (a protocol
+change, §2 already names it as half of what a BEM solver produces), the same
+`RT` divisor extended in `to_kt_per_e`, the continuity factor applied once, and
+a `sashimi.tabipb.field` module carrying the expression above. The parse side is
+already done and already tested. `vtk.py` needs nothing: `parse_vtk` forwards
+`normal_derivative` today and `tests/test_tabipb.py` already asserts it survives.
 
 ## 13. Risks and mitigations
 
