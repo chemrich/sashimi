@@ -1,0 +1,6 @@
+van-der-waals w=0.0: |d_last|=  7.2300 kJ  pose std= 1.6791 (0.737%) ptp= 6.1972  |d_last|/std=  4.31x  /ptp=  1.17x
+van-der-waals w=0.25: |d_last|=  1.7506 kJ  pose std= 0.9258 (0.423%) ptp= 3.1157  |d_last|/std=  1.89x  /ptp=  0.56x
+van-der-waals w=0.5: |d_last|=  1.4730 kJ  pose std= 0.4485 (0.206%) ptp= 1.7367  |d_last|/std=  3.28x  /ptp=  0.85x
+molecular w=0.0: |d_last|=  6.1401 kJ  pose std= 2.0031 (0.915%) ptp= 8.1807  |d_last|/std=  3.07x  /ptp=  0.75x
+molecular w=0.25: |d_last|=  1.8754 kJ  pose std= 0.9047 (0.429%) ptp= 3.4367  |d_last|/std=  2.07x  /ptp=  0.55x
+molecular w=0.5: |d_last|=  1.6500 kJ  pose std= 0.3788 (0.180%) ptp= 1.5154  |d_last|/std=  4.36x  /ptp=  1.09x

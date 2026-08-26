@@ -132,6 +132,27 @@ ignore = [
     "PLR2004", # magic numbers are the point of a test
     "ARG001",  # pytest fixtures arrive as unused-looking arguments
 ]
+# `studies/` holds the measurement scripts behind ROADMAP.md section 12's tables.
+# They are run by hand and read as a record of how a number was produced, so they
+# print, they hard-code the configuration each table was taken at, and they are
+# not imported by anything. Linting them as library code would mean rewriting the
+# artefact to suit the linter, which is the opposite of what checking them in is
+# for. They are still formatted and still type-clean at the syntax level.
+"studies/**" = [
+    "T201",    # a study script exists to write a table to stdout
+    "PLR2004", # the configuration is the point, and naming every rung hides it
+    "PTH123",  # `open` is what these were run with
+    "INP001",  # deliberately not a package
+    "SIM115",  # a script that writes one table does not need a context manager
+    "B905",    # `zip` without `strict` is how these were run
+    "N802",    # a few carry the mathematical name of the thing they compute
+    "N803",
+    "N806",
+    "N812",
+    "C408",
+    "UP031",
+    "PLR0912", # one sweep genuinely has that many branches
+]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

@@ -1,0 +1,19 @@
+pad 11.0: referee w=0.0, index vs interp RMS 0.000000 (referee's own magnitude RMS 0.3800)
+pad 11.0: referee w=0.5, index vs interp RMS 0.000000 (referee's own magnitude RMS 0.3844)
+         referee       w=0.25        w=0.5       w=0.75        w=1.0
+      0.25 index w=0.0        1.02x        2.18x        3.22x        4.10x
+      0.25 index w=0.5        0.35x        0.74x        1.38x        1.93x
+     0.25 interp w=0.0        1.02x        2.18x        3.22x        4.10x
+     0.25 interp w=0.5        0.35x        0.74x        1.38x        1.93x
+     0.12 interp w=0.0        1.13x        2.37x        3.46x        4.38x
+     0.12 interp w=0.5        0.62x        1.53x        2.41x        3.16x
+
+pad 13.0: referee w=0.0, index vs interp RMS 0.000000 (referee's own magnitude RMS 0.3815)
+pad 13.0: referee w=0.5, index vs interp RMS 0.000000 (referee's own magnitude RMS 0.3860)
+         referee       w=0.25        w=0.5       w=0.75        w=1.0
+      0.25 index w=0.0        1.12x        2.68x        3.93x        5.02x
+      0.25 index w=0.5        0.43x        0.85x        1.59x        2.24x
+     0.25 interp w=0.0        1.12x        2.68x        3.93x        5.02x
+     0.25 interp w=0.5        0.43x        0.85x        1.59x        2.24x
+     0.12 interp w=0.0        1.13x        2.49x        3.64x        4.64x
+     0.12 interp w=0.5        0.66x        1.76x        2.79x        3.68x

@@ -1,0 +1,18 @@
+  pad       h   nodes        w=0.25         w=0.5        w=0.75         w=1.0         w=2.0
+  9.0  0.4983    6663  1.15x  0.39x  2.13x  0.95x  3.10x  1.69x  3.89x  2.29x  7.26x  4.86x
+ 11.0  0.4985    6581  1.02x  0.35x  2.18x  0.74x  3.22x  1.38x  4.10x  1.93x  7.88x  4.30x
+ 13.0  0.4986    6524  1.12x  0.43x  2.68x  0.85x  3.93x  1.59x  5.02x  2.24x  9.64x  5.02x
+ 15.0  0.4988    6487  1.38x  0.48x  3.34x  0.85x  4.92x  1.60x  6.31x  2.28x 12.18x  5.14x
+ 17.0  0.4989    6446  1.46x  0.52x  3.62x  0.86x  5.34x  1.64x  6.84x  2.33x 13.16x  5.25x
+
+over the five nested paddings (referee hard | referee ramp):
+  w=0.25 referee w=0.0: worst  1.46x  median  1.15x  best  1.02x
+  w=0.25 referee w=0.5: worst  0.52x  median  0.43x  best  0.35x
+  w=0.50 referee w=0.0: worst  3.62x  median  2.68x  best  2.13x
+  w=0.50 referee w=0.5: worst  0.95x  median  0.85x  best  0.74x
+  w=0.75 referee w=0.0: worst  5.34x  median  3.93x  best  3.10x
+  w=0.75 referee w=0.5: worst  1.69x  median  1.60x  best  1.38x
+  w=1.00 referee w=0.0: worst  6.84x  median  5.02x  best  3.89x
+  w=1.00 referee w=0.5: worst  2.33x  median  2.28x  best  1.93x
+  w=2.00 referee w=0.0: worst 13.16x  median  9.64x  best  7.26x
+  w=2.00 referee w=0.5: worst  5.25x  median  5.02x  best  4.30x

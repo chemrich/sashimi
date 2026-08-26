@@ -1,0 +1,32 @@
+referee res=0.15 w=0.0: 12s  shape=(201, 193, 177)
+referee res=0.15 w=0.5: 11s  shape=(201, 193, 177)
+referee res=0.12 w=0.0: 24s  shape=(257, 241, 217)
+referee res=0.12 w=0.5: 27s  shape=(257, 241, 217)
+
+coarse res=1.0 h=0.9344 shape=(33, 33, 33) shell nodes=1150
+  w=0.00 (0.12, 0.0): rms 0.0113  (0.12, 0.5): rms 0.0122  (0.15, 0.0): rms 0.0114  (0.15, 0.5): rms 0.0126
+  w=0.25 (0.12, 0.0): rms 0.0127  (0.12, 0.5): rms 0.0116  (0.15, 0.0): rms 0.0125  (0.15, 0.5): rms 0.0113
+  w=0.50 (0.12, 0.0): rms 0.0160  (0.12, 0.5): rms 0.0141  (0.15, 0.0): rms 0.0157  (0.15, 0.5): rms 0.0135
+  w=0.75 (0.12, 0.0): rms 0.0215  (0.12, 0.5): rms 0.0195  (0.15, 0.0): rms 0.0213  (0.15, 0.5): rms 0.0188
+  w=1.00 (0.12, 0.0): rms 0.0295  (0.12, 0.5): rms 0.0274  (0.15, 0.0): rms 0.0292  (0.15, 0.5): rms 0.0267
+  w=2.00 (0.12, 0.0): rms 0.0437  (0.12, 0.5): rms 0.0415  (0.15, 0.0): rms 0.0434  (0.15, 0.5): rms 0.0409
+  referee spread (RMS, worst pair): 0.0029
+  ratios against hard (rms):
+    referee (0.12, 0.0): w=0.25:1.130x  w=0.5:1.421x  w=0.75:1.913x  w=1.0:2.620x  w=2.0:3.878x   | discriminable: spread 0.0029 vs smallest gap 0.0015 -> NO
+    referee (0.12, 0.5): w=0.25:0.950x  w=0.5:1.154x  w=0.75:1.593x  w=1.0:2.240x  w=2.0:3.396x   | discriminable: spread 0.0029 vs smallest gap 0.0006 -> NO
+    referee (0.15, 0.0): w=0.25:1.094x  w=0.5:1.378x  w=0.75:1.862x  w=1.0:2.559x  w=2.0:3.801x   | discriminable: spread 0.0029 vs smallest gap 0.0011 -> NO
+    referee (0.15, 0.5): w=0.25:0.898x  w=0.5:1.073x  w=0.75:1.492x  w=1.0:2.119x  w=2.0:3.239x   | discriminable: spread 0.0029 vs smallest gap 0.0009 -> NO
+
+coarse res=0.5 h=0.4672 shape=(65, 65, 57) shell nodes=8104
+  w=0.00 (0.12, 0.0): rms 0.0045  (0.12, 0.5): rms 0.0037  (0.15, 0.0): rms 0.0042  (0.15, 0.5): rms 0.0037
+  w=0.25 (0.12, 0.0): rms 0.0063  (0.12, 0.5): rms 0.0044  (0.15, 0.0): rms 0.0059  (0.15, 0.5): rms 0.0039
+  w=0.50 (0.12, 0.0): rms 0.0096  (0.12, 0.5): rms 0.0075  (0.15, 0.0): rms 0.0093  (0.15, 0.5): rms 0.0068
+  w=0.75 (0.12, 0.0): rms 0.0147  (0.12, 0.5): rms 0.0125  (0.15, 0.0): rms 0.0144  (0.15, 0.5): rms 0.0118
+  w=1.00 (0.12, 0.0): rms 0.0192  (0.12, 0.5): rms 0.0170  (0.15, 0.0): rms 0.0189  (0.15, 0.5): rms 0.0163
+  w=2.00 (0.12, 0.0): rms 0.0349  (0.12, 0.5): rms 0.0327  (0.15, 0.0): rms 0.0346  (0.15, 0.5): rms 0.0320
+  referee spread (RMS, worst pair): 0.0029
+  ratios against hard (rms):
+    referee (0.12, 0.0): w=0.25:1.398x  w=0.5:2.150x  w=0.75:3.280x  w=1.0:4.286x  w=2.0:7.803x   | discriminable: spread 0.0029 vs smallest gap 0.0018 -> NO
+    referee (0.12, 0.5): w=0.25:1.190x  w=0.5:2.017x  w=0.75:3.374x  w=1.0:4.586x  w=2.0:8.832x   | discriminable: spread 0.0029 vs smallest gap 0.0007 -> NO
+    referee (0.15, 0.0): w=0.25:1.413x  w=0.5:2.225x  w=0.75:3.431x  w=1.0:4.502x  w=2.0:8.253x   | discriminable: spread 0.0029 vs smallest gap 0.0017 -> NO
+    referee (0.15, 0.5): w=0.25:1.052x  w=0.5:1.854x  w=0.75:3.219x  w=1.0:4.441x  w=2.0:8.725x   | discriminable: spread 0.0029 vs smallest gap 0.0002 -> NO

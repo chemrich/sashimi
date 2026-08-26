@@ -1,0 +1,12 @@
+referee ladder at padding 11.0, coarse h=0.4985, 6581 shell nodes
+ referee res  scheme     w=0.25      w=0.5     w=0.75      w=1.0   cross-scheme spread
+       0.250    hard      1.02x      2.18x      3.22x      4.10x   0.00471 (hard err 0.00451)
+       0.250    ramp      0.35x      0.74x      1.38x      1.93x
+       0.150    hard      1.09x      2.31x      3.38x      4.28x   0.00273 (hard err 0.00436)
+       0.150    ramp      0.52x      1.33x      2.16x      2.86x
+       0.120    hard      1.13x      2.37x      3.46x      4.38x   0.00223 (hard err 0.00428)
+       0.120    ramp      0.62x      1.53x      2.41x      3.16x
+       0.100    hard      1.14x      2.38x      3.46x      4.38x   0.00189 (hard err 0.00430)
+       0.100    ramp      0.69x      1.68x      2.60x      3.39x
+       0.090    hard      1.16x      2.39x      3.48x      4.40x   0.00171 (hard err 0.00429)
+       0.090    ramp      0.75x      1.77x      2.72x      3.52x
