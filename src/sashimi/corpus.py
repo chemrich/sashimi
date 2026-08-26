@@ -28,6 +28,7 @@ import numpy as np
 
 from sashimi.analytic import (
     born_solvation_energy,
+    kirkwood_potential,
     kirkwood_solvation_energy,
     screened_born_potential,
 )
@@ -250,6 +251,18 @@ class AnalyticField:
     cells_out: tuple[int, ...]  # k, in achieved grid cells beyond the boundary
     rtol: float
     per_backend_rtol: tuple[tuple[str, float], ...] = ()
+    offset_a: float = 0.0  # charge displacement from the sphere centre, along +x
+
+    @property
+    def is_angular(self) -> bool:
+        """Whether the reference varies with direction as well as radius.
+
+        A centred charge does not, and every field case in this corpus was one
+        until Kirkwood arrived. The distinction is what decides the shape of the
+        recorded `exact_kT_e`, so it is a property rather than a truth test
+        repeated at each use.
+        """
+        return self.offset_a > 0.0
 
     def rtol_for(self, backend: str) -> float:
         """The tolerance that applies to this backend's field, by identity prefix."""
@@ -309,6 +322,56 @@ class AnalyticField:
             )
             for r in radii
         ]
+
+    def exact_by_direction(self, radii: Sequence[float], solvent: SolventModel) -> FloatArray:
+        """The closed form as `[radius][direction]`, matching the sampled values.
+
+        A radial reference has the same value along every direction, so this
+        broadcasts `exact_at` and every pre-existing case is byte-identical
+        through it — the same discipline `exact_at` records for salt, where the
+        screened expression had to reduce to the unscreened one exactly.
+
+        An off-centre charge does not have that symmetry, and getting it wrong
+        would be invisible: a reference that ignored direction would sit at the
+        angular *average* and read as a modest error at every sample rather than
+        as a missing term. `theta` is measured from +x because `kirkwood_pqr`
+        puts the charge there, and the direction vectors are unit, so the cosine
+        is just their x-component.
+
+        The sample centre is `PQRData.center()`, which is the sphere's own centre
+        for these cases and not a coincidence: the charge carries zero radius, so
+        it cannot extend the radius-inflated bounding box that `center()` bisects.
+        """
+        if not self.is_angular:
+            column = np.array(self.exact_at(radii, solvent), dtype=float)
+            return np.repeat(column[:, None], len(FIELD_DIRECTIONS), axis=1)
+
+        if solvent.ionic_strength > 0:
+            raise ValueError(
+                f"the Kirkwood field reference is unscreened, so it cannot describe "
+                f"a case at {solvent.ionic_strength} M. Attaching it would report the "
+                f"missing screening as a solver defect, which is the trap `exact_at` "
+                f"documents for the Born field."
+            )
+        cosines = [float(direction[0]) for _, direction in FIELD_DIRECTIONS]
+        return np.array(
+            [
+                [
+                    kirkwood_potential(
+                        r,
+                        cos_theta,
+                        self.radius_a,
+                        self.offset_a,
+                        self.charge_e,
+                        solute_dielectric=solvent.solute_dielectric,
+                        solvent_dielectric=solvent.solvent_dielectric,
+                        temperature=solvent.temperature,
+                    )
+                    for cos_theta in cosines
+                ]
+                for r in radii
+            ]
+        )
 
 
 @dataclass(frozen=True)
@@ -502,6 +565,41 @@ def _kirkwood(
         source=f"Kirkwood: q=1e at d/a={offset_fraction:g} in a 3 A sphere, eps_p=1",
         per_backend_rtol=_per_backend_rtol(delphi_rtol, debye_rtol),
         gated=gated,
+    )
+
+
+def _kirkwood_field(offset_fraction: float, *, rtol: float, other_rtol: float) -> AnalyticField:
+    """The off-centre *field* reference for a 3 A sphere, to `_kirkwood`'s energy.
+
+    `rtol` is APBS's bar and `other_rtol` the one debye and DelPhi share. That
+    split is not the usual per-backend tail-fitting: on this geometry those two
+    agree with each other to three digits at every rung — 2.229/2.229,
+    2.144/2.144, 2.753/2.753, 1.860/1.855 — while APBS runs from 1.3x to 11x
+    looser, so one number describes both and a second describes APBS.
+
+    **APBS's spread is a charge-proximity effect, and it is worth stating because
+    it constrains the sampling rule.** `a + k*h` was designed to clear the
+    dielectric interface; an off-centre charge adds a second thing to clear, and
+    the near pole at d/a = 0.9 lands 0.71 A from a point charge on APBS's
+    achieved 0.203 A lattice. Pushing that sample out walks the error down
+    steeply — 20.96%, 8.27%, 4.71% at gaps of 0.71, 1.11 and 1.52 A — while
+    debye's worst sample at the same rung is on the *far* pole and never moves
+    off 1.86%, so its near-pole error is smaller still at a shorter gap.
+
+    The likely mechanism, offered as a reading rather than a measurement: APBS
+    discretizes a point charge over a B-spline stencil (`chgm spl4`) about two
+    cells wide, and 0.71 A is inside it. `cells_out` is left at (2, 4, 8) anyway,
+    because the near sample is the one this reference exists to take — a ladder
+    that stepped back until every backend looked alike would be measuring the
+    step-back rather than the field.
+    """
+    return AnalyticField(
+        radius_a=3.0,
+        charge_e=1.0,
+        offset_a=3.0 * offset_fraction,
+        cells_out=(2, 4, 8),
+        rtol=rtol,
+        per_backend_rtol=(("debye", other_rtol), ("delphi", other_rtol)),
     )
 
 
@@ -1241,6 +1339,9 @@ MANIFEST: tuple[Case, ...] = (
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
         ),
         analytic=_kirkwood(0.3, rtol=0.018, delphi_rtol=0.003),  # measured 0.844% / 0.097%
+        analytic_field=_kirkwood_field(
+            0.3, rtol=0.045, other_rtol=0.03
+        ),  # measured 2.813% APBS / 2.229% debye and DelPhi
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -1252,6 +1353,9 @@ MANIFEST: tuple[Case, ...] = (
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
         ),
         analytic=_kirkwood(0.5, rtol=0.019, delphi_rtol=0.005),  # measured 0.902% / 0.205%
+        analytic_field=_kirkwood_field(
+            0.5, rtol=0.04, other_rtol=0.03
+        ),  # measured 2.811% APBS / 2.144% debye and DelPhi
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -1267,6 +1371,9 @@ MANIFEST: tuple[Case, ...] = (
             solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.MOLECULAR
         ),
         analytic=_kirkwood(0.7, rtol=0.08, delphi_rtol=0.01),  # measured 3.800% / 0.416%
+        analytic_field=_kirkwood_field(
+            0.7, rtol=0.095, other_rtol=0.037
+        ),  # measured 7.062% APBS / 2.753% debye and DelPhi
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -1294,6 +1401,9 @@ MANIFEST: tuple[Case, ...] = (
         # says "nobody should judge this" while quietly judging it green is the
         # vacuous check this case exists to avoid.
         analytic=_kirkwood(0.9, rtol=0.01, gated=False),  # measured 9.848% / 4.288%
+        analytic_field=_kirkwood_field(
+            0.9, rtol=0.27, other_rtol=0.027
+        ),  # measured 21.184% APBS / 1.860% debye and DelPhi
         tier=CaseTier.STANDARD,
     ),
     # M2's rungs, on the one boundary debye builds.
@@ -1326,6 +1436,9 @@ MANIFEST: tuple[Case, ...] = (
         ),
         # measured 1.083% / 0.097% / 1.047%; debye's 1.5% is M2's bar, not 2x its own
         analytic=_kirkwood(0.3, rtol=0.022, delphi_rtol=0.003, debye_rtol=0.015),
+        analytic_field=_kirkwood_field(
+            0.3, rtol=0.045, other_rtol=0.03
+        ),  # measured 3.402% APBS / 2.229% debye and DelPhi
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -1338,6 +1451,9 @@ MANIFEST: tuple[Case, ...] = (
         ),
         # measured 1.239% / 0.205% / 1.254%
         analytic=_kirkwood(0.5, rtol=0.025, delphi_rtol=0.005, debye_rtol=0.015),
+        analytic_field=_kirkwood_field(
+            0.5, rtol=0.04, other_rtol=0.03
+        ),  # measured 2.940% APBS / 2.144% debye and DelPhi
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -1356,6 +1472,9 @@ MANIFEST: tuple[Case, ...] = (
         # measured 3.896% / 0.416% / 1.328%. debye's 1.5% is *stricter than APBS
         # manages here*, which is what makes M2 a claim rather than a formality.
         analytic=_kirkwood(0.7, rtol=0.08, delphi_rtol=0.01, debye_rtol=0.015),
+        analytic_field=_kirkwood_field(
+            0.7, rtol=0.095, other_rtol=0.037
+        ),  # measured 7.109% APBS / 2.753% debye and DelPhi
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -1373,6 +1492,9 @@ MANIFEST: tuple[Case, ...] = (
         # Set below what any code achieves, so ungating fails loudly rather than
         # passing vacuously — the trap the molecular twin's comment records.
         analytic=_kirkwood(0.9, rtol=0.01, gated=False),  # measured 9.854% / 4.288% / 8.280%
+        analytic_field=_kirkwood_field(
+            0.9, rtol=0.27, other_rtol=0.027
+        ),  # measured 20.959% APBS / 1.855% debye and DelPhi
         tier=CaseTier.STANDARD,
     ),
     Case(
@@ -2249,7 +2371,8 @@ def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] |
     radii = reference.sample_radii(spacing)
     centre = case.structure().center()
 
-    exact = np.array(reference.exact_at(radii, case.solvent))
+    # [radius][direction]; for a radial reference every column is the same value.
+    exact = reference.exact_by_direction(radii, case.solvent)
     # Through `sashimi.field`, which refuses a sample that fell off the map
     # rather than recording a bare NaN: `json.dumps` writes `NaN` happily, it is
     # not valid JSON per spec, and the discrepancy would be reported as "nan%".
@@ -2257,7 +2380,7 @@ def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] |
     values = np.array(
         [sample_values(grid, centre, radius) for radius in radii]
     )  # [radius][direction]
-    errors = np.abs(values - exact[:, None]) / np.abs(exact)[:, None]
+    errors = np.abs(values - exact) / np.abs(exact)
 
     worst = np.unravel_index(int(np.argmax(errors)), errors.shape)
     return {
@@ -2265,7 +2388,14 @@ def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] |
         "cells_out": list(reference.cells_out),
         "radii_a": [float(r) for r in radii],
         "directions": list(FIELD_DIRECTION_NAMES),
-        "exact_kT_e": [float(v) for v in exact],
+        # Flat for a radial reference, which is what the twelve Born field cases
+        # have always recorded and still do byte-for-byte; nested only where the
+        # direction axis carries information, so the shape says which it is.
+        "exact_kT_e": (
+            [[float(v) for v in row] for row in exact]
+            if reference.is_angular
+            else [float(row[0]) for row in exact]
+        ),
         # [radius][direction]. Nested rather than flat because the whole point of
         # this block is that the two axes are not interchangeable.
         "values_kT_e": [[float(v) for v in row] for row in values],
@@ -2279,10 +2409,18 @@ def _analytic_field_summary(case: Case, result: SolveResult) -> dict[str, Any] |
         },
         "rtol": reference.rtol_for(result.provenance.backend),
         "source": (
-            f"Born potential: q={reference.charge_e:g}e outside a "
-            f"{reference.radius_a:g} A sphere, sampled at a + k*h along "
-            f"{len(FIELD_DIRECTIONS)} directions"
-        ),
+            (
+                f"Kirkwood potential: q={reference.charge_e:g}e at "
+                f"d={reference.offset_a:g} A from the centre of a "
+                f"{reference.radius_a:g} A sphere"
+            )
+            if reference.is_angular
+            else (
+                f"Born potential: q={reference.charge_e:g}e outside a "
+                f"{reference.radius_a:g} A sphere"
+            )
+        )
+        + f", sampled at a + k*h along {len(FIELD_DIRECTIONS)} directions",
     }
 
 

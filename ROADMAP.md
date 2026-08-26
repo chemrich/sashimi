@@ -6387,6 +6387,83 @@ analytic-field cases are Born ions, and a one-atom solute is refused by the
 mesher, which is why this section's evidence is a four-atom tetrahedron built by
 hand rather than a corpus case.
 
+### The field reference stops being a Born ion
+
+§7's field check had twelve cases and every one was a centred charge — the one
+geometry where the field is spherically symmetric, so nothing the corpus graded
+could see a solver wrong about *direction*. That is the same gap the energy side
+closed at M2, when `kirkwood_solvation_energy` arrived because the Born ion "is
+symmetric in every way a solver could be wrong about".
+
+`kirkwood_potential` is the field half of that expression. Matching phi and
+eps dphi/dr at r = a, with the source expanded as sum_n d^n r^-(n+1) P_n:
+
+    phi_out(r, theta) = (q / 4 pi eps0) * sum_n
+        (2n+1) / (n eps_p + (n+1) eps_s) * d^n / r^(n+1) * P_n(cos theta)
+
+The same matching produces the interior coefficients whose sum at the charge is
+`kirkwood_solvation_energy`'s series, so the two are one system solved twice
+rather than two transcriptions that have to be kept in step.
+
+**Three identities pin it, and between them they reach every term.** At d = 0
+every term above the monopole carries d^n = 0 and what is left is
+`born_potential` exactly, fixing n = 0. Far out, the excess over Born is the
+dipole with its own coefficient, `3 eps_s d cos(theta) / ((eps_p + 2 eps_s) r)`,
+fixing n = 1 — the first place the dielectric contrast enters. And at
+eps_p = eps_s the coefficient collapses to `(2n+1)/(eps(2n+1))` and the series
+becomes the Legendre generating function, giving plain Coulomb at the charge's
+*actual* position: that one fixes the whole sum, and it checks the geometry
+rather than the physics, because a reference that put the charge at the centre
+would pass every symmetric test in the file and fail only this.
+
+The Legendre recurrence was wrong on first write — P_2 read 0.02035 against
+-0.29465 — and none of the reasoning above would have caught it. Checking the
+recurrence against numpy before trusting the expression is what did.
+
+**1,338 recorded samples were graded for free.** The 28 Kirkwood recordings —
+four offsets, two surface models, three backends — already carry 50 probe
+potentials each and had only ever been compared with themselves.
+`tests/test_kirkwood_field.py` grades them against the closed form with no
+solver in the room, so it runs in the binary-free tier where most of CI lives:
+median error 0.52%, worst single sample 3.62%.
+
+**Attached to the eight sharp-boundary rungs**, `AnalyticField` gained an
+`offset_a` and a direction-aware evaluator. A radial reference broadcasts
+through it, so all twelve Born field cases are byte-identical across the change
+— the discipline `exact_at` already records for salt — and `exact_kT_e` stays a
+flat list for them, nesting only where the direction axis carries information.
+
+What the attachment measured, worst sample over eight directions at `a + k*h`:
+
+| d/a | APBS | debye | DelPhi |
+|---|---|---|---|
+| 0.3 | 3.402% | 2.229% | 2.229% |
+| 0.5 | 2.940% | 2.144% | 2.144% |
+| 0.7 | 7.109% | 2.753% | 2.753% |
+| 0.9 | 20.959% | 1.860% | 1.855% |
+
+**APBS's spread is a charge-proximity effect, and it constrains the sampling
+rule.** `a + k*h` was designed to clear the dielectric interface; an off-centre
+charge adds a second thing to clear. The near pole at d/a = 0.9 lands 0.71 A
+from a point charge on APBS's achieved 0.203 A lattice, and stepping that sample
+out walks the error down steeply — 20.96%, 8.27%, 4.71% at gaps of 0.71, 1.11
+and 1.52 A. debye's worst at the same rung sits on the *far* pole and never
+moves off 1.86%, so its near-pole error is smaller still at a shorter gap. The
+likely mechanism, offered as a reading rather than a measurement: APBS
+discretizes a point charge over a `chgm spl4` stencil about two cells wide, and
+0.71 A is inside it. `cells_out` stays at (2, 4, 8) regardless, because the near
+sample is the one this reference exists to take — a ladder that stepped back
+until every backend looked alike would be measuring the step-back.
+
+**An observation this turned up and did not explain.** debye and the DelPhi
+backend agree with each other on the Kirkwood field to three digits at every
+rung above, and on the recorded probes to 2.7e-5 relative — five significant
+figures — while APBS sits ~0.4% from both. It is not a recording mix-up: a
+mix-up would be bit-identical and these are not. Two codes sharing no source
+agreeing that closely is either a shared discretization convention or a shared
+ancestry in one, and §12's referee work assumes they are independent. Worth
+knowing before either is used to referee the other.
+
 ## 13. Risks and mitigations
 
 The conda-forge APBS package going unbuildable on future platforms is the
