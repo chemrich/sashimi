@@ -324,9 +324,16 @@ def test_richardson_finds_a_limit_that_is_already_known(radius, ladder, toleranc
     `grade_refinement` reports a limit no backend can vouch for, so its accuracy
     has to be established somewhere the truth is independent — which is the Born
     sphere, whose solvation energy is a closed form. Measured: the limit lands
-    0.08-0.48% from exact where the ladder converges, and **beats the finest
-    rung it was built from every time** (0.45-0.81%). That is the claim this
+    0.08-0.48% from exact where the ladder converges. That is the claim this
     instrument is allowed to make — half a percent, not a gold standard.
+
+    *This used to add "and beats the finest rung it was built from **every
+    time**". It does not: re-measured over 24 Born windows, three of the sixteen
+    survivors land no closer than their own finest rung — `r=3, w=0.25` at
+    0.949% against that rung's 0.892%, `r=3, w=0.5` at 0.596% against 0.306%,
+    and `r=3, w=1.0` at 1.275% against 0.415%. The assertion below still holds
+    for these two ladders and is kept as a per-case bar; what is withdrawn is
+    the universal.*
     """
     from sashimi.analytic import born_solvation_energy  # noqa: PLC0415
     from sashimi.invariants import grade_refinement  # noqa: PLC0415
@@ -428,3 +435,133 @@ def test_converging_refuses_the_two_shapes_that_produced_impossible_limits():
     clean = grade((-200.0, -208.0, -210.0))
     assert abs(clean._differences[0] / clean._differences[1]) > MIN_SHRINKAGE
     assert clean.converging
+
+
+def test_the_limit_is_a_function_of_the_energies_and_not_the_spacings():
+    """`step` cancels out of the extrapolation, so only `order` ever reads it.
+
+    `order` is `log|d_prev / d_last| / log(step)` and `limit` divides by
+    `step ** order`, which is therefore identically `|d_prev / d_last|` whatever
+    `step` was. The Richardson correction is `d_last / (ratio - 1)` — three
+    energies and nothing else.
+
+    Worth a test rather than a comment because the opposite is the natural
+    assumption, and this repository acted on it: `_achieved_spacing` exists
+    because "Richardson divides by the refinement ratio, so the ratio has to be
+    the real one", and ROADMAP.md section 12 records M8a's orders moving
+    0.10-0.16 when the convention was corrected. Both are true of `order`.
+    Neither is true of `limit`, and a reader who believes otherwise will look
+    for a bias here that is not here.
+
+    Asserted with `==` on these three triples, which do agree exactly — but the
+    identity is exact in **real** arithmetic and not in IEEE double, because
+    `x ** (log r / log x)` reintroduces a rounding. Over 20,000 randomised
+    accepted ladders two spacing triples return a different `limit` float on
+    **0.66%** of them, worst relative difference 7e-15. So this pins the
+    identity on a fixed set rather than asserting a universal, and a caller
+    comparing two limits should carry a tolerance.
+    """
+    from sashimi.invariants import Refinement  # noqa: PLC0415
+
+    energies = (-236.5184, -227.8202, -220.5902)
+    limits = {
+        Refinement(backend="debye", spacings=spacings, energies=energies).limit
+        for spacings in (
+            (0.8695, 0.4545, 0.2432),  # achieved: ratios 1.913 and 1.869
+            (1.0, 0.5, 0.25),  # requested: exactly 2
+            (5.0, 0.4545, 0.2432),  # absurd, and it must not matter
+        )
+    }
+    assert len(limits) == 1, f"the limit moved with the spacings: {sorted(limits)}"
+
+    # And it is the closed form the docstring names.
+    first, second = energies[0] - energies[1], energies[1] - energies[2]
+    by_hand = energies[-1] - second / (abs(first / second) - 1.0)
+    assert limits.pop() == by_hand
+
+    # The orders, by contrast, do move — otherwise the paragraph above would be
+    # describing a distinction with no difference.
+    orders = {
+        round(Refinement(backend="debye", spacings=spacings, energies=energies).order, 6)
+        for spacings in ((0.8695, 0.4545, 0.2432), (1.0, 0.5, 0.25))
+    }
+    assert len(orders) == 2
+
+
+def test_min_shrinkage_bounds_how_far_the_extrapolation_can_move():
+    """Why `converging` needs no noise floor beside it.
+
+    A clause refusing ladders whose steps sit below the backend's own phase
+    noise was proposed on the strength of "the guard still accepts fits whose
+    steps are below the pose spread". It is not needed, and the reason is the
+    identity above: with `step ** order == |d_prev / d_last|`,
+
+        |limit - E_finest| = |d_last| / (ratio - 1) <= |d_last| / (MIN_SHRINKAGE - 1)
+
+    so a ladder this guard accepts cannot move the answer by more than **four
+    times its own last difference**. A step at the noise floor moves the limit
+    by at most four noise units; there is no unbounded amplifier left to catch.
+
+    How tight the bound is, from the shrink ratios recorded beside
+    `MIN_SHRINKAGE`: the nearest keep, 1.3968, licenses an amplifier of
+    **2.5202** where the rejected 1.0327 would have licensed **30.58**. Over
+    50,000 randomised accepted ladders the worst observed is **3.9877**, so the
+    bound is attained rather than generous.
+
+    *A second argument — that the surviving windows' relative last steps run
+    0.0247% to 2.7903% continuously, with the four most accurate fits holding
+    four of the five smallest steps — is real and is **not** reproducible from
+    anything checked in: the 24-window generator lives in a scratch directory,
+    not the repository. It is recorded in ROADMAP.md as what it is.*
+
+    `MIN_SHRINKAGE` is what makes this hold, so the bound is asserted at the
+    boundary as well as inside it.
+    """
+    from sashimi.invariants import MIN_SHRINKAGE, Refinement  # noqa: PLC0415
+
+    # **The bound is a literal, and that is the whole point of this test.** The
+    # first draft computed it as `1 / (MIN_SHRINKAGE - 1)` and drew its ladders
+    # from the same constant, so both sides moved together and the assertion
+    # held for *any* value of it — verified by mutation: at `MIN_SHRINKAGE = 1.05`,
+    # where the true bound is 20x, that version stayed green. It was the shape
+    # `sashimi-guards-that-guard-nothing` is about, in a test written to close a
+    # question about guards.
+    bound = 4.0
+    spacings = (1.1988, 0.7552, 0.4757)
+
+    assert bound >= 1.0 / (MIN_SHRINKAGE - 1.0), (
+        f"MIN_SHRINKAGE = {MIN_SHRINKAGE} licenses an amplifier of "
+        f"{1.0 / (MIN_SHRINKAGE - 1.0):.4g}, over the {bound:g} this test and "
+        "the comment beside the constant both assert"
+    )
+
+    # Ratios fixed in the test rather than derived from the constant, and
+    # spanning both sides of it, so relaxing the guard admits the small ones and
+    # they violate the literal bound.
+    accepted = 0
+    for ratio in (1.05, 1.1, 1.2, MIN_SHRINKAGE, 1.4, 2.0, 8.0, 64.0):
+        last = -3.0
+        grade = Refinement(
+            backend="debye",
+            spacings=spacings,
+            energies=(-200.0 - last * ratio - last, -200.0 - last, -200.0),
+        )
+        if not grade.converging:
+            continue
+        accepted += 1
+        moved = abs(grade.limit - grade.energies[-1])
+        assert moved <= bound * abs(last) * (1.0 + 1e-9), (
+            f"ratio {ratio}: the guard accepts it and the limit moves "
+            f"{moved / abs(last):.4g} last-differences, over the bound of {bound:g}"
+        )
+    assert accepted >= 5, f"only {accepted} ladders were accepted, so this grades almost nothing"
+
+    # And the bound is attained at the floor rather than slack, which is the
+    # argument for the constant: measured over 50,000 randomised accepted
+    # ladders the worst amplifier is 3.9877.
+    tight = Refinement(
+        backend="debye",
+        spacings=spacings,
+        energies=(-200.0 + 3.0 * MIN_SHRINKAGE + 3.0, -200.0 + 3.0, -200.0),
+    )
+    assert abs(tight.limit - tight.energies[-1]) == pytest.approx(bound * 3.0, rel=1e-9)

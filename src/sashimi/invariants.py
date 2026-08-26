@@ -132,6 +132,23 @@ MIN_REFINEMENTS = 3
 # 1.25 sits inside that plateau with margin on both sides — 1.21x above the
 # nearest rejection and 1.12x below the nearest keep. Raising it to 2.0 starts
 # costing real fits: it drops a window that lands 0.033% from exact.
+#
+# **It also bounds the extrapolation, which is why no noise floor was added
+# beside it.** `Refinement.limit` shows `step ** order` is identically
+# `|d_prev / d_last|`, so
+#
+#     |limit - E_finest| = |d_last| / (ratio - 1) <= |d_last| / (MIN_SHRINKAGE - 1)
+#
+# — at most **4x the last difference**, for any ladder this accepts. Measured
+# over the sixteen Born-sphere windows that survive: the identity holds to
+# 4e-16 and the largest amplifier actually seen is 2.2575. A step at the noise
+# floor therefore cannot move the limit by more than four noise units, which is
+# the failure a floor would have been added to prevent.
+#
+# The bound rests on `order` being read from the *same two differences* the
+# correction divides by. Replace it with a least-squares fit over four or more
+# rungs and `step ** order` stops equalling the ratio, the cancellation goes,
+# and this comment stops being true.
 MIN_SHRINKAGE = 1.25
 
 # Halving, because Richardson's ratio is cleanest on a geometric sequence.
@@ -331,7 +348,35 @@ class Refinement:
 
     @property
     def limit(self) -> float:
-        """The energy the ladder extrapolates to, by Richardson on the last three."""
+        """The energy the ladder extrapolates to, by Richardson on the last three.
+
+        **The spacings do not enter this, and that is worth knowing before
+        trusting `_achieved_spacing` to have fixed something here.** `order` is
+        `log|d_prev / d_last| / log(step)`, so `step ** order` is *identically*
+        `|d_prev / d_last|` whatever `step` is, and the correction collapses to
+
+            correction = d_last / (|d_prev / d_last| - 1)
+
+        — a function of the three energies alone. So `_achieved_spacing` earns
+        its keep on `order`, which is what moves 0.10-0.16 between the requested
+        and achieved conventions, and nowhere else.
+
+        *Exact in real arithmetic, and **not** bit-identical in IEEE double:
+        `x ** (log r / log x)` reintroduces a rounding, so over 20,000 randomised
+        accepted ladders two different spacing triples return a different `limit`
+        float on **0.66%** of them, worst relative difference 7e-15. The
+        independence is a property of the formula rather than of its evaluation,
+        and anything comparing two limits should carry a tolerance. An earlier
+        draft of this paragraph said "verified bit for bit", on three spacing
+        triples that happen to agree.*
+
+        The corollary is the one to carry: this is exact only where the ladder is
+        *geometric*. Under `E(h) = L + C h^p` the ratio of successive differences
+        is `r2^p (r1^p - 1) / (r2^p - 1)`, which is `r^p` only when `r1 == r2`;
+        on the achieved 0.8695 / 0.4545 / 0.2432 the two ratios are 1.913 and
+        1.869. **No choice of `step` repairs that**, because `step` cancels — a
+        non-geometric ladder needs `p` solved for rather than read off.
+        """
         step = self.spacings[-3] / self.spacings[-2]
         correction = self._differences[-1] / (step**self.order - 1.0)
         return float(self.energies[-1] - correction)

@@ -4372,6 +4372,90 @@ symmetric solute has no rotation either, so the metric is identically zero on a
 Born ion — the metric and the closed forms cover disjoint sets of structures,
 which is why Q1 below had to be graded twice.
 
+#### The noise floor `converging` does not need, and why `limit` never read the spacings
+
+**2026-08-25.** The repaired guard was left with one open objection: it still
+accepts fits whose steps sit below the backend's own phase noise, so `order` and
+`limit` could be fitted to jitter. That was taken up and **the clause should not
+ship**, for three reasons in descending strength.
+
+**One: the amplifier is already bounded, algebraically.** `order` is
+`log|d_prev / d_last| / log(step)`, so `step ** order` is *identically*
+`|d_prev / d_last|` and the Richardson correction collapses to
+`d_last / (ratio - 1)`. With `MIN_SHRINKAGE = 1.25` the ratio is at least 1.25,
+so
+
+    |limit - E_finest| <= |d_last| / 0.25 = 4 x |d_last|
+
+for any ladder this guard accepts. A step at the noise floor moves the limit by
+at most four noise units. **The failure a noise floor would prevent is already
+excluded by the clause beside it.**
+
+The bound is attained rather than generous. Of the shrink ratios recorded beside
+`MIN_SHRINKAGE`, the nearest keep — 1.3968 — licenses an amplifier of **2.5202**
+where the rejected 1.0327 would have licensed **30.58**; over 50,000 randomised
+accepted ladders the worst observed is **3.9877**. The identity itself holds to
+**8e-11** relative in double precision, which is what "exact in real arithmetic"
+costs when `x ** (log r / log x)` is evaluated in IEEE.
+
+**Two: there is no gap to choose a floor from, and the floor is anti-correlated
+with accuracy.** The sixteen survivors' relative last steps run **0.0247% to
+2.7903% continuously**, and the four fits closest to the exact answer (0.002%,
+0.025%, 0.027%, 0.033%) hold four of the five *smallest* steps, while the worst
+survivor (1.341%) sits mid-list at 0.2605%. Any floor that rejects the worst
+rejects all four best. `MIN_SHRINKAGE` was chosen from a measured gap; this
+observable does not have one.
+
+**Three: the premise is weaker than it was stated, though not empty.** The
+comparison behind it read a step at one spacing against a pose spread measured
+at another. Matched — the pose spread taken at the *coarser* of the two rungs
+the difference spans, twelve poses, `ala-gly`, both surfaces, three widths:
+
+| surface | w | \|d_last\| | pose std | \|d_last\| / std | / peak-to-peak |
+|---|---|---|---|---|---|
+| van der Waals | 0 | 7.230 | 1.679 (0.737%) | 4.31× | 1.17× |
+| van der Waals | 0.25 | 1.751 | 0.926 (0.423%) | **1.89×** | 0.56× |
+| van der Waals | 0.5 | 1.473 | 0.449 (0.206%) | 3.28× | 0.85× |
+| molecular | 0 | 6.140 | 2.003 (0.915%) | 3.07× | 0.75× |
+| molecular | 0.25 | 1.875 | 0.905 (0.429%) | 2.07× | 0.55× |
+| molecular | 0.5 | 1.650 | 0.379 (0.180%) | **4.36×** | 1.09× |
+
+**Above the noise on the statistic this repository gates on, and not by much:
+1.89–4.36× of the dispersion.** Against the peak-to-peak *range* the steps are
+0.55–1.17×, i.e. at or below it — but `PoseSpread` already says why the range is
+the wrong statistic ("the range of a small sample is dominated by its two
+extremes... quote it, but gate on `dispersion`"), and a floor built on it would
+be built on the volatile summary.
+
+**A phase spread must be quoted with the configuration it was taken at**, which
+is the part of this worth keeping. `DEBYE_POSE_DISPERSION = 0.0091` is the
+repository's one recorded number and it is the `molecular`, hard, 0.5 Å cell of
+the table above — 0.915%, which is that row and not a universal. Used as a floor
+across the other five it is 1.1–5.1× too large. *An earlier draft of this
+paragraph said "4–25×", comparing it against rungs it was never measured at;
+the table above refutes it and is the reason the claim is stated this way now.*
+
+**And a fourth thing fell out that is not about the floor at all: `limit` does
+not depend on the spacings.** Because `step` cancels, `Refinement.limit` is a
+function of the three energies alone. So `_achieved_spacing`, added because
+"Richardson divides by the refinement ratio, so the ratio has to be the real
+one", earns its keep on **`order` only**; M8a's orders moving 0.10–0.16 between
+the requested and achieved conventions is the whole of its effect.
+
+*Exact in real arithmetic and not in IEEE double — over 20,000 randomised
+accepted ladders two spacing triples return a different `limit` float on 0.66%
+of them, worst relative difference 7e-15. The independence is a property of the
+formula, not of its evaluation.*
+
+The corollary matters more than the trivia: the extrapolation is exact only on a
+**geometric** ladder. Under `E(h) = L + C h^p` the ratio of successive
+differences is `r2^p (r1^p - 1) / (r2^p - 1)`, which equals `r^p` only when
+`r1 == r2`; the achieved `ala-gly` ladder is 0.8695 / 0.4545 / 0.2432, ratios
+1.913 and 1.869. **No choice of `step` repairs that, because `step` cancels** —
+a non-geometric ladder needs `p` solved for rather than read off. Recorded
+rather than fixed: the residual is small next to the 0.08–0.48% the extrapolator
+is graded at, and the honest first move is to keep ladders geometric.
+
 #### Q1 — the scheme was the whole result
 
 M1c recorded harmonic dielectric averaging taking the Born error from 0.853% to
