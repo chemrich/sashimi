@@ -397,7 +397,10 @@ def test_a_sub_cell_ramp_beats_the_hard_assignment_against_the_closed_form(radiu
     replaces, so neither can referee it; `sashimi.debye.dielectric` says so at
     length. The closed form has no such conflict.
 
-    Measured 4-17x better across the ladder. The bar here is 2x, which is far
+    Measured 4.8-7.8x better at the `w = 0.5` these three rungs run, and
+    3.4-52.5x at `w = 0.25`, recomputed from ROADMAP.md section 12's Q1 table --
+    "4-17x" is what this used to say and is the range of neither. The bar here is
+    2x, which is far
     enough below the measurement to survive a solver-tolerance change and far
     enough above 1 to catch the scheme being silently disabled.
     """
@@ -414,7 +417,7 @@ def test_a_sub_cell_ramp_beats_the_hard_assignment_against_the_closed_form(radiu
     ramped = abs(_born_energy(radius, spacing, 0.5) - exact)
     assert ramped * 2.0 < hard, (
         f"the ramp is {hard / ramped:.1f}x better at a={radius}, h={spacing}, "
-        "where it was measured at 4-17x"
+        "where it was measured at 4.8-7.8x for this width"
     )
 
 

@@ -40,17 +40,21 @@ the numbers and the retraction. The short version:
   **4.9x closer**, and 8.8x closer at 0.2432 A.
 
 **And the field axis, which this file has named as the precondition since M1,
-has now been graded — and the ramp loses it.** Same fixture, same surface, same
-lattices, RMS over a shell 2-3 A outside the solvent-accessible surface against
-each scheme's own refined solve: the ramp is **1.4-13x further from the referee
-than the hard assignment at w >= 0.75**, growing monotonically with the width, on
-both ALA-GLY and `fas2`. At w = 0.5 every referee at h <= 0.15 says worse by
-1.3-2.9x and a merely 2x-finer one says better, so that width is *bounded rather
-than settled* — a referee sharing a construction with a candidate sits nearest
-that candidate. And on the Born sphere with an exact reference and a 21-padding
-phase sweep the ramp does not improve the near field at all: it raises the floor
-and leaves the worst and the median where they were, which is the shape M1c
-recorded.
+has now been measured — and the ramp does not win it.** Same fixture, same
+surface, same lattices, RMS over a shell 2-3 A outside the solvent-accessible
+surface against each scheme's own refined solve: on ALA-GLY, refereed at 4x the
+coarse spacing, the ramp is **2.4-13x further from the referee than the hard
+assignment at w >= 0.75**, growing monotonically with the width. `fas2` agrees in
+direction and its referees are too coarse to count. At w = 0.5 every referee at
+h <= 0.15 says worse by 1.3-2.9x and a merely 2x-finer one says better, so that
+width is *bounded rather than settled* — a referee sharing a construction with a
+candidate sits nearest that candidate. And on the Born sphere with an exact
+reference the two summaries disagree: the worst-direction error at a radius
+improves 12-23% while by shell RMS the median is unchanged and the floor
+doubles, so there is no clean gain there either.
+
+**The axis is bounded rather than discharged**, and what would discharge it is a
+reference that is not debye at all.
 
 **So the two axes disagree, and this file's own sentence is why that matters:**
 the field is the axis debye's consumer reads. `DebyeOptions.dielectric_smoothing`

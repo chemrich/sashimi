@@ -73,20 +73,22 @@ class DebyeOptions:
     # since 2026-08-25 that is a measurement rather than missing coverage. The
     # ramp buys the **energy** and does not buy the **field**: on `ala-gly` at
     # 0.4545 A it is 4.9x closer to the converged energy than the hard
-    # assignment, and 1.4-13x *further* from a refined referee on the potential
+    # assignment, and 2.4-13x *further* from a refined referee on the potential
     # 2-3 A outside the surface at w >= 0.75. At w = 0.5 the referees available
-    # here cannot settle it, and on a Born sphere with an exact reference the
-    # ramp does not improve the near field at all. debye's consumer colours a
-    # surface, so it reads the half the ramp does not win.
+    # here cannot settle it, and on a Born sphere with an exact reference the two
+    # summaries disagree -- worst-direction improves, shell RMS does not -- so
+    # there is no clean gain there either. debye's consumer colours a surface, so
+    # it reads the half the ramp does not win.
     #
     # **Turn it on for a solvation energy on a coarse grid**, where it is worth
     # about a factor of two in resolution. Do not turn it on to display a field.
     # `sashimi.debye.dielectric` carries the reasoning and ROADMAP.md section 12
     # "The field axis, measured" the tables.
     #
-    # Two coverage gaps stand behind the field one and neither is closed: the
-    # **molecular surface** is exercised by two tests on one 20-atom dipeptide,
-    # and the **width** has one pinning test that is spacing-specific.
+    # Two coverage gaps sit beside the field measurement and neither is closed:
+    # the **molecular surface** is exercised by two tests on one 20-atom
+    # dipeptide, and the **width** has one pinning test that is
+    # spacing-specific.
     #
     # And do not read a pose-dispersion improvement as the accuracy case. A pose
     # spread is the *phase-dependent* half of the discretization error and on

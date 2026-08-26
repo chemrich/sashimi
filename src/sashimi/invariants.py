@@ -122,8 +122,11 @@ MIN_POSES = 2
 
 # Richardson needs three energies to solve for both unknowns — the limit and the
 # order the error approaches it at. Two would need the order assumed, and
-# assuming it is the whole question: debye's is 1.17 on `ala-gly`, not the 2 a
-# reader would guess from a second-order operator.
+# assuming it is the whole question: on a hard face-centre dielectric debye
+# reads 1.009 on `ala-gly`'s molecular surface, not the 2 a reader would guess
+# from a second-order operator. *An earlier version of this comment said 1.17,
+# from one ladder; ROADMAP.md section 12 withdrew that — the fitted order is a
+# property of the ladder as much as of the method.*
 MIN_REFINEMENTS = 3
 
 # How much successive Richardson corrections must shrink before a limit read
@@ -147,11 +150,16 @@ MIN_REFINEMENTS = 3
 #
 #     |limit - E_finest| = |d_last| / (ratio - 1) <= |d_last| / (MIN_SHRINKAGE - 1)
 #
-# — at most **4x the last difference**, for any ladder this accepts. Measured
-# over the sixteen Born-sphere windows that survive: the identity holds to
-# 4e-16 and the largest amplifier actually seen is 2.2575. A step at the noise
-# floor therefore cannot move the limit by more than four noise units, which is
-# the failure a floor would have been added to prevent.
+# — at most **4x the last difference**, for any ladder this accepts. A step at
+# the noise floor therefore cannot move the limit by more than four noise units,
+# which is the failure a floor would have been added to prevent.
+#
+# The bound is tight rather than generous. Of the shrink ratios recorded above,
+# the nearest keep — 1.3968 — licenses an amplifier of **2.5202** where the
+# rejected 1.0327 would have licensed **30.58**, and over 50,000 randomised
+# accepted ladders the worst observed is **3.9877**. The identity holds to 8e-11
+# relative in double precision: exact in real arithmetic, and
+# `x ** (log r / log x)` is not exact in IEEE.
 #
 # The bound rests on `order` being read from the *same two differences* the
 # correction divides by. Replace it with a least-squares fit over four or more
@@ -346,9 +354,12 @@ class Refinement:
 
         First order is the signature of an O(1) error at the dielectric
         interface; second is what the operator would give on a smooth
-        coefficient. debye reads 1.17 on `ala-gly`, which is the measurement
-        that says the interface treatment, not the solver, is what bounds its
-        accuracy.
+        coefficient. On a hard dielectric debye reads 1.009 on `ala-gly`'s
+        molecular surface, and a sub-cell ramp takes it to 2.31-2.48 — which is
+        the measurement that says the interface treatment, not the solver, is
+        what bounds the accuracy. *The 1.17 this used to quote came from one
+        ladder and is withdrawn: the fitted order moves with which three
+        spacings are chosen.*
         """
         first, second = self._differences[-2:]
         step = self.spacings[-3] / self.spacings[-2]
