@@ -6236,6 +6236,98 @@ the default for a range where a correct one is cheaper. That is protean's call
 to record in protean's plan, and this section exists to be the evidence when it
 is made.
 
+### TABI-PB's surface potential was kJ/mol/e, labelled kT/e
+
+§4 fixes the units at the protocol boundary — Å, kT/e, kJ/mol — "so debye never
+inherits APBS's unit conventions by accident". TABI-PB was inheriting its own.
+Its VTK carries the potential in kJ/mol/e, `sashimi.tabipb` applied no
+conversion, and `SurfacePotential` documents kT/e, so six recordings carried a
+field a factor of **RT = 2.479** too large.
+
+**Why nothing caught it.** TABI-PB reports its energy in kJ/mol and needs no
+conversion there — `run.py` says so in a comment — and the potential is *also*
+per mole. So the one backend that was right about energy was wrong about field
+in the same breath, and the energy self-test cannot see it: it compares
+energies, and every energy was correct to the last recorded digit, before and
+after this fix. The corpus verified the wrong field against itself for as long
+as it has existed.
+
+The field was never graded against anything else either, and that was by
+construction. `_analytic_field_summary` excludes `SurfacePotential` from the
+closed-form grade, reasoning that "a boundary-element answer lives *on* the
+interface, which is the one place this measurement is meaningless". That is true
+of a **grid** — sampling a discretized dielectric at the interface is O(1) wrong,
+which is what `field.MIN_CELLS_OUT = 2` exists for — and false of a BEM solver,
+whose surface potential *is* the primary unknown and whose closed form is exact
+and continuous across the boundary. The new test grades on the interface and
+lands within 1.75% at `sdens` 3, converging as h². A grid-specific
+fact had been generalized to a family where it does not hold, and that exclusion
+removed the one check that would have caught this.
+
+It reached callers, not just recordings: `sashimi_solve` reports surface
+statistics under `potential_kT_e`, so the MCP tool published the same wrong unit
+in the same words.
+
+The contract was never ambiguous, though. `bem_stub.StubBemSolver` — written in
+phase 4 to prove the protocol admits a BEM answer, before one existed — divides
+volts by kT/e and has always been right. The reference implementation of the
+type got the unit correct and the real backend did not, which makes this a
+backend bug rather than a spec that failed to say what it meant.
+
+**What caught it.** A dimensional property, not a reference. kT/e carries a 1/T
+and kJ/mol/e does not, so the two peptide recordings at 298.15 K and 277 K must
+differ by 298.15/277 = 7.64% beyond the physics. They differ by 0.37% — the
+screening response alone, at fixed salt. That is a negative: it says the values
+are not kT/e at the requested temperature, and since they are byte-identical
+across the two, not kT/e at any temperature. It does not say what they are.
+
+**What pinned the factor.** A Born sphere, because outside a centred monopole
+the potential is exactly `q / (4 pi eps0 eps_s r)` and every mesh vertex has a
+known answer. NanoShaper refuses fewer than four atoms, so the sphere is four
+coincident-to-0.01-Å ones at the vertices of a regular tetrahedron with the
+charge split equally — the union is a sphere and the symmetry cancels the
+dipole. Graded per-vertex against the closed form at that vertex's own radius:
+
+| a | sdens 3 | 5 | 8 | 12 |
+|---|---|---|---|---|
+| 3.0 Å | 1.01751 | 1.01087 | 1.00660 | 1.00440 |
+| 4.0 Å | 1.01307 | 1.00804 | 1.00497 | 1.00333 |
+
+(ratio to RT; 1.0 means the factor is exactly RT.)
+
+At `sdens` 3 the ratio misses RT by 1.75% — close enough to be the
+unit and far enough to be something else, which is why the ladder exists rather
+than a single calibration. The excess times the density is constant down each
+row (5.25, 5.43, 5.28, 5.28 and 3.92, 4.02, 3.97, 4.00), so it is h²
+discretization and extrapolates to zero. **The factor is exactly RT, not a
+fitted number.** `studies/tabipb_units/born_sphere.py`.
+
+**The fix** is `backend.to_kt_per_e`, one division at the point where the
+temperature is known. `vtk.py` stays a format reader and now says so: the
+`SurfacePotential` it returns is in the file's units and is not yet
+protocol-conformant. Two tests gate it — one against the closed form, one on the
+temperature property that found it — and both fail by 152% and by the whole
+7.64% respectively if the conversion is removed.
+
+**The corpus diff is the conversion and nothing else.** All six energies and all
+six vertex counts are bit-identical; every one of the twenty-four surface
+statistics moved by exactly RT at that case's own temperature, including the
+277 K case, where the divisor is 2.3031 rather than 2.4790.
+
+**Still open, two things.** `normal_derivative` is parsed, carried through
+`run.py`, and dropped at `backend.py` because `SurfacePotential` has no field for
+it. §2 names it as half of what a BEM solver natively produces, so the type
+should grow one — a protocol change, deliberately not bundled with a
+corpus-changing units fix. It is in the same kJ/mol/e per Å and will need the
+same divisor.
+
+And the exclusion above should be narrowed from the family to the measurement:
+grading a BEM answer against a closed form on the interface is sound, and only
+the *grid* sampling is not. The blocker is a case to do it on — the corpus's
+analytic-field cases are Born ions, and a one-atom solute is refused by the
+mesher, which is why this section's evidence is a four-atom tetrahedron built by
+hand rather than a corpus case.
+
 ## 13. Risks and mitigations
 
 The conda-forge APBS package going unbuildable on future platforms is the

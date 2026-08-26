@@ -85,6 +85,16 @@ Run everything from the repository root.
 |---|---|
 | `step_vs_pose.py` | the last Richardson step against the pose dispersion at the matching rung |
 
+### `tabipb_units/` — ROADMAP §12, "TABI-PB's surface potential was kJ/mol/e, labelled kT/e"
+
+| script | what it produced |
+|---|---|
+| `born_sphere.py` | both halves: the values do not move with temperature, and the ratio to the closed form converges to RT down a four-rung mesh ladder at two radii |
+
+Needs TABI-PB and NanoShaper installed. NanoShaper's handoff fails
+intermittently on this input (`stoul: no conversion`) and the script retries
+before believing a crash; `sdens` below 1.5 fails for real and is not swept.
+
 ## What is not here
 
 The scripts behind the *adversarial* passes — the ones that refuted claims

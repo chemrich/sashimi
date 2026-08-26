@@ -10,6 +10,12 @@ The second scalar block, `NormalPotential`, is the normal derivative of the
 potential on the surface. It is the other half of what a boundary-element solve
 natively produces, and `SurfacePotential` has nowhere to put it yet, so it is
 parsed and handed back separately rather than silently dropped.
+
+**Units here are TABI-PB's, not the protocol's.** The file carries the potential
+in kJ/mol/e; the protocol boundary fixes kT/e (ROADMAP §4). This module is a
+format reader and does not know the temperature, so it hands back what the file
+says and `backend.to_kt_per_e` converts. Nothing between the two may treat a
+`SurfacePotential` from here as satisfying the protocol's contract.
 """
 
 from __future__ import annotations
@@ -30,7 +36,11 @@ _TRIANGLE_VERTICES = 3
 
 @dataclass
 class ParsedSurface:
-    """What the VTK file holds: a mesh, a potential, and its normal derivative."""
+    """What the VTK file holds: a mesh, a potential, and its normal derivative.
+
+    In the file's own units — kJ/mol/e and kJ/mol/e/A — so the potential is not
+    yet protocol-conformant. See the module docstring.
+    """
 
     potential: SurfacePotential
     normal_derivative: FloatArray

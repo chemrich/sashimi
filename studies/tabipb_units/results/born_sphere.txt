@@ -1,0 +1,25 @@
+RT at 298.15 K = 2.478957 kJ/mol   (the exact kT/e -> kJ/mol/e factor)
+
+A: the values do not move with temperature, so they are not kT/e.
+    a        T   n_vert   mean value
+  3.0   298.15     1536     6.002123
+  3.0   277.00     1536     6.002123
+  4.0   298.15     2688     4.479321
+  4.0   277.00     2688     4.479321
+  kT/e would differ by 298.15/277 = 1.07635 between those rows.
+
+B: graded per-vertex against the closed form at that vertex's own
+   radius, the ratio converges to RT as the mesh refines.
+    a   dens   n_vert   r mean  ratio mean     vs RT   excess  x dens
+  3.0    3.0     1536   2.9988     2.52236   1.01751   1.751%   5.253
+  3.0    5.0     4296   3.0045     2.50589   1.01087   1.087%   5.433
+  3.0    8.0    10968   3.0065     2.49531   1.00660   0.660%   5.276
+  3.0   12.0    24576   3.0072     2.48986   1.00440   0.440%   5.278
+  4.0    3.0     2688   4.0008     2.51136   1.01307   1.307%   3.921
+  4.0    5.0     7632   4.0053     2.49888   1.00804   0.804%   4.019
+  4.0    8.0    19416   4.0068     2.49127   1.00497   0.497%   3.973
+  4.0   12.0    43584   4.0074     2.48722   1.00333   0.333%   3.999
+
+  'excess' is how far above RT the ratio sits; 'x dens' is that times
+  the density. It is constant down each radius, so the excess is pure
+  h^2 discretization and extrapolates to zero: the factor is exactly RT.

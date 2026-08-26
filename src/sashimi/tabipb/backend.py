@@ -16,21 +16,44 @@ computes and all it computes.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
+from sashimi.constants import GAS_CONSTANT, JOULES_PER_KJ
 from sashimi.pqr import format_pqr
 from sashimi.protocol import (
     BoundaryElementRequest,
     EnergyTerm,
     Provenance,
     SolveResult,
+    SurfacePotential,
 )
 from sashimi.tabipb.discover import TabipbBinary, discover_tabipb
 from sashimi.tabipb.input import build_input, resolved_parameters
 from sashimi.tabipb.options import TabipbOptions
 from sashimi.tabipb.run import DEFAULT_TIMEOUT, run_tabipb
 
-__all__ = ["TabipbSolver"]
+__all__ = ["TabipbSolver", "to_kt_per_e"]
+
+
+def to_kt_per_e(potential: SurfacePotential, temperature: float) -> SurfacePotential:
+    """TABI-PB's VTK potential is kJ/mol/e; the protocol boundary fixes kT/e.
+
+    The energy needs no conversion and the potential does, which is a trap worth
+    naming: TABI-PB reports one in kJ/mol and the other per mole as well, so the
+    field arrived 2.5x too large while the energy self-test stayed green. That
+    test cannot catch it — it compares energies, and the energy is right.
+
+    The factor is RT and not a fitted number. Calibrated against the Born closed
+    form on a sphere, the ratio of TABI-PB's values to the exact kT/e sits 1.75%,
+    1.09%, 0.66% and 0.44% above RT at mesh densities 3, 5, 8 and 12 — a pure
+    h^2 discretization error, since excess x density is constant down the ladder,
+    extrapolating to RT exactly. `studies/tabipb_units/born_sphere.py` records it
+    at two radii, and re-derives by a second route that the values carry no 1/T
+    and so were never kT/e at any temperature.
+    """
+    rt = GAS_CONSTANT * temperature / JOULES_PER_KJ
+    return dataclasses.replace(potential, values=potential.values / rt)
 
 
 @dataclass
@@ -90,7 +113,9 @@ class TabipbSolver:
         result = SolveResult(
             provenance=provenance,
             energy_kj_mol=run.energy_kj_mol,
-            potential=run.potential,
+            potential=(
+                None if run.potential is None else to_kt_per_e(run.potential, solvent.temperature)
+            ),
             diagnostics={
                 "family": "boundary-element",
                 "mesh_density": request.mesh_density,
