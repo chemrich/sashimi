@@ -1,0 +1,6 @@
+res=1.0: hard -236.5184  ramp -225.1586  quantized -247.9970
+   from the limit: hard 20.0588  ramp  8.6990  quantized 31.5374   -> quantized recovers -101.0% of the accuracy
+   dispersion: hard 2.950%  ramp 0.528%  quantized 3.180%   -> recovers  -9.5% of the benefit (5.59x available, 0.93x taken)
+res=0.5: hard -227.8202  ramp -218.0692  quantized -225.5165
+   from the limit: hard 11.3606  ramp  1.6096  quantized  9.0569   -> quantized recovers  23.6% of the accuracy
+   dispersion: hard 0.737%  ramp 0.204%  quantized 0.586%   -> recovers  28.2% of the benefit (3.61x available, 1.26x taken)
