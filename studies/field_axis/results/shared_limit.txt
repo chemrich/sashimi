@@ -1,0 +1,41 @@
+6581 shell nodes, 2.0-3.0 A outside the accessible surface
+coarsest h = 0.4985, so the shell is 4.0 cells out
+
+CONTROL 1 -- w = 1e-5, where the ramp is bit-identical to hard
+  delta must be exactly zero at every rung
+         h      points        delta       offset        shape
+   0.48728      240825     0.000000     0.000000     0.000000
+   0.33990      699273     0.000000     0.000000     0.000000
+   0.24364     1880433     0.000000     0.000000     0.000000
+   0.17507     5033665     0.000000     0.000000     0.000000
+   0.13835    10162761     0.000001     0.000000     0.000001
+   0.10775    21448449     0.000001     0.000000     0.000001
+               local order of delta:    nan     nan     nan     nan   -0.46
+
+CONTROL 2 -- uniform dielectric, where there is no interface to blend
+  delta must be exactly zero at every rung
+         h      points        delta       offset        shape
+   0.48728      240825     0.000000     0.000000     0.000000
+   0.33990      699273     0.000000     0.000000     0.000000
+   0.24364     1880433     0.000000     0.000000     0.000000
+   0.17507     5033665     0.000000     0.000000     0.000000
+   0.13835    10162761     0.000000     0.000000     0.000000
+   0.10775    21448449     0.000000     0.000000     0.000000
+               local order of delta:    nan     nan     nan     nan     nan
+
+THE MEASUREMENT -- w = 0.5, molecular surface
+  delta(h) = ||phi_ramp - phi_hard|| at w = 0.5
+         h      points        delta       offset        shape
+   0.48728      240825     0.011762     0.000010     0.011762
+   0.33990      699273     0.006664     0.000031     0.006664
+   0.24364     1880433     0.004713     0.000009     0.004713
+   0.17507     5033665     0.003147     0.000003     0.003147
+   0.13835    10162761     0.002607     0.000009     0.002607
+   0.10775    21448449     0.002110     0.000009     0.002110
+               local order of delta:   1.58    1.04    1.22    0.80    0.85
+
+Richardson on delta itself, over every window of three (Refinement's guard applies):
+  h = 0.4873 / 0.3399 / 0.2436: converging, limit +0.003505, order  2.67
+  h = 0.3399 / 0.2436 / 0.1751: REFUSED by the guard, limit -0.003241, order  0.66
+  h = 0.2436 / 0.1751 / 0.1383: converging, limit +0.002323, order  3.22
+  h = 0.1751 / 0.1383 / 0.1077: REFUSED by the guard, limit -0.003728, order  0.35

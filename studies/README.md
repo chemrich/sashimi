@@ -65,6 +65,8 @@ Run everything from the repository root.
 | `cheap_ref.py` | the referee choice behind the shipped test's bar |
 | `energy_ladder_mol.py` | "the two axes disagree on one fixture" — the four-rung energy ladder *(reconstructed)* |
 | `quantize.py` | **the result that did not reproduce**, kept for that reason *(reconstructed)* |
+| `shared_limit.py` | δ(h) between the two schemes on one lattice, with two null controls — the referee-free half of the shared-limit test |
+| `consistency_born.py` | each scheme against the *exact* Born field — the half that settles it |
 
 ### `union_gap/` — ROADMAP §12, "The other half of that bug"
 
