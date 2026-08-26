@@ -195,7 +195,11 @@ def run_tabipb(
         return TabipbRun(
             potential=potential,
             normal_derivative=normal,
-            # Already kJ/mol — TABI-PB is the one backend needing no conversion.
+            # Already kJ/mol — TABI-PB is the one backend whose *energy* needs
+            # no conversion. Its potential is not so kind: that arrives in
+            # kJ/mol/e and `backend.to_kt_per_e` divides by RT. Reporting one
+            # per mole and the other per mole too is exactly why the field was
+            # wrong for six recordings while every energy stayed right.
             energy_kj_mol=float(energy_match.group(1)),
             free_energy_kj_mol=float(free_match.group(1)) if free_match else None,
             stdout=combined,

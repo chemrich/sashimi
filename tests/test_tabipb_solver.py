@@ -15,8 +15,10 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from sashimi.analytic import born_potential
 from sashimi.corpus import MANIFEST, load_summary, verify_case
 from sashimi.errors import InputError, SolverError, UnsupportedRequest
 from sashimi.pqr import parse_pqr, read_pqr
@@ -24,6 +26,7 @@ from sashimi.protocol import (
     BoundaryElementRequest,
     EnergyTerm,
     PotentialGrid,
+    PQRData,
     SolventModel,
     SolverFamily,
     SurfaceModel,
@@ -227,3 +230,81 @@ def test_tabipb_reproduces_its_recorded_corpus_answer(binary, name):
 # --case <name>`, which is eight minutes of meshing a per-push suite has no
 # business repeating. `tests/test_corpus_manifest.py` checks those recordings
 # are present and where they landed, without needing the binary at all.
+
+
+# --- units --------------------------------------------------------------------
+
+# NanoShaper refuses fewer than four atoms, so the sphere is four coincident ones
+# at the vertices of a tiny regular tetrahedron: their union is a sphere to
+# within the offset, and splitting the charge equally cancels the dipole by
+# symmetry, leaving the centred monopole the closed form describes.
+_SPHERE_RADIUS = 3.0
+_SPHERE_OFFSET = 0.01
+_TETRAHEDRON = np.array(
+    [[1.0, 1.0, 1.0], [1.0, -1.0, -1.0], [-1.0, 1.0, -1.0], [-1.0, -1.0, 1.0]]
+) / np.sqrt(3.0)
+
+
+def test_the_surface_potential_crosses_the_protocol_boundary_in_kt_per_e(binary):
+    """Grade TABI-PB's field against the one closed form that fixes its unit.
+
+    This is here because the energy self-test cannot do it. TABI-PB reports its
+    energy in kJ/mol and its potential in kJ/mol/e, so for six recordings the
+    field was RT — a factor of 2.48 — too large while every energy stayed right
+    and every corpus check stayed green.
+
+    A sphere is what pins it: outside a centred monopole the potential is exactly
+    q / (4 pi eps0 eps_s r), so every vertex has a known answer.
+
+    The unit is one scalar factor, so the mean ratio is what estimates it and the
+    3% band is on that. The spread is graded separately and far more loosely,
+    because it is the mesh's error rather than the unit's: at `sdens` 3 the mean
+    sits 1.75% high and falls as h^2 (`studies/tabipb_units/born_sphere.py`
+    walks it to 0.44%), while individual vertices reach 6.7%. Neither tolerance
+    is delicate — dropping the conversion puts the mean at 2.479.
+    """
+    structure = PQRData(
+        coords=_TETRAHEDRON * _SPHERE_OFFSET,
+        charges=np.full(4, 0.25),
+        radii=np.full(4, _SPHERE_RADIUS),
+    )
+    request = _request(structure, mesh_density=3.0)
+    mesh = surface(TabipbSolver().solve(request))
+
+    radii = np.linalg.norm(mesh.vertices, axis=1)
+    exact = np.array(
+        [
+            born_potential(r, 1.0, request.solvent.solvent_dielectric, request.solvent.temperature)
+            for r in radii
+        ]
+    )
+    ratio = mesh.values / exact
+    assert float(np.mean(ratio)) == pytest.approx(1.0, rel=0.03), (
+        f"surface potential is {float(np.mean(ratio)):.3f}x the closed form; "
+        f"1.0 is kT/e and 2.479 is the unconverted kJ/mol/e"
+    )
+    assert float(np.max(np.abs(ratio - 1.0))) < 0.10, (
+        "the field is off the closed form vertex by vertex, which a wrong unit "
+        "would not do — suspect the mesh or the geometry, not the conversion"
+    )
+
+
+def test_the_surface_potential_is_temperature_dependent_as_kt_per_e_must_be(binary):
+    """The property that caught it: kT/e carries a 1/T and kJ/mol/e does not.
+
+    TABI-PB's own output is byte-identical at these two temperatures at zero
+    salt, so anything that varies here is the conversion doing its job. Solving
+    at both is what makes this a check on the unit rather than on a constant.
+    """
+    structure = PQRData(
+        coords=_TETRAHEDRON * _SPHERE_OFFSET,
+        charges=np.full(4, 0.25),
+        radii=np.full(4, _SPHERE_RADIUS),
+    )
+    hot = surface(TabipbSolver().solve(_request(structure, mesh_density=3.0)))
+    cold = surface(
+        TabipbSolver().solve(_request(structure, mesh_density=3.0, solvent={"temperature": 277.0}))
+    )
+    assert float(np.mean(cold.values)) / float(np.mean(hot.values)) == pytest.approx(
+        298.15 / 277.0, rel=1e-6
+    )

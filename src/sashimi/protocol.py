@@ -364,9 +364,15 @@ class PotentialGrid:
 class SurfacePotential:
     """Potential sampled on the dielectric interface, kT/e.
 
-    What a boundary-element solver natively produces. No shipped backend emits
-    one yet; it exists so the result type does not have to change when one does,
-    and so `tests/test_bem_contract.py` can prove the protocol admits it.
+    What a boundary-element solver natively produces. `TabipbSolver` emits one;
+    `bem_stub.StubBemSolver` and `tests/test_bem_contract.py` exercise the same
+    shape in the binary-free tier, which is how the type was designed before a
+    real backend existed.
+
+    kT/e is the protocol's unit, not necessarily the backend's. TABI-PB's VTK
+    carries kJ/mol/e and `sashimi.tabipb.backend.to_kt_per_e` converts on the way
+    out; a backend that skips that step returns numbers RT too large, and no
+    energy check will notice.
     """
 
     vertices: FloatArray  # (M, 3), A
