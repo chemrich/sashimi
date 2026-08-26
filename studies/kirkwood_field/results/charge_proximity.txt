@@ -1,0 +1,18 @@
+case                   cells_out    backend     worst     dir       r  gap to charge
+kirkwood-vdw-07        (2, 4, 8)    apbs       7.109%      +x   3.406         1.306 A
+kirkwood-vdw-07        (2, 4, 8)    debye      2.753%      +x   4.000         1.400 A
+kirkwood-vdw-07        (4, 8)       apbs       6.183%      +x   3.812         1.712 A
+kirkwood-vdw-07        (4, 8)       debye      2.753%      +x   4.000         1.900 A
+kirkwood-vdw-07        (6, 12)      apbs       4.716%      +x   4.219         2.119 A
+kirkwood-vdw-07        (6, 12)      debye      2.315%      +x   4.500         2.400 A
+kirkwood-vdw-09        (2, 4, 8)    apbs      20.959%      +x   3.406         0.706 A
+kirkwood-vdw-09        (2, 4, 8)    debye      1.860%      -x   5.000         0.800 A
+kirkwood-vdw-09        (4, 8)       apbs       8.268%      +x   3.812         1.112 A
+kirkwood-vdw-09        (4, 8)       debye      1.860%      -x   5.000         1.300 A
+kirkwood-vdw-09        (6, 12)      apbs       4.710%      +x   4.219         1.519 A
+kirkwood-vdw-09        (6, 12)      debye      2.411%      -x   6.000         1.800 A
+
+APBS walks down steeply with the gap and debye does not move, and
+debye's worst sample is on the *far* pole at d/a = 0.9 -- so its
+near-pole error is smaller still at a shorter gap. The spread is
+charge proximity, not the field.

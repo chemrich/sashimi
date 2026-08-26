@@ -33,10 +33,18 @@ from sashimi.analytic import (
     born_potential,
     born_solvation_energy,
     debye_length_a,
+    kirkwood_potential,
     screened_born_potential,
     screened_born_solvation_energy,
 )
-from sashimi.constants import AVOGADRO, BOLTZMANN, JOULES_PER_KJ
+from sashimi.constants import (
+    ANGSTROM,
+    AVOGADRO,
+    BOLTZMANN,
+    ELEMENTARY_CHARGE,
+    JOULES_PER_KJ,
+    VACUUM_PERMITTIVITY,
+)
 from sashimi.gb.energy import debye_kappa
 from sashimi.protocol import SolventModel
 
@@ -48,6 +56,12 @@ TEMPERATURE = 298.15
 ION_RADIUS = 2.0
 
 SALTS = (0.05, 0.15, 0.5, 1.0)
+
+# d/a for the four recorded Kirkwood rungs, and a spread of directions from the
+# axis the charge sits on -- both poles, the equator, and the body diagonals the
+# corpus actually samples along.
+OFFSET_FRACTIONS = (0.0, 0.3, 0.5, 0.7, 0.9)
+COSINES = (1.0, 0.7071067811865476, 0.5773502691896258, 0.0, -0.5773502691896258, -1.0)
 
 
 def kt_per_mol_kj(temperature: float) -> float:
@@ -252,3 +266,85 @@ def test_stronger_salt_screens_harder_at_every_radius():
         assert values == sorted(values, reverse=True), (
             f"the potential at r = {r} A does not fall monotonically with salt: {values}"
         )
+
+
+# --- Kirkwood's off-centre charge, on the field ---------------------------------
+#
+# `kirkwood_solvation_energy` has been here since M2 and grades an energy. These
+# three pin its field counterpart, and between them they reach every term of the
+# series: the first fixes n = 0, the third fixes n = 1, and the second fixes all
+# n at once in the one case where the whole sum has a closed form.
+
+
+@pytest.mark.parametrize("cos_theta", COSINES)
+@pytest.mark.parametrize("r_a", [3.5, 4.0, 6.0, 12.0])
+def test_a_centred_kirkwood_charge_is_the_born_potential(r_a, cos_theta):
+    """d = 0 kills every term above the monopole, whatever the direction.
+
+    The same relationship `kirkwood_solvation_energy` has to
+    `born_solvation_energy`, one derivative down. It is worth testing at several
+    angles rather than one: a sign error in the Legendre recurrence would leave
+    the pole right and the equator wrong, and `P_n(1) = 1` is exactly the case
+    that hides it.
+    """
+    assert kirkwood_potential(r_a, cos_theta, RADIUS, 0.0) == pytest.approx(
+        born_potential(r_a), rel=1e-14
+    )
+
+
+@pytest.mark.parametrize("cos_theta", COSINES)
+@pytest.mark.parametrize("offset_fraction", OFFSET_FRACTIONS)
+def test_a_uniform_medium_has_no_reaction_field(offset_fraction, cos_theta):
+    """eps_p = eps_s must give plain Coulomb at the charge's *actual* position.
+
+    With no dielectric contrast there is nothing to react, so the sphere is not
+    there and the answer is the bare Coulomb potential at the true separation.
+    The series says so only if it sums to the Legendre generating function, so
+    this reaches every term at once — and it is a check on the *geometry* rather
+    than the physics: a reference that placed the charge at the centre, or
+    measured theta from the wrong axis, would pass every spherically symmetric
+    test in this file and fail this one.
+    """
+    offset = RADIUS * offset_fraction
+    r = 5.0
+    got = kirkwood_potential(
+        r, cos_theta, RADIUS, offset, CHARGE, solute_dielectric=EPS_S, solvent_dielectric=EPS_S
+    )
+    separation = math.sqrt(r**2 + offset**2 - 2 * r * offset * cos_theta)
+    volts = (CHARGE * ELEMENTARY_CHARGE) / (
+        4 * math.pi * VACUUM_PERMITTIVITY * EPS_S * separation * ANGSTROM
+    )
+    assert got == pytest.approx(volts / (BOLTZMANN * TEMPERATURE / ELEMENTARY_CHARGE), rel=1e-12)
+
+
+@pytest.mark.parametrize("cos_theta", [1.0, 0.5, -0.5, -1.0])
+def test_the_first_correction_to_the_monopole_is_the_dipole(cos_theta):
+    """Far out, the excess over Born is the n = 1 term with its own coefficient.
+
+    The centred case pins n = 0 and the uniform-medium case pins the sum; neither
+    can see the coefficient of a single higher term, which is where the dielectric
+    contrast actually enters. Approaching from far away isolates n = 1, because
+    every term above it is smaller by a further factor of d/r:
+
+        phi / phi_born - 1  ->  3 eps_s d cos(theta) / ((eps_p + 2 eps_s) r)
+    """
+    offset = 2.7
+    r = 4000.0
+    excess = kirkwood_potential(r, cos_theta, RADIUS, offset) / born_potential(r) - 1.0
+    predicted = 3 * EPS_S * offset * cos_theta / ((EPS_P + 2 * EPS_S) * r)
+    assert excess == pytest.approx(predicted, rel=1e-3)
+
+
+def test_the_exterior_expansion_refuses_a_sample_it_does_not_describe():
+    """Inside the sphere is a different expression, and at the boundary neither.
+
+    `born_potential` documents the same limit in prose; here it is enforced,
+    because this one is easier to reach by accident — a caller sampling `a + k*h`
+    has a radius that looks safe and a `k` that may not be.
+    """
+    with pytest.raises(ValueError, match="only outside the sphere"):
+        kirkwood_potential(RADIUS, 1.0, RADIUS, 1.0)
+    with pytest.raises(ValueError, match="only outside the sphere"):
+        kirkwood_potential(2.0, 1.0, RADIUS, 1.0)
+    with pytest.raises(ValueError, match="must sit inside the sphere"):
+        kirkwood_potential(5.0, 1.0, RADIUS, RADIUS)

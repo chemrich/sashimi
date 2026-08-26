@@ -42,6 +42,7 @@ __all__ = [
     "born_potential",
     "born_solvation_energy",
     "debye_length_a",
+    "kirkwood_potential",
     "kirkwood_solvation_energy",
     "screened_born_potential",
     "screened_born_solvation_energy",
@@ -215,6 +216,90 @@ def kirkwood_solvation_energy(
     q = charge_e * ELEMENTARY_CHARGE
     joules = q**2 / (8 * math.pi * VACUUM_PERMITTIVITY * radius_a * ANGSTROM) * series
     return joules * AVOGADRO / JOULES_PER_KJ
+
+
+def kirkwood_potential(
+    r_a: float,
+    cos_theta: float,
+    radius_a: float,
+    offset_a: float,
+    charge_e: float = 1.0,
+    *,
+    solute_dielectric: float = 1.0,
+    solvent_dielectric: float = 78.54,
+    temperature: float = 298.15,
+    terms: int = 400,
+) -> float:
+    """Potential outside a sphere whose charge is off-centre, in kT/e.
+
+    The field half of `kirkwood_solvation_energy`, and the first closed form here
+    that is not spherically symmetric. `theta` is measured from the axis the
+    charge sits on, so `cos_theta = 1` is the near pole and `-1` the far one.
+
+    Matching phi and eps dphi/dr at r = a, with the source expanded as
+    sum_n d^n r^-(n+1) P_n for r > d:
+
+        phi_out(r, theta) = (q / 4 pi eps0) * sum_n
+            (2n+1) / (n eps_p + (n+1) eps_s) * d^n / r^(n+1) * P_n(cos theta)
+
+    The same matching gives the interior coefficients whose sum at the charge is
+    `kirkwood_solvation_energy`'s series, so the two functions are one system
+    solved twice rather than two transcriptions that have to be kept in step.
+
+    **Two identities pin it, and both are tested.** At `d = 0` every term above
+    the monopole carries `d^n = 0` and what is left is `born_potential` exactly —
+    the same relationship the energy has to `born_solvation_energy`. At
+    `eps_p = eps_s` the coefficient collapses to `(2n+1)/(eps(2n+1))` and the
+    series becomes the Legendre generating function, giving plain Coulomb at the
+    charge's *actual* position: a uniform medium has no reaction field, and a
+    reference that failed this would be describing the wrong geometry rather
+    than the wrong physics.
+
+    Valid only for `r > a`, for the reason `born_potential` records: phi is
+    continuous at the dielectric boundary but its normal derivative is not, so a
+    sample there is an ill-posed question about a grid rather than a solver
+    defect. Unscreened, so it describes a case only at zero ionic strength.
+
+    Convergence is geometric in `d/r`, which is worst at the boundary with the
+    charge near it: `d/a = 0.9` sampled at `r = a` needs ~400 terms for double
+    precision, and every sample this project takes is at `a + k*h` with k >= 2,
+    where the ratio is smaller still.
+    """
+    if not 0.0 <= offset_a < radius_a:
+        raise ValueError(
+            f"the charge must sit inside the sphere: got offset {offset_a} A "
+            f"in a sphere of radius {radius_a} A"
+        )
+    if r_a <= radius_a:
+        raise ValueError(
+            f"the exterior expansion is valid only outside the sphere: got "
+            f"r={r_a} A with a={radius_a} A. At the boundary phi is continuous "
+            f"but eps dphi/dr is not, so there is no single value to compare."
+        )
+
+    # P_n by the standard recurrence, accumulated with the series rather than
+    # stored: (n+1) P_(n+1) = (2n+1) x P_n - n P_(n-1).
+    previous, current = 1.0, cos_theta  # P_0, P_1: the recurrence needs two seeds
+    ratio = offset_a / r_a
+    power = 1.0 / r_a  # d^n / r^(n+1) at n = 0
+    total = 0.0
+    for n in range(terms):
+        if n == 0:
+            legendre = previous
+        elif n == 1:
+            legendre = current
+        else:
+            legendre = ((2 * n - 1) * cos_theta * current - (n - 1) * previous) / n
+            previous, current = current, legendre
+        total += (
+            (2 * n + 1) / (n * solute_dielectric + (n + 1) * solvent_dielectric) * power * legendre
+        )
+        power *= ratio
+
+    q = charge_e * ELEMENTARY_CHARGE
+    volts = q / (4 * math.pi * VACUUM_PERMITTIVITY * ANGSTROM) * total
+    kt_over_e = BOLTZMANN * temperature / ELEMENTARY_CHARGE
+    return volts / kt_over_e
 
 
 def born_potential(
