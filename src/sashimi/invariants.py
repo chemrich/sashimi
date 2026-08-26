@@ -9,6 +9,14 @@ not accuracy: when the reference-tier backends spread 10.4% on a 1,156-residue
 protein (ROADMAP.md section 12), nothing in the suite can say which of them is
 closer to right.
 
+**What changed since is the referee, not the ground truth.**
+`tests/test_corpus_debye.py::DEBYE_DEVIATION` records all 58 debye recordings
+against two other codes from files already in the repository, and the three
+*bracket*: `E_delphi > E_apbs > E_debye` on all eighteen cases at or above 906
+atoms, without exception. Agreement with a **shape** is more than a spread and
+it is still not accuracy — all three assign the dielectric hard at face centres,
+so none of them can referee a change to that.
+
 What fills that gap is not a better reference. It is the identities the answer
 has to satisfy whatever the answer is, which hold at every size and cost one
 extra solve each.

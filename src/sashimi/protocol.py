@@ -499,8 +499,14 @@ class Preference(StrEnum):
     Deliberately not called "accurate". Above a two-atom solute the corpus has
     no ground truth (ROADMAP.md section 12), so nothing here can promise a
     closer answer. `STABLE` names the property that *is* measured: how little
-    the answer moves when the solute is rigidly rotated, which is the
-    discretization error and nothing more.
+    the answer moves when the solute is rigidly rotated.
+
+    *That used to end "which is the discretization error and nothing more", and
+    it is the part of it that depends on grid phase — `sashimi.invariants`
+    retracted the same sentence in its own header. The part that does not move
+    with the lattice is invisible to a rotation spread, and on debye it is the
+    larger of the two. `STABLE` is still the honest name for what the preference
+    selects on; it is not a claim about how close the answer is.*
     """
 
     FAST = "fast"
