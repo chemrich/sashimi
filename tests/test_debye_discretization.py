@@ -40,7 +40,7 @@ from sashimi.debye.sources import (
     interpolate_at_atoms,
 )
 from sashimi.errors import GridTooLarge, InputError
-from sashimi.protocol import GridSpec, PQRData, SolventModel, SurfaceModel
+from sashimi.protocol import DIMENSIONS, GridSpec, PQRData, SolventModel, SurfaceModel
 
 VDW = SolventModel(
     solute_dielectric=1.0, ionic_strength=0.0, surface_model=SurfaceModel.VAN_DER_WAALS
@@ -397,7 +397,10 @@ def test_a_sub_cell_ramp_beats_the_hard_assignment_against_the_closed_form(radiu
     replaces, so neither can referee it; `sashimi.debye.dielectric` says so at
     length. The closed form has no such conflict.
 
-    Measured 4-17x better across the ladder. The bar here is 2x, which is far
+    Measured 4.8-7.8x better at the `w = 0.5` these three rungs run, and
+    3.4-52.5x at `w = 0.25`, recomputed from ROADMAP.md section 12's Q1 table --
+    "4-17x" is what this used to say and is the range of neither. The bar here is
+    2x, which is far
     enough below the measurement to survive a solver-tolerance change and far
     enough above 1 to catch the scheme being silently disabled.
     """
@@ -414,7 +417,7 @@ def test_a_sub_cell_ramp_beats_the_hard_assignment_against_the_closed_form(radiu
     ramped = abs(_born_energy(radius, spacing, 0.5) - exact)
     assert ramped * 2.0 < hard, (
         f"the ramp is {hard / ramped:.1f}x better at a={radius}, h={spacing}, "
-        "where it was measured at 4-17x"
+        "where it was measured at 4.8-7.8x for this width"
     )
 
 
@@ -479,3 +482,95 @@ def test_the_ramp_reaches_the_default_surface_and_uses_its_own_distance():
         # would be the way this stopped being true.
         assert smooth.min() >= min(solvent.solute_dielectric, solvent.solvent_dielectric)
         assert smooth.max() <= max(solvent.solute_dielectric, solvent.solvent_dielectric)
+
+
+def test_the_ramp_costs_accuracy_on_the_field_it_buys_on_the_energy():
+    """The field axis, which M1c set as the precondition for moving the default.
+
+    Every validation of `dielectric_smoothing` before 2026-08-25 was on the
+    **energy** — a volume integral — and debye's consumer colours a surface, so
+    what it reads is the **potential near the boundary**. Measured on both, on
+    one fixture at one lattice, the two disagree: on `ala-gly` at 0.4545 A the
+    ramp at `w = 0.5` is **4.9x closer** to the converged energy than the hard
+    assignment and **1.5-2.9x further** from a refined referee on the potential
+    2-3 A outside the surface. ROADMAP.md section 12, "The field axis, measured",
+    carries the sweeps; this pins the direction so it cannot quietly reverse.
+
+    **The referee is the ramp's own fine solve**, which is the conservative
+    choice: a fine hard solve inherits hard's construction and would flatter the
+    result. It reads 1.24x at `w = 0.5` and 3.62x at `w = 1.0` here, against
+    1.52x and 3.96x from a referee one rung finer, so the cheap referee
+    understates the effect rather than manufacturing it.
+
+    Two things this deliberately does *not* do. It does not sweep grid phase, and
+    it does not grade `w = 0.5` at all — ROADMAP.md carries the control that says
+    why: against a referee only 2x finer the sign at `w = 0.5` follows the phase,
+    because each scheme's fine solve is nearest its own coarse solve. Only
+    `w = 1.0` is graded, where every referee and every phase agree. And it does
+    not claim the ramp is a worse scheme: it is a better one for a solvation
+    energy, which is the other half of the same measurement.
+
+    The shell is a fixed **physical** band outside the solvent-accessible
+    surface, where `min_i(|x - c_i| - (r_i + probe))` is exact, so it is more
+    than two coarse cells clear of the dielectric interface — the radius rule
+    `sashimi.field.MIN_CELLS_OUT` exists for.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    from sashimi.debye.backend import DebyeSolver  # noqa: PLC0415
+    from sashimi.debye.options import DebyeOptions  # noqa: PLC0415
+    from sashimi.debye.surface import _union_gap  # noqa: PLC0415
+    from sashimi.pqr import read_pqr  # noqa: PLC0415
+    from sashimi.protocol import FiniteDifferenceRequest  # noqa: PLC0415
+
+    structure = read_pqr("tests/data/ala-gly.pqr")
+    solvent = SolventModel(surface_model=SurfaceModel.MOLECULAR)
+
+    def potential(resolution: float, width: float):
+        request = FiniteDifferenceRequest(
+            structure=structure,
+            solvent=solvent,
+            grid=GridSpec(resolution=resolution, padding=10.0),
+            want_potential=True,
+            want_energy=False,
+        )
+        answer = DebyeSolver(options=DebyeOptions(dielectric_smoothing=width)).solve(request)
+        assert answer.potential is not None
+        return answer.potential
+
+    grid = size_grid(structure, GridSpec(resolution=0.5, padding=10.0))
+    axes = axis_coordinates(grid)
+    accessible = _union_gap(axes, structure.coords, structure.radii + solvent.surface_radius)
+    index = np.nonzero((accessible >= 2.0) & (accessible <= 3.0))
+    points = np.stack([axes[axis][index[axis]] for axis in range(DIMENSIONS)], axis=1)
+    assert len(points) > 1000, f"only {len(points)} shell nodes, so this grades nothing"
+    assert 2.0 * float(max(grid.spacing)) <= 2.0, "the shell is inside the two-cell rule"
+
+    referee = potential(0.25, 0.5).value_at(points)
+    assert np.isfinite(referee).all(), "the referee does not cover the shell"
+
+    def error(width: float) -> float:
+        got = potential(0.5, width).value_at(points)
+        assert np.isfinite(got).all()
+        return float(np.sqrt(np.mean((got - referee) ** 2)))
+
+    hard = error(0.0)
+    # Not `hard > 0.0` — a 65^3 coarse solve cannot reproduce an interpolated
+    # 121^3 field bit for bit and there is no reachable state where that fires.
+    # What can go wrong is the shell drifting somewhere the two agree anyway, so
+    # the floor is a size the effect has to clear.
+    assert hard > 1e-3, (
+        f"the hard scheme is only {hard:.2e} from the referee, so the shell has moved "
+        "somewhere the coarse and fine solves agree and nothing is being graded"
+    )
+    # **Only `w = 1.0`, and the reason is that a bar at `w = 0.5` would be phase
+    # fragile.** Against this referee it reads 1.24x at the padding above and
+    # **0.74-0.95x** at the five paddings where the lattices nest exactly — the
+    # sign follows the phase, because a referee only 2x finer than the candidate
+    # is nearer its own coarse solve than the other scheme's. At `w = 1.0` the
+    # same referee reads 1.93-2.33x over those five paddings and 3.62x here, so
+    # this bar is the one the instrument can carry.
+    assert error(1.0) > 1.5 * hard, (
+        "the ramp at w = 1.0 is within 1.5x the hard assignment's field error; it was 3.62x "
+        "here and 1.93-2.33x over the nested paddings"
+    )
