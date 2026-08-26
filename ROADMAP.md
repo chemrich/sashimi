@@ -5,10 +5,12 @@
 > to outlive it. `debye` is the eventual clean-room solver that slots in behind
 > the same interface.
 
-Status: phases 0–4 shipped, 5 bar the PyPI release; 6 (distribution) not
-started; 7 (multi-backend) in progress — DelPhi, `sashimi validate` and the
-TABI-PB boundary-element backend have landed.
-Last updated: 2026-08-23 (phase 8: M0–M9 met; §12 carries the ladder)
+Status: phases 0–4 and 7 shipped, 5 bar the PyPI release; 6 (distribution) not
+started; 8 (debye) in progress — four backends across three solver families
+(APBS, DelPhi in two flavours, TABI-PB, Generalized Born) and `sashimi validate`
+have landed.
+Last updated: 2026-08-26 (phase 8: M0–M5, M8, M8a and M9 met; M6 recorded
+rather than gated and M7 parked; §12 carries the ladder)
 
 This is the single planning document. It supersedes the earlier split between
 ROADMAP.md (intent) and PLAN.md (APBS implementation), which had two
@@ -28,8 +30,8 @@ sharp edges. Nobody has made them interchangeable. sashimi's bet:
    that is **solver-shaped, not APBS-shaped**.
 2. Drive solvers as subprocesses behind that protocol, transport-agnostically:
    the same types serve MCP, CLI, and library use.
-3. Make installation trivial (eventually `pip install sashimi`, with the solver
-   binary vendored in platform wheels).
+3. Make installation trivial (eventually `pip install sashimi-electro`, with
+   the solver binary vendored in platform wheels).
 4. Treat the multi-solver landscape as a *feature*: cross-solver validation is
    both the test harness and a user-facing capability.
 5. When the protocol is proven, implement `debye` — a clean-room FD solver —
@@ -94,13 +96,24 @@ sashimi/
 │   ├── dx.py                 # OpenDX read/write ↔ numpy + metadata
 │   ├── prep.py               # pdb2pqr subprocess wrapper (PDB → PQRData + warnings)
 │   ├── corpus.py             # golden-corpus manifest, build, verify
-│   ├── cli.py                # `sashimi corpus build|verify`
+│   ├── cli.py                # `sashimi corpus build|verify`, `validate`
+│   ├── backends.py           # registry: name, family, construction, self-description
+│   ├── capabilities.py       # what this installation can answer
+│   ├── validate.py           # cross-solver spread and accuracy tiers
+│   ├── analytic.py           # Born, Kirkwood and screened closed forms
+│   ├── analysis.py, field.py, invariants.py, artifacts.py, bench.py
+│   ├── constants.py, bem_stub.py
 │   ├── apbs/
 │   │   ├── backend.py        # ApbsSolver implements Solver
 │   │   ├── input.py          # grid + solvent → mg-auto input file (f-strings, no jinja)
 │   │   ├── grid.py           # physical grid intent → legal dime/cglen/fglen (psize logic)
+│   │   ├── options.py        # SurfaceModel → APBS srfm/srad keywords
 │   │   ├── run.py            # subprocess, tmpdir, timeout, stdout parsing, error mapping
 │   │   └── discover.py       # binary discovery: $SASHIMI_APBS_PATH → which() → conda env
+│   ├── debye/                # the clean-room finite-difference solver (§10)
+│   ├── delphi/               # DelPhi C++ and pyDelPhi backends
+│   ├── gb/                   # Generalized Born, in-process, no binary
+│   ├── tabipb/               # boundary-element backend (§4.1's acid test)
 │   └── mcp/server.py         # FastMCP tools
 ├── tests/
 │   ├── test_dx.py, test_pqr.py, test_grid.py, test_prep.py   # no binary required
@@ -179,16 +192,19 @@ APBS uses, in the binary-free tier.
 
 ### 4.2 Error taxonomy
 
-Current, in `errors.py` with APBS-specific subclasses under `sashimi.apbs`:
-`SashimiError` → `SolverNotFound` (`ApbsNotFound`), `GridTooLarge`,
-`ConvergenceFailure`, `SolverCrash` (`ApbsCrash`); `PreparationFailed` for
-pdb2pqr. Every message carries the actionable next step — `GridTooLarge` states
-the achievable resolution, `ApbsNotFound` carries the install one-liner.
+Current, in `errors.py`, with backend-specific subclasses under each backend
+package: `SashimiError` → `InputError` (`MalformedStructure`, `GridTooLarge`,
+`UnsupportedRequest`), `SolverError` (`ConvergenceFailure`, `SolverCrash` /
+`ApbsCrash`, `PreparationFailed` for pdb2pqr) and `BackendUnavailable`
+(`ApbsNotFound` and its siblings). Every message carries the actionable next
+step — `GridTooLarge` states the achievable resolution, `ApbsNotFound` carries
+the install one-liner.
 
-Target taxonomy distinguishes **input errors** (bad PQR, impossible grid),
-**solver errors** (non-zero exit, convergence failure, parsed from stderr), and
+The split distinguishes **input errors** (bad PQR, impossible grid), **solver
+errors** (non-zero exit, convergence failure, parsed from stderr), and
 **environment errors** (binary missing, wrong architecture). These are the three
-things a caller can act on differently.
+things a caller can act on differently, and phase 4 delivered them — §4.1
+item 4. The earlier `SolverNotFound` name is gone.
 
 ## 5. APBS backend specifics
 
@@ -237,9 +253,10 @@ writer exists so any backend's output can be exported for PyMOL/ChimeraX.
 
 **Binary discovery**: `$SASHIMI_APBS_PATH` wins, then `shutil.which("apbs")`,
 then an active conda environment as a courtesy. APBS is compiled, so no Python
-installer can provide it and `which` is the normal answer. `SolveResult.backend`
-records the resolved path alongside the version, so which binary produced a
-result is always recoverable.
+installer can provide it and `which` is the normal answer. `Provenance` records the resolved
+path and its sha256 alongside the version label — `binary_path`,
+`binary_sha256`, with `SolveResult.backend` carrying the label alone — so which
+binary produced a result is always recoverable.
 
 **Structure prep** (`prep.py`): subprocess wrapper around pdb2pqr 3.7.1 — its
 Python API is not a stability contract, and process isolation means a pdb2pqr
@@ -268,8 +285,9 @@ plus a short human-readable summary.
 `sashimi_prepare_structure(pdb_path, forcefield, ph, output_pqr)` — runs
 pdb2pqr; the returned warnings summary is the important part.
 
-`sashimi_solve(pqr_path, resolution, padding, ionic_strength, solute_dielectric,
-solvent_dielectric, compute_energy, surface_model, backend, output_dx)` — the
+`sashimi_solve(pqr_path, resolution, padding, mesh_density, ionic_strength,
+solute_dielectric, solvent_dielectric, compute_energy, surface_model, backend,
+prefer, output_dx)` — the
 workhorse. Returns energy when requested, backend provenance, and — for the
 backends that fill a volume — grid stats, the DX path and `resolution_relaxed`
 so a guardrail-relaxed grid is visible rather than silent.
@@ -470,9 +488,17 @@ work had accumulated in a tier whose contract said "seconds".
 
 | tier | cases | cumulative | who runs it |
 |---|---|---|---|
-| `fast` | 25 | 18 s | `pytest`, so the local edit-test loop stays a loop |
-| `standard` | 49 | 129 s | a dedicated CI step per push |
-| `full` | 64 | 270 s | `sashimi corpus verify --tier full`, on demand |
+| `fast` | 40 | 25 s | `pytest`, so the local edit-test loop stays a loop |
+| `standard` | 75 | 186 s | a dedicated CI step per push |
+| `full` | 100 | 443 s | `sashimi corpus verify --tier full`, on demand |
+
+(APBS 3.4.1, osx-arm64, idle machine, 2026-08-26. **The `full` figure is the
+only one that moves**: re-measured while 44 agents were running it read 1,708 s,
+a 3.9× swing, where `fast` and `standard` moved by under 5% — 24 s and 195 s on
+the same loaded run. The large cases are memory-bandwidth bound and the small
+ones are not, so §11's 1.9× contention effect is a floor for this tier rather
+than a bound. Quote the idle numbers and do not compare a loaded run against
+them.)
 
 Those are APBS's costs, so they are a statement about one backend. A
 boundary-element solver's cost is its mesh rather than its atom count, which is
@@ -483,24 +509,33 @@ The standard tier is its own CI step rather than a test, for the same reason
 CLAUDE.md treats a corpus diff as a real result change: it should read as a
 corpus failure, not as one failure among four hundred.
 
-The target was **50 cases**, and the corpus passed it — 64 now, after the
-widening below. The axis that mattered was what each case is checked against,
-not the count: 64 self-recorded cases would be 64 change-detectors and a 64-line
-diff every time the physics legitimately moved. What they are made of, by what
-can contradict them:
+The target was **50 cases**, and the corpus passed it — 100 now, after the
+widening below and the closed-form and salt arms of §12. The axis that mattered
+was what each case is checked against, not the count: 100 self-recorded cases
+would be 100 change-detectors and a 100-line diff every time the physics
+legitimately moved. What they are made of, by what can contradict them:
 
 | kind | cases | checked against |
 |---|---|---|
-| Closed form | 18 | Born and Kirkwood, to a measured per-case tolerance |
-| Real structures | 45 | recorded APBS, the invariants below, and — on the shared surface — a second and third backend |
-| Neither | 1 | recorded APBS alone: `born-ion-salt`, where two codes' ion conventions differ by 39% and pinning either would encode a choice as physics |
+| Closed form | 39 | Born and Kirkwood, to a measured per-case tolerance — 37 on the energy, and `born-ion-vdw-salt` and `born-ion-vdw-high-salt` on the field alone, where the screened form is a correction the energy cannot see |
+| Real structures | 58 | recorded APBS, the invariants below, and — on the shared surface — a second and third backend |
+| Neither | 3 | recordings alone: `born-ion-salt` against APBS only, `born-ion-molecular-salt` and `born-ion-molecular-high-salt` also against DelPhi and debye, because two codes' ion conventions differ by 39% and pinning either would encode a choice as physics |
 
-Nineteen structures from 2 to 8,279 atoms: methanol and methoxide, an acetic
-acid / acetate ionization pair, a lone aspartate residue, a 906-atom protein
-with a non-integer net charge, barnase and barstar, three lysozyme charge
-states, a protein-RNA complex, an FKBP apo/holo pair, carbonic anhydrase with
-and without its ligand, a 260-atom solute carrying +21.69 e, an actin monomer,
-and acetylcholinesterase.
+Twenty-one structures from 2 to 18,242 atoms: methanol and methoxide, an acetic
+acid / acetate ionization pair, a lone aspartate residue, an ALA-GLY dipeptide,
+a 906-atom protein with a non-integer net charge, barnase and barstar, three
+lysozyme charge states, a 2,065-atom protein recorded as `protein-rna`, an FKBP
+apo/holo pair, carbonic
+anhydrase with and without its ligand, a 260-atom solute carrying +21.69 e, an
+actin monomer, acetylcholinesterase, and serum albumin at 18,242 atoms.
+
+*One of those names is wrong and the recordings carry it. `protein-rna` is
+`apbs-examples/1a63.pqr`, whose residues are ALA through VAL and nothing else —
+there is no nucleic acid in it, so the corpus has never covered a protein-RNA
+complex and the claim that it did was inherited from the filename. The case is
+sound as a 2,065-atom protein and its numbers stand; only the label is false.
+Renaming it moves nine recordings and a fixture, so it is recorded here rather
+than done in passing.*
 
 **What the corpus can now assert that no single case could.** Solvation goes as
 q², so the ±1e Born pair must agree exactly and the +2e case must be exactly 4×.
@@ -516,9 +551,13 @@ held to 1e-4 rather than to something comfortable.
 
 Deliberately absent: `achbp` at 16,090 atoms, whose PQR is 1,068 KB against the
 repository's 1,024 KB large-file guard. Weakening a guard for one convenience
-case is a bad trade, and acetylcholinesterase at 8,279 atoms already exercises
-what it would have — the `max_points` cap relaxing 0.5 Å to 0.60/0.54/0.49 Å,
-which is why the largest case costs 15 s rather than an hour.
+case is a bad trade — though it is no longer the only route: `serum-albumin`'s
+PQR is committed gzipped as `tests/data/1ao6.pqr.gz` at 318 KB, which is what
+`achbp` would need. Acetylcholinesterase at 8,279 atoms already exercises what
+it would have — the `max_points` cap relaxing 0.5 Å to 0.60/0.54/0.49 Å, which
+is why 8,279 atoms costs 15 s rather than an hour. The largest case is now
+`serum-albumin` at 18,242 atoms, which asks for 1.0 Å and so never reaches the
+cap.
 
 **The third-party anchored tier was planned and then abandoned, on measurement.**
 APBS ships `examples/` with per-version reference values and independent UHBD
@@ -569,7 +608,7 @@ What this buys, in order of value:
 
 - **A regression net on our own code.** Generalized Born is a few hundred lines
   of numpy that will keep changing, and it had unit tests against closed forms
-  but no recorded answers on real structures. Five at first and nineteen now, in
+  but no recorded answers on real structures. Five at first and thirty-one now, in
   `tests/corpus/gb/`, and because there is no binary they are verified by
   `pytest` on every machine — the one part of the corpus that cannot skip.
 - **A golden for a backend CI compiles from source.** TABI-PB's mesher version
@@ -619,8 +658,10 @@ wide enough to hide the regressions the corpus exists to catch. The flavours
 remain interchangeable as *backends*; they are not interchangeable as *sources
 of a recorded number*.
 
-Split by measured cost like every other tier here: 11 cases per push (7.2 s),
-8 protein-scale on demand (83 s). DelPhi's cost is its cubic grid, which follows
+Split by measured cost like every other tier here: 27 cases per push and the
+remaining 31 on demand — the on-demand set is derived as the complement of the
+per-push list, so a recording added later joins it by existing rather than
+falling out of both. DelPhi's cost is its cubic grid, which follows
 the bounding box rather than the solute — `fas2-molecular` is 906 atoms and
 takes 11.5 s where `lysozyme-molecular` is 1,960 and takes 5.8 s.
 
@@ -635,10 +676,11 @@ the charge at protein scale.
 
 | tier | cases | before | after |
 |---|---|---|---|
-| Reference, finite difference (APBS) | 64 | 50 | 64 |
-| Reference, finite difference (DelPhi, C++) | 19 | 0 | 19 |
+| Reference, finite difference (APBS) | 100 | 50 | 64 |
+| Reference, finite difference (DelPhi, C++) | 58 | 0 | 19 |
 | Reference, boundary element (TABI-PB) | 6 | 1 | 6 |
-| Approximate, analytic (Generalized Born) | 19 | 5 | 19 |
+| Approximate, analytic (Generalized Born) | 31 | 5 | 19 |
+| Reference, finite difference (debye) | 58 | — | — |
 
 **The two reference-tier families agree to 1.0–1.6% on every case they share.**
 TABI-PB meshes a surface where APBS fills a volume, so they have no
@@ -738,7 +780,7 @@ one binary. A single `ci-ok` gate job fronts the matrix so the required
 status-check name survives matrix changes, which is what makes the matrix free
 to change.
 
-Two Linux legs run per push, and they cover different things:
+Three Linux legs run per push, and they cover different things:
 
 | leg | carries | what it is for |
 |---|---|---|
@@ -753,8 +795,8 @@ instances one at a time was treating a rule that was never enforced. Four bugs
 of that exact shape surfaced on 2026-08-12 alone. Until it existed, a bare
 checkout failed 56 tests and CI hid it by deselecting the markers instead, so
 "sashimi works with nothing installed" — the property `sashimi.gb` provides and
-protean's fallback path depends on — was never tested. It is now 452 passed,
-130 skipped, and the `none` leg holds it there.
+protean's fallback path depends on — was never tested. It is now **945 passed and 199 skipped** of a 1,144-test suite — CI's own
+`none` leg, 2026-08-26 — and that leg holds it there.
 
 What stops a skip-on-absence rule from hiding real breakage is not the hook: it
 is the "Verify the <backend> tier actually ran" steps, which assert each tier
@@ -926,7 +968,7 @@ trimmed reproducible builds exist partly for this.
 | Environment | Arch | APBS source | Role | Status |
 |---|---|---|---|---|
 | Mac local | osx-arm64 | conda-forge native | dev loop, protocol tests | in use |
-| GitHub Actions | linux-64 | conda-forge via micromamba | **full suite per push**, two legs: every backend, and APBS alone | in use |
+| GitHub Actions | linux-64 | conda-forge via micromamba | **full suite per push**, three legs: every backend, APBS alone, and nothing installed | in use |
 | GitHub Actions | osx-arm64 | conda-forge via micromamba | platform proof: main, weekly, on demand — 10x billing, see §7 | in use |
 | OrbStack container | linux/amd64 (Rosetta) | conda-forge | local linux reproduction when CI is too slow a loop | optional |
 | Proxmox Ubuntu VM | linux-64 native | conda-forge / owned build | stable timings for benchmarking | **deferred to phase 8** |
@@ -996,7 +1038,7 @@ Inspector: the tests drive a real `fastmcp.Client`, so schema generation,
 argument validation and error translation are all exercised. Exit criterion met
 end to end — PDB → PQR → 97³ map at 0.31 Å, −209.660 kJ/mol → sampled at
 coordinates → compared against a 1 M-salt solve (RMSD 0.093 kT/e, correlation
-0.99989). *Registration alongside mcpymol is still outstanding.*
+0.99989).
 
 **Phase 3 — Golden corpus. ✅** Five-case manifest with `sashimi corpus
 build|verify`, summaries checked in. Exit criterion demonstrated four ways: a
@@ -1068,8 +1110,8 @@ its place immediately — see below.
 Remaining: the PyPI release itself. The distribution name is settled —
 **`sashimi-electro`**, since plain `sashimi` belongs to an unrelated dormant
 library — so the install name and the import name differ and the README says
-so. Still outstanding: `authors`, `classifiers` and `urls` in the manifest, and
-nothing else: the manifest is complete and the server is registered.
+so. Still outstanding: nothing but the upload itself — the manifest is complete
+and the server is registered.
 
 **What the first real protein found.** Everything worked, and the numbers were
 meaningful — pdb2pqr gave hen lysozyme its textbook net charge of +8 e with zero
@@ -1092,8 +1134,8 @@ which nothing needs until debye makes a performance claim.
 
 **Phase 6 — Distribution.** Owned APBS build matrix (trimmed, mostly static,
 feedstock-derived); `linux-aarch64` build offered upstream; license-file audit
-of the vendored FETK/MALOC versions; platform wheels so `pip install sashimi`
-works end to end.
+of the vendored FETK/MALOC versions; platform wheels so
+`pip install sashimi-electro` works end to end.
 
 **Phase 7 — Multi-backend. ✅** Four backends, three solver families, one
 unchanged protocol.
@@ -1192,8 +1234,10 @@ check on every push, gated on `comparable_surface_models()` being non-empty, so
 it exercises itself only where a comparison is legitimate. CI builds the C++
 DelPhi from the Clemson tarball on the Linux leg — measured at 40 s under
 emulation on Ubuntu 24.04 with g++ 13.3, ~13 s natively, needing only boost
-headers — and runs pyDelPhi on macOS, so both flavours are covered per push and
-**both legs run the comparison**, since both share `molecular` with APBS. The
+headers — and installs pyDelPhi beside it on that same `full` leg, where a
+dedicated step re-runs the DelPhi tier against it. So **both flavours run the
+comparison per push, on Linux**, since both share `molecular` with APBS; the
+macOS leg carries pyDelPhi alone and runs on main, weekly and on demand. The
 Linux-built binary
 reproduces the Born ion to the last printed digit of the macOS arm64 build
 (−92.22 kT), which is the evidence that a build from that tarball is a
@@ -1324,8 +1368,11 @@ surface-model, equation and energy-term checks all still apply, and `equation`
 is read as linear for a boundary-element run because a nonlinear one is
 unrepresentable there rather than rejected.
 
-The corpus stays finite-difference by construction — every case records grid
-geometry — so `sashimi corpus --backend tabipb` refuses and points at `validate`.
+The corpus was still finite-difference by construction at this point — `Case`
+recorded grid geometry and `request()` built one request type — so
+`sashimi corpus --backend tabipb` refused and pointed at `validate`.
+`Case.system()` lifted that later: `tests/corpus/tabipb/` now pins six
+recordings, and the cases TABI-PB cannot mesh are reported `n/a` case by case.
 
 ### Accuracy tiers — what `validate` needed before a GB backend could exist
 
@@ -2132,7 +2179,7 @@ independent confirmation; it was the same measurement read twice.
 **The real finding underneath, which is new and unrecorded elsewhere: every
 shipped FD solver's near field swings 5–21× with grid phase.** That is far larger
 than any difference between the solvers, and it means **a field tolerance is only
-meaningful with a/h pinned**. The corpus's eight closed-form field cases each
+meaningful with a/h pinned**. The corpus's twenty closed-form field cases each
 measured their tolerance at whatever lattice that case's `GridSpec` happens to
 produce, so those tolerances silently inherit their case's phase — they are not
 wrong, but they are not transferable, and a case whose padding or resolution ever
@@ -2397,8 +2444,11 @@ M4a as written.** Do not read "M4a dropped" as "smoothed dielectrics are bad":
 Numbers a future attempt has to beat: **3.085%** worst-case near field, and
 **−0.107%** Born energy at 0.25 Å.
 
-*The knob was not landed, so those numbers need a recipe rather than a script —
-the repo has only `src/` and `tests/`, and `tests/` forbids `print`.* Replace
+*The knob landed on 2026-08-22 as `DebyeOptions.dielectric_smoothing`, but it is
+not this variant — the shipped ramp is linear in the union's own signed gap and
+harmonic-only — so those numbers still need a recipe rather than a knob setting.
+A generator for it belongs in `studies/`, which is exempt from the `print` rule
+`tests/` carries.* Replace
 `sashimi.debye.linear.dielectric_faces` (patch it **there**, not on
 `sashimi.debye.dielectric`, which `linear` imported from directly) with one that
 computes, per face-centre axis, `d = min_i(|x − c_i| − r_i)` saturated at `+band`
@@ -2733,8 +2783,8 @@ backends:**
 | mache | 8,279 | +27.583 | +30.243 | +31.124 | **0.881** | 3.541 |
 
 **12 of 12, and debye is strictly between the incumbents every time**, 2–8×
-closer to APBS than DelPhi is — across an apo/holo pair, a ligand complex, a
-protonation-state pair and protein-RNA, so it is not a globular-protein
+closer to APBS than DelPhi is — across an apo/holo pair, a ligand complex and a
+protonation-state pair, so it is not a single-structure
 coincidence. Above ~5,000 atoms `max_points` relaxes the lattice and the three
 codes relax differently, so those two rows compare across lattices.
 
@@ -3274,7 +3324,7 @@ spending its time on arithmetic.
 #### What landed: the query batched, the legality left alone
 
 Batched: the ball query, `_Bins.near_many`, which replaces 11,380 `near` calls
-per lattice with one per `RIM_BATCH` rims, and the projection that follows it.
+per lattice with one per `PAIR_BATCH` pairs, and the projection that follows it.
 Not batched: `_legal`, which keeps its per-rim broadcast for the measurement
 above. `near_many` returns its pairs grouped by query, so splitting them per rim
 is a `searchsorted` rather than a sort.
@@ -3289,11 +3339,13 @@ noise floor. And on the run that produced it the samples themselves spread only
 1.00×–1.01×, against the 1.36× spread the control saw under load — with the
 minima agreeing to 0.7% across both, which is the whole case for minimum-of-N.
 
-**`RIM_BATCH` is a memory bound and `tests/test_debye_m7.py` sweeps it** at one,
-three, ninety-seven and a hundred thousand rims, asserting the mask does not
-move by a single node. Two of those values force several batches and two force
-exactly one, and the test asserts *that* too — a sweep that never crossed the
-boundary would be unanimous for the wrong reason.
+**`PAIR_BATCH` is a memory bound and `tests/test_debye_m7.py` sweeps it** at
+one, five hundred, fifty thousand and 10^12 *pairs*, asserting the mask does not
+move by a single node. It is counted in pairs rather than rims because a rim
+count bounds nothing — the pairs a rim expands to scale with node density. The
+extremes have to land on opposite sides of the batching boundary and the test
+asserts *that* too — a sweep that never crossed it would be unanimous for the
+wrong reason.
 
 The tests were checked by mutation rather than by inspection, and one of the
 three mutations survived the first draft: relaxing the batched distance filter
@@ -3451,7 +3503,7 @@ minimum of 5, energies bit-identical.
 
 *The general form, and it is the same one M7 keeps producing:* a constant
 introduced to bound a resource must be measured against that resource. The
-`RIM_BATCH` sweep in `test_debye_m7.py` was real and caught a real mutation, but
+`PAIR_BATCH` sweep in `test_debye_m7.py` was real and caught a real mutation, but
 it swept the constant against the **answer** — which it could not change — and
 never against the **memory**, which was the only thing it existed to control. A
 guard aimed at the wrong axis is the same guard that guards nothing.
@@ -3480,11 +3532,11 @@ shipping it.**
 **2026-08-18.** Charlie set the working range at **250 to 1,200 residues**,
 which is the first time this roadmap has had one. Two things follow, and the
 first is that most of the performance work above was graded on a structure below
-the floor: **fas2 is 59 residues.**
+the floor: **fas2 is 61 residues.**
 
 #### Measured across the range, at 1.0 Å
 
-| backend | scaling | 59 aa | 161 aa | 382 aa | 538 aa | 1,156 aa |
+| backend | scaling | 61 aa | 130 aa | 375 aa | 540 aa | 1,156 aa |
 |---|---|---|---|---|---|---|
 | APBS | atoms^0.96 | 0.7 s | 2.4 s | 3.8 s | 5.5 s | **14.2 s** |
 | DelPhi C++ | atoms^1.60 | 0.4 s | 1.4 s | 5.8 s | 10.2 s | **53.8 s** |
@@ -3493,7 +3545,7 @@ the floor: **fas2 is 59 residues.**
 
 **The ordering inverts inside the working range, and that is the headline.**
 `coulombic` is protean's no-binary default and is 8.7× faster than debye at
-59 residues; by 1,156 it is **slower**, because it is O(points × atoms) and
+61 residues; by 1,156 it is **slower**, because it is O(points × atoms) and
 debye is near-linear. Measured crossover: **~1,290 residues**, with debye ahead
 of it at the top of the range already. So above roughly 1,200 residues debye is
 both faster than the default protean ships *and* the only one of the two solving
@@ -3518,7 +3570,7 @@ bit-identical at every level, on both structures tested.**
 
 | | level 0 | total, 4–5 levels |
 |---|---|---|
-| actin-monomer, 382 aa | 8.2× | **6.8×** |
+| actin-monomer, 375 aa | 8.2× | **6.8×** |
 | serum-albumin, 1,156 aa | 9.5× | **7.0×** |
 
 **`parallel=True` bought nothing** — 7.0× against 6.8× single-threaded — so this
@@ -3614,7 +3666,7 @@ comfortably inside the gap the argument uses but not inside every gap.
 
 Mean of two runs, each minimum-of-three, on this machine.
 
-| backend | CPU scaling | 59 aa | 161 aa | 382 aa | 538 aa | 1,156 aa |
+| backend | CPU scaling | 61 aa | 130 aa | 375 aa | 540 aa | 1,156 aa |
 |---|---|---|---|---|---|---|
 | APBS | atoms^0.93 | 0.7 | 2.3 | 3.7 | 5.1 | **12.4** |
 | DelPhi C++ | atoms^1.56 | 0.4 | 1.4 | 5.7 | 9.1 | **43.2** |
@@ -3972,7 +4024,7 @@ profile taken before the previous optimisation landed.*
 Per family, on the finest lattice at 1.0 Å, minimum of three CPU samples, masks
 identical node for node:
 
-| family | fas2, 59 aa | actin-monomer, 382 aa | serum albumin, 1,156 aa |
+| family | fas2, 61 aa | actin-monomer, 375 aa | serum albumin, 1,156 aa |
 |---|---|---|---|
 | radial | **25.4×** | **28.1×** | **28.4×** |
 | toroidal *(M7)* | 9.7× | 9.6× | 9.0× |
@@ -3988,8 +4040,8 @@ Whole solves, CPU seconds, energies identical to the last digit:
 
 | structure | pure numpy | M7 (rim only) | all three | overall |
 |---|---|---|---|---|
-| fas2, 59 aa | 5.94 | — | 3.10 | 1.92× |
-| actin-monomer, 382 aa | 54.70 | — | 30.16 | 1.81× |
+| fas2, 61 aa | 5.94 | — | 3.10 | 1.92× |
+| actin-monomer, 375 aa | 54.70 | — | 30.16 | 1.81× |
 | serum albumin, 1,156 aa | 149.33 | 113.12 | **86.09** | **1.73×** |
 
 So the two families added 1.31× on top of the rim loop's 1.32×, and the whole
@@ -4089,7 +4141,7 @@ re-measurement pointed at are compiled: `_neighbours`, `_rims` and
 | `_neighbours` | 14.6% | **93× / 116×** | the neighbour lists, element for element |
 | `_rims` | 12.6% | ~12× | origins, normals, radii and blocker sets |
 
-*(Two structures per row where two were measured: fas2 at 59 residues and
+*(Two structures per row where two were measured: fas2 at 61 residues and
 actin-monomer at 382.)*
 
 **End to end**, CPU seconds at 1.0 Å, interleaved and best of three, energies
@@ -4097,8 +4149,8 @@ identical to the last digit:
 
 | structure | pure numpy | with the extra | ratio | ratio after the port alone |
 |---|---|---|---|---|
-| fas2, 59 aa | 5.82 | 1.39 | **4.19×** | 1.92× |
-| actin-monomer, 382 aa | 62.52 | 18.86 | **3.31×** | 1.81× |
+| fas2, 61 aa | 5.82 | 1.39 | **4.19×** | 1.92× |
+| actin-monomer, 375 aa | 62.52 | 18.86 | **3.31×** | 1.81× |
 | serum albumin, 1,156 aa | 155.21 | **45.99** | **3.37×** | 1.73× |
 
 **The projection held this time, and that is worth recording after five that did
@@ -4252,6 +4304,13 @@ next. Neither is a call-overhead problem, so neither is another numba port:
 where APBS's near-linear exponent comes from. *That last clause is withdrawn;
 M9 below has the measurement. What debye lacks is not focusing's resolution
 but the cheap boundary condition focusing licenses.*
+
+*And the numba clause is withdrawn with it. `inside_union_of_spheres` was
+compiled the next day as `kernel.mark_union` (#62, 2026-08-22) — the last
+uncompiled loop in the geometry — taken because the window loop is bounded by
+the volume the spheres occupy rather than by call count, which is what made it
+worth porting after all. What is left after it is the multigrid solve, and that
+lever is algorithmic.*
 
 **And the quality gap is now much larger than the speed gap.** debye's pose
 dispersion is 1.416% against APBS's 0.764% at protein scale — unchanged by any
@@ -5071,8 +5130,9 @@ resolution reachable here, which is the ceiling on all of it.
 What would settle it is a reference that is not debye at all: a TABI-PB exterior
 field — `tabipb/vtk.py` already parses the surface `phi` and `dphi/dn` it needs
 and `SolveResult` drops them — or a Kirkwood potential for an off-centre charge,
-which `sashimi.analytic` does not have. Until one exists, the field axis is
-graded at `w ≥ 0.75` and *bounded* at `w = 0.5`.
+which `sashimi.analytic.kirkwood_potential` has provided since #85 and which has
+not yet been pointed at `w = 0.5`. Until it is, the field axis is graded at
+`w ≥ 0.75` and *bounded* at `w = 0.5`.
 
 ##### The two axes disagree on one fixture, and that is the finding
 
@@ -5138,7 +5198,8 @@ serve.
   A **TABI-PB exterior field** is the one genuinely independent option and
   `tabipb/vtk.py` already parses the surface `phi` and `dphi/dn` it needs —
   `SolveResult` drops them. A **Kirkwood potential** for an off-centre charge is
-  the other, and `sashimi.analytic` has the energy and not the potential. Either
+  the other, and `sashimi.analytic.kirkwood_potential` has been the field half
+  since #85 — so this lever is now available and unpulled, not absent. Either
   would decide `w = 0.5` in an afternoon.
 - **A scheme that is sub-cell at the interface and hard at the sample.** The
   degradation is monotone in `w` and vanishes as `w → 0` bit-identically, so the
@@ -6285,7 +6346,7 @@ outside the region where phase dominates.
 
 **Settled: on protean's working range debye is both the more accurate field and
 the faster one**, and it needs no binary, which was the whole charter. Below
-~244 residues `coulombic` is quicker — 0.51 s against 1.19 s on a 59-residue
+~244 residues `coulombic` is quicker — 0.51 s against 1.19 s on a 61-residue
 peptide — and that is the honest cost of the switch, at a scale where both are
 sub-second.
 
@@ -6628,6 +6689,11 @@ summarised here.
   protocol default that no shipped backend can honor is a smell, but the right
   value is solute-dependent and backend-specific, so raising it would be
   trading one arbitrary number for another. The backend names the cause today.
+  Confirmed a second time on 2026-08-26 and on a different solute: the
+  four-atom Born sphere of `studies/tabipb_units/` crashes at `sdens` 1.0 with
+  the same `stoul: no conversion`, so the floor is the mesher's and not the
+  dipeptide's. The error message is what makes this survivable rather than the
+  default being right.
 - ~~**Does `SMOOTHED_MOLECULAR` belong as the default?**~~ **No — resolved
   2026-08-12**, and the trigger was making the backend selectable: a default
   that three of four backends refuse is a default that hides the other three.
