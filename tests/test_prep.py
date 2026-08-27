@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from sashimi.analysis import _residue_groups
 from sashimi.prep import PreparationFailed, prepare_structure
 
 FIXTURE = Path(__file__).parent / "data" / "ala-gly.pdb"
@@ -85,3 +86,25 @@ def test_forcefield_choice_changes_the_charges(tmp_path):
         and (amber.pqr.radii == parse.pqr.radii).all()
         and (amber.pqr.charges == parse.pqr.charges).all()
     ), "AMBER and PARSE should not produce identical charges and radii"
+
+
+def test_chain_ids_survive_preparation(tmp_path):
+    """pdb2pqr drops chains by default, which is how two chains become one residue.
+
+    Information-only: the same run without `--keep-chain` produces identical
+    coordinates, charges, radii and labels, so nothing a solver reads moves.
+    """
+    source = FIXTURE.read_text().splitlines()
+    atoms = [line for line in source if line.startswith("ATOM")]
+    doubled = [*atoms, "TER"]
+    for line in atoms:
+        shifted = float(line[30:38]) + 25.0
+        doubled.append(f"{line[:21]}B{line[22:30]}{shifted:8.3f}{line[38:]}")
+    doubled += ["TER", "END"]
+
+    two_chain = tmp_path / "two-chain.pdb"
+    two_chain.write_text("\n".join(doubled) + "\n")
+
+    pqr = prepare_structure(two_chain).pqr
+    assert set(pqr.chains) == {"A", "B"}, "both chains must survive pdb2pqr"
+    assert len(_residue_groups(pqr)) == 4, "ALA 1 and GLY 2 in each of two chains"

@@ -12,7 +12,7 @@ binary-free tier.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -46,6 +46,8 @@ class ResiduePotential:
     value: float  # kT/e
     n_atoms: int
     n_sampled: int  # atoms whose probe points fell inside the grid
+    chain: str | None = None  # from the file, or None when it carried no chain
+    segment: int = 1  # 1-based numbering block; >1 only where numbering restarts
 
     def as_dict(self) -> Diagnostics:
         return {
@@ -53,6 +55,8 @@ class ResiduePotential:
             "mean_kT_e": self.value,
             "n_atoms": self.n_atoms,
             "n_sampled": self.n_sampled,
+            "chain": self.chain,
+            "segment": self.segment,
         }
 
 
@@ -226,9 +230,10 @@ def residue_potentials(
     at the atom centre: the potential at a point charge is dominated by its own
     self-energy, so atom-centre values report the atom, not its environment.
 
-    Residues are grouped by the structure's labels. Atoms whose probe points
-    fall outside the grid are skipped and counted, so a residue at the box edge
-    is visibly under-sampled rather than quietly wrong.
+    Residues are grouped as `_residue_groups` describes — by contiguous run,
+    because `"<resName> <resSeq>"` is not unique across chains. Atoms whose
+    probe points fall outside the grid are skipped and counted, so a residue at
+    the box edge is visibly under-sampled rather than quietly wrong.
     """
     if not structure.labels:
         raise ValueError(
@@ -243,32 +248,32 @@ def residue_potentials(
         [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]], dtype=float
     )
 
-    grouped: dict[str, list[float]] = {}
-    counts: dict[str, int] = {}
-    sampled_counts: dict[str, int] = {}
+    groups = _residue_groups(structure)
+    labels = _labelled(groups)
 
-    for index in range(structure.n_atoms):
-        residue = _residue_of(structure.labels[index])
-        counts[residue] = counts.get(residue, 0) + 1
-
-        offset = structure.radii[index] + probe_offset
-        probes = structure.coords[index] + directions * offset
-        values = grid.value_at(probes)
-        usable = values[~np.isnan(values)]
-        if usable.size == 0:
+    results = []
+    for group, label in zip(groups, labels, strict=True):
+        sampled = []
+        for index in group.indices:
+            offset = structure.radii[index] + probe_offset
+            probes = structure.coords[index] + directions * offset
+            values = grid.value_at(probes)
+            usable = values[~np.isnan(values)]
+            if usable.size == 0:
+                continue
+            sampled.append(float(usable.mean()))
+        if not sampled:
             continue
-        grouped.setdefault(residue, []).append(float(usable.mean()))
-        sampled_counts[residue] = sampled_counts.get(residue, 0) + 1
-
-    results = [
-        ResiduePotential(
-            label=residue,
-            value=float(np.mean(values)),
-            n_atoms=counts[residue],
-            n_sampled=sampled_counts.get(residue, 0),
+        results.append(
+            ResiduePotential(
+                label=label,
+                value=float(np.mean(sampled)),
+                n_atoms=len(group.indices),
+                n_sampled=len(sampled),
+                chain=group.chain,
+                segment=group.segment,
+            )
         )
-        for residue, values in grouped.items()
-    ]
     results.sort(key=lambda r: r.value)
     return results[:top] if top is not None else results
 
@@ -280,3 +285,116 @@ def _residue_of(label: str) -> str:
     """`"ALA 1 CA"` -> `"ALA 1"`. Labels without a sequence number pass through."""
     parts = label.split()
     return " ".join(parts[:_RESIDUE_FIELDS]) if len(parts) >= _RESIDUE_FIELDS else label
+
+
+def _sequence_number(residue: str) -> int | None:
+    """The `58` in `"SER 58"`, or None when it is not a plain integer."""
+    parts = residue.split()
+    if len(parts) < _RESIDUE_FIELDS:
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None  # insertion codes ("58A") and other writers' conventions
+
+
+@dataclass
+class _Group:
+    """One residue's atoms, as a contiguous run of the file.
+
+    Unfrozen, unlike everything else here: it is filled in as the run is walked.
+    """
+
+    residue: str  # "SER 58"
+    chain: str | None
+    segment: int
+    indices: list[int] = field(default_factory=list)
+
+
+def _residue_groups(structure: PQRData) -> list[_Group]:
+    """Partition atoms into residues, without assuming a chain column exists.
+
+    `"<resName> <resSeq>"` is **not** a residue identifier. Residue 58 of chain
+    A and residue 58 of chain B share it, and on serum albumin that collapsed
+    1,156 residues to 578 keys, the worst averaging 22 atoms spread over 115 A
+    and reporting one number for them.
+
+    The chain would settle it, but it is routinely absent — pdb2pqr drops it
+    unless asked, so the structures this tool is pointed at are exactly the ones
+    that cannot be keyed that way. What holds regardless is that **one residue's
+    atoms are contiguous in the file**, so a new residue begins wherever
+    `(resName, resSeq, chain)` differs from the atom before it. That needs no
+    chain IDs and invents none.
+
+    Where the file does carry chains they are reported as read. Where it does
+    not, a *segment* ordinal stands in: 1-based, incremented at each numbering
+    restart. It is an inference from a `resSeq` that failed to advance, not a
+    chain ID, and the label spells it `#2` rather than `B` so it cannot be
+    mistaken for one. On every multi-chain structure in `tests/data` the two
+    agree on the partition; the run is the primitive and the segment is only how
+    the group is named.
+
+    The boundary: two *single-residue* chains, adjacent in the file, identically
+    numbered and unnamed. The run boundary then coincides with nothing, and only
+    the coordinates say there are two — which is why `prepare_structure` asks
+    pdb2pqr to keep the chain rather than relying on this. Splitting on distance
+    instead would mean choosing a threshold the file gives no basis for.
+    """
+    chains = structure.chains
+    groups: list[_Group] = []
+    previous: tuple[str, str | None] | None = None
+    previous_number: int | None = None
+    segment = 1
+
+    for index in range(structure.n_atoms):
+        residue = _residue_of(structure.labels[index])
+        chain = (chains[index] or None) if chains else None
+        number = _sequence_number(residue)
+
+        restarted = previous is not None and (
+            chain != previous[1]
+            or (number is not None and previous_number is not None and number < previous_number)
+        )
+        if restarted:
+            segment += 1
+        if (residue, chain) != previous:
+            groups.append(_Group(residue=residue, chain=chain, segment=segment))
+            previous = (residue, chain)
+        groups[-1].indices.append(index)
+        if number is not None:
+            previous_number = number
+
+    return groups
+
+
+def _labelled(groups: list[_Group]) -> list[str]:
+    """Name each group so that no two residues answer to the same string.
+
+    The prefix appears only where there is something to disambiguate. A
+    single-chain structure keeps the bare `"SER 58"` it has always reported —
+    whether or not the file names its chain, since naming the one chain every
+    atom belongs to distinguishes nothing and would churn every label a caller
+    has recorded. `ResiduePotential.chain` still reports it.
+    """
+    multi_chain = len({g.chain for g in groups}) > 1
+    multi_segment = len({g.segment for g in groups}) > 1
+    labels = []
+    for group in groups:
+        if multi_chain and group.chain is not None:
+            labels.append(f"{group.chain}:{group.residue}")
+        elif multi_segment:
+            labels.append(f"#{group.segment}:{group.residue}")
+        else:
+            labels.append(group.residue)
+
+    # A file whose chains interleave can still collide — the same chain and the
+    # same number twice, in two runs. Rare enough that no structure in the repo
+    # does it, possible enough that the alternative is two rows claiming to be
+    # the same residue.
+    seen: dict[str, int] = {}
+    duplicated = {label for label in labels if labels.count(label) > 1}
+    for position, label in enumerate(labels):
+        if label in duplicated:
+            seen[label] = seen.get(label, 0) + 1
+            labels[position] = f"{label}~{seen[label]}"
+    return labels

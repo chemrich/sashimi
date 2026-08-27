@@ -25,6 +25,7 @@ _RECORDS = ("ATOM", "HETATM")
 # <record> <serial> <atom> <res> [chain] <resSeq> x y z q r
 _MIN_FIELDS = 9  # the same line without a chain ID
 _FIELDS_WITH_RESSEQ = 10
+_FIELDS_WITH_CHAIN = 11
 
 
 def parse_pqr(text: str) -> PQRData:
@@ -32,6 +33,7 @@ def parse_pqr(text: str) -> PQRData:
     charges: list[float] = []
     radii: list[float] = []
     labels: list[str] = []
+    chains: list[str] = []
 
     for lineno, raw in enumerate(text.splitlines(), start=1):
         if not raw.startswith(_RECORDS):
@@ -55,6 +57,11 @@ def parse_pqr(text: str) -> PQRData:
         atom_name, res_name = tok[2], tok[3]
         res_seq = tok[-6] if len(tok) >= _FIELDS_WITH_RESSEQ else ""
         labels.append(f"{res_name} {res_seq} {atom_name}".strip())
+        # Same tail-relative reasoning as `res_seq`: the chain sits one field
+        # further left, and only exists when the line carries one at all. It
+        # stays out of the label because `format_pqr` splits that back into
+        # exactly three names.
+        chains.append(tok[-7] if len(tok) >= _FIELDS_WITH_CHAIN else "")
 
     if not coords:
         raise MalformedStructure("no ATOM/HETATM records found")
@@ -64,6 +71,9 @@ def parse_pqr(text: str) -> PQRData:
         charges=np.array(charges, dtype=float),
         radii=np.array(radii, dtype=float),
         labels=tuple(labels),
+        # All-empty means the file had no chain column; carrying a tuple of
+        # empty strings would make "absent" indistinguishable from "blank".
+        chains=tuple(chains) if any(chains) else (),
     )
 
 
@@ -109,6 +119,12 @@ def format_pqr(pqr: PQRData) -> str:
 
     Truncation loses a character of a name nothing reads. Overflow loses the
     charges and radii, which are the only things that matter.
+
+    `chains` is deliberately **not** written, for the same reason. A chain ID
+    occupies its own column between the residue name and the sequence number, so
+    emitting one shifts every field after it — the exact failure above, on every
+    structure that has chains rather than only four-character residue names. No
+    backend reads the chain, so writing it could only cost.
     """
     lines = []
     for i in range(pqr.n_atoms):

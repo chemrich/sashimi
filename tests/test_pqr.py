@@ -123,3 +123,44 @@ class TestFixedColumns:
         assert recovered.n_atoms == 1
         np.testing.assert_allclose(recovered.charges, original.charges)
         np.testing.assert_allclose(recovered.radii, original.radii)
+
+
+def test_chain_id_is_carried_when_the_file_has_one():
+    """It has to live somewhere other than the label — see `format_pqr`."""
+    pqr = parse_pqr(WITH_CHAIN)
+    assert pqr.chains == ("A", "A")
+    assert pqr.labels == ("MET 1 N", "MET 1 CA"), "the label keeps its three names"
+
+
+def test_a_file_without_a_chain_column_reports_no_chains():
+    """Absent, not blank: an empty tuple says the file never named a chain."""
+    assert parse_pqr(BORN_ION).chains == ()
+
+
+def test_the_chain_is_never_written_back():
+    """A chain column would shift every field after it, which is the DelPhi bug.
+
+    `format_pqr` writes fixed columns for readers that count them, so the
+    serialised form must not gain a field just because the source had one.
+    """
+    with_chain = parse_pqr(WITH_CHAIN)
+    without = PQRData(
+        coords=with_chain.coords,
+        charges=with_chain.charges,
+        radii=with_chain.radii,
+        labels=with_chain.labels,
+    )
+    assert format_pqr(with_chain) == format_pqr(without)
+    for line in format_pqr(with_chain).splitlines():
+        if line.startswith("ATOM"):
+            assert len(line.split()) == 10, line
+
+
+def test_chains_must_cover_every_atom():
+    with pytest.raises(ValueError, match="chains must cover every atom"):
+        PQRData(
+            coords=np.zeros((2, 3)),
+            charges=np.array([1.0, 1.0]),
+            radii=np.array([1.5, 1.5]),
+            chains=("A",),
+        )
