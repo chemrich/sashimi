@@ -624,6 +624,14 @@ def sashimi_residue_potentials(
     Answers "which residues sit in negative potential" — the question behind
     cation binding, electrostatic steering and charge-complementarity work,
     without moving a grid anywhere.
+
+    On a multi-chain structure the residue name is prefixed, because `SER 58`
+    alone names two different residues. `A:SER 58` is a chain ID the file
+    stated. `#2:SER 58` means the file named no chains and the second block is
+    an inference from a numbering restart — treat it as "some other chain",
+    not as a chain called 2. Prepare structures through
+    `sashimi_prepare_structure`, which keeps the chain IDs that pdb2pqr would
+    otherwise drop.
     """
     grid = _load_grid(dx_path)
     try:

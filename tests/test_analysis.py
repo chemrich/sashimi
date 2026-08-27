@@ -6,16 +6,21 @@ agent actually asks are cheap and testable anywhere.
 """
 
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from sashimi.analysis import (
+    _labelled,
+    _residue_groups,
+    _residue_of,
     _solute_mask,
     potential_extrema,
     potential_in_sphere,
     residue_potentials,
 )
+from sashimi.pqr import read_pqr
 from sashimi.protocol import PotentialGrid, PQRData
 
 SPACING = 1.0
@@ -291,3 +296,154 @@ class TestSoluteMask:
             f"masking took {elapsed:.1f}s for {n_atoms} atoms; the per-atom bounding "
             "box has probably been lost and this is O(atoms x grid points) again"
         )
+
+
+class TestResidueGrouping:
+    """`"<resName> <resSeq>"` is not a residue identifier, and real files prove it."""
+
+    @staticmethod
+    def albumin() -> PQRData:
+        return read_pqr(Path(__file__).parent / "data" / "1ao6.pqr.gz")
+
+    def test_a_two_chain_protein_is_not_collapsed_to_one(self):
+        """Serum albumin is a dimer: 1,156 residues, not 578.
+
+        The file carries no chain column — pdb2pqr dropped it — so this is the
+        case a chain-aware fix alone would not have touched.
+        """
+        structure = self.albumin()
+        assert structure.chains == (), "the fixture's premise: no chain column"
+
+        merged = {_residue_of(label) for label in structure.labels}
+        assert len(merged) == 578, "the defect, kept as the thing being fixed"
+        assert len(_residue_groups(structure)) == 1156
+
+    def test_no_residue_spans_more_than_a_residue(self):
+        """The observable behind the count: 22 atoms over 115 A reported as one."""
+        structure = self.albumin()
+        worst = 0.0
+        for group in _residue_groups(structure):
+            coords = structure.coords[group.indices]
+            if len(coords) < 2:
+                continue
+            spread = float(np.linalg.norm(coords[:, None, :] - coords[None, :, :], axis=-1).max())
+            worst = max(worst, spread)
+        assert worst < 15.0, f"a group spans {worst:.1f} A, so it is not one residue"
+
+    def test_every_residue_gets_its_own_name(self):
+        structure = self.albumin()
+        labels = _labelled(_residue_groups(structure))
+        assert len(set(labels)) == len(labels) == 1156
+
+    def test_a_synthesised_segment_is_not_dressed_up_as_a_chain(self):
+        """The file names no chains, so neither may we — `#2` is visibly an inference."""
+        groups = _residue_groups(self.albumin())
+        labels = _labelled(groups)
+        assert all(group.chain is None for group in groups)
+        assert {label.split(":")[0] for label in labels} == {"#1", "#2"}
+
+    def test_a_single_chain_structure_keeps_the_labels_it_had(self):
+        """Nothing to disambiguate, so nothing changes — recordings depend on this."""
+        structure = read_pqr(Path(__file__).parent / "data" / "apbs-examples" / "fas2.pqr")
+        labels = _labelled(_residue_groups(structure))
+        assert labels[:3] == ["NTE 544", "THR 544", "MET 545"]
+        assert all(":" not in label for label in labels)
+
+    def test_a_named_chain_is_reported_as_read(self):
+        structure = read_pqr(Path(__file__).parent / "data" / "apbs-examples" / "barnase.pqr")
+        groups = _residue_groups(structure)
+        assert {group.chain for group in groups} == {"A", "B"}
+        assert _labelled(groups)[0] == "B:ALA 1"
+
+    def test_naming_the_only_chain_disambiguates_nothing(self):
+        """barstar is all chain D. Prefixing every label with it is pure churn."""
+        structure = read_pqr(Path(__file__).parent / "data" / "apbs-examples" / "barstar.pqr")
+        groups = _residue_groups(structure)
+        assert {group.chain for group in groups} == {"D"}
+        assert _labelled(groups)[0] == "LYS 1"
+
+    def test_interleaved_chains_cannot_share_a_label(self):
+        """A...B...A with reused numbering: the last resort suffix, exercised."""
+        interleaved = PQRData(
+            coords=np.array([[0.0, 0, 0], [20.0, 0, 0], [40.0, 0, 0]]),
+            charges=np.zeros(3),
+            radii=np.full(3, 1.5),
+            labels=("ALA 1 N", "ALA 1 N", "ALA 1 N"),
+            chains=("A", "B", "A"),
+        )
+        labels = _labelled(_residue_groups(interleaved))
+        assert len(set(labels)) == 3, labels
+        assert labels == ["A:ALA 1~1", "B:ALA 1", "A:ALA 1~2"]
+
+
+class TestResiduePotentialsAcrossChains:
+    @staticmethod
+    def two_chains() -> PQRData:
+        """Two copies of residues 1-2, 11 A apart, with no chain column."""
+        return PQRData(
+            coords=np.array(
+                [
+                    [4.0, 10.0, 10.0],
+                    [5.0, 10.0, 10.0],
+                    [6.0, 10.0, 10.0],
+                    [15.0, 10.0, 10.0],
+                    [16.0, 10.0, 10.0],
+                    [17.0, 10.0, 10.0],
+                ]
+            ),
+            charges=np.array([0.1, -0.1, 0.2, 0.1, -0.1, 0.2]),
+            radii=np.full(6, 1.5),
+            labels=("ALA 1 N", "ALA 1 CA", "GLY 2 N", "ALA 1 N", "ALA 1 CA", "GLY 2 N"),
+        )
+
+    def test_the_same_numbers_in_two_chains_are_four_residues(self):
+        grid = grid_with_peaks({(4, 10, 10): -6.0, (16, 10, 10): 6.0})
+        results = residue_potentials(grid, self.two_chains())
+        assert len(results) == 4
+        assert len({r.label for r in results}) == 4
+        assert {r.segment for r in results} == {1, 2}
+
+    def test_the_chain_reaches_the_caller_when_the_file_has_one(self):
+        structure = self.two_chains()
+        named = PQRData(
+            coords=structure.coords,
+            charges=structure.charges,
+            radii=structure.radii,
+            labels=structure.labels,
+            chains=("A", "A", "A", "B", "B", "B"),
+        )
+        grid = grid_with_peaks({(4, 10, 10): -6.0, (16, 10, 10): 6.0})
+        results = residue_potentials(grid, named)
+        assert {r.chain for r in results} == {"A", "B"}
+        assert {r.as_dict()["residue"] for r in results} == {
+            "A:ALA 1",
+            "A:GLY 2",
+            "B:ALA 1",
+            "B:GLY 2",
+        }
+
+    def test_two_single_residue_chains_are_indistinguishable_without_a_chain_column(self):
+        """The limit of the fix, asserted so it is a known boundary and not a surprise.
+
+        One residue per chain, adjacent in the file, identically numbered: the
+        run boundary coincides with nothing. Only the coordinates say there are
+        two, and grouping on distance would invent a threshold the file does not
+        justify. `--keep-chain` is what actually closes this case.
+        """
+        ambiguous = PQRData(
+            coords=np.array([[4.0, 10.0, 10.0], [16.0, 10.0, 10.0]]),
+            charges=np.array([0.1, 0.1]),
+            radii=np.full(2, 1.5),
+            labels=("ALA 1 N", "ALA 1 N"),
+        )
+        grid = grid_with_peaks({(4, 10, 10): -6.0, (16, 10, 10): 6.0})
+        assert len(residue_potentials(grid, ambiguous)) == 1
+
+        named = PQRData(
+            coords=ambiguous.coords,
+            charges=ambiguous.charges,
+            radii=ambiguous.radii,
+            labels=ambiguous.labels,
+            chains=("A", "B"),
+        )
+        assert len(residue_potentials(grid, named)) == 2

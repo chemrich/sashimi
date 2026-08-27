@@ -146,6 +146,12 @@ class PQRData:
     charges: FloatArray  # (N,), e
     radii: FloatArray  # (N,), A
     labels: tuple[str, ...] = ()  # optional per-atom "resName resSeq atomName"
+    # Per-atom chain ID, separate from `labels` rather than a fourth field in
+    # them. `format_pqr` recovers the three names by splitting the label and
+    # falls back to placeholders on any other count, so widening the label would
+    # silently rename every atom it writes. Empty when the PQR carried no chain
+    # column, which is most of them — pdb2pqr drops chains unless asked.
+    chains: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         n = len(self.charges)
@@ -155,6 +161,8 @@ class PQRData:
             raise ValueError(f"radii must be (N,) to match {n} charges, got {self.radii.shape}")
         if n == 0:
             raise ValueError("PQRData needs at least one atom")
+        if self.chains and len(self.chains) != n:
+            raise ValueError(f"chains must cover every atom: got {len(self.chains)} for {n} atoms")
 
     @property
     def n_atoms(self) -> int:

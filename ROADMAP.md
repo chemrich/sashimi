@@ -6622,6 +6622,64 @@ a `sashimi.tabipb.field` module carrying the expression above. The parse side is
 already done and already tested. `vtk.py` needs nothing: `parse_vtk` forwards
 `normal_derivative` today and `tests/test_tabipb.py` already asserts it survives.
 
+### `residue_potentials` reported one number for two chains
+
+**2026-08-26.** `sashimi.analysis.residue_potentials` is one of exactly two
+things phase 9's consumer reads, and on any multi-chain structure it was
+answering about a residue that does not exist.
+
+The key was `"<resName> <resSeq>"`, taken from the first two fields of the
+per-atom label. That is not a residue identifier: residue 58 of chain A and
+residue 58 of chain B share it. On `tests/data/1ao6.pqr.gz` — serum albumin,
+18,242 atoms, a dimer — **578 keys stood for 1,156 residues**, 576 of them
+merging atoms more than 15 A apart. The worst, `SER 58`, averaged 22 atoms
+spread over **115.1 A** and reported the mean as one residue's environment.
+
+**The chain column is the obvious fix and it is not sufficient**, because the
+files this tool is pointed at are the ones that lack it. `pqr.py` reads fields
+from the end of the line precisely because the chain is optional, and 1ao6 has
+ten fields and two chains. Worse, `prepare_structure` was *creating* that
+shape: **pdb2pqr drops the chain ID unless given `--keep-chain`**, which sashimi
+never passed, so every structure prepared through the MCP server arrived
+unable to distinguish its own chains.
+
+So the fix is in three parts, and each is separately verified by reverting it:
+
+1. `prepare_structure` passes `--keep-chain`. Information-only — on a two-chain
+   fixture the coordinates, charges, radii, labels and `format_pqr` output are
+   bit-identical with and without it.
+2. `PQRData` carries `chains`, a **separate** optional tuple rather than a
+   fourth field in `labels`. `format_pqr` recovers the three names by splitting
+   the label and falls back to `UNK`/`X` on any other count, so widening the
+   label would have silently renamed every atom it writes — and the chain is
+   still never *written*, because a chain column shifts every field after it,
+   which is the fixed-column failure that cost DelPhi a year of wrong acetate
+   charges.
+3. Grouping is by **contiguous run** of `(resName, resSeq, chain)`. One
+   residue's atoms are contiguous in a PQR, so a new residue begins where that
+   tuple changes. This needs no chain IDs and invents none.
+
+Where the file names no chains, the label carries a synthesized *segment*
+ordinal — `#2:SER 58`, incremented at each numbering restart — and the `#`
+is deliberate: it is an inference from a `resSeq` that failed to advance, not a
+chain ID, and must not be dressed up as one. On every multi-chain structure in
+`tests/data` the segment and the run agree on the partition; the run is the
+primitive and the segment is only how a group is named. A single-chain structure
+keeps the bare labels it always reported, **including when the file names its
+one chain** — prefixing there distinguishes nothing and would churn every
+recording, notably `test_debye_m6.py`'s residue ranking on `fas2`.
+
+**The boundary, asserted rather than discovered later:** two single-residue
+chains, adjacent in the file, identically numbered and unnamed. The run boundary
+then coincides with nothing and only the coordinates say there are two.
+Splitting on distance instead would mean choosing a threshold the file gives no
+basis for, so item 1 is what closes that case.
+
+Second-order finding, not acted on: `ion-protein-complex.pqr` is a
+coarse-grained two-chain model with the same disease at 260 atoms, and
+`fas2.pqr` numbers `NTE 544` and `THR 544` as distinct residues — both handled
+by the run rule for free.
+
 ## 13. Risks and mitigations
 
 The conda-forge APBS package going unbuildable on future platforms is the

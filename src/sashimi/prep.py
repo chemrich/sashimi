@@ -129,7 +129,15 @@ def prepare_structure(
         # `-m pdb2pqr` rather than a PATH lookup: it pins execution to the same
         # interpreter this package is installed into, so a stray pdb2pqr on
         # PATH cannot answer instead.
-        argv = [sys.executable, "-m", "pdb2pqr", f"--ff={forcefield}"]
+        #
+        # `--keep-chain` because pdb2pqr defaults to dropping the chain ID, and
+        # a multi-chain assembly written without one is not merely less
+        # informative — residue 58 of chain A and residue 58 of chain B become
+        # indistinguishable, which is how `residue_potentials` came to report
+        # one number for two residues 115 A apart. It is information-only: on a
+        # two-chain fixture the coordinates, charges, radii, labels and
+        # `format_pqr` output are all bit-identical with and without it.
+        argv = [sys.executable, "-m", "pdb2pqr", f"--ff={forcefield}", "--keep-chain"]
         if drop_water:
             argv.append("--drop-water")
         if ph is not None:
