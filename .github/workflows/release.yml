@@ -1,0 +1,109 @@
+name: Release
+
+# Cutting a release is `git tag v0.1.0 && git push origin v0.1.0` on a green
+# main. The tag is the trigger and the tag is the version — the build refuses
+# to run if it disagrees with `pyproject.toml`, because PyPI will not let a
+# version number be reused and a mismatch is not fixable after the fact.
+#
+# `workflow_dispatch` publishes to TestPyPI instead, which is how the pipeline
+# is exercised without spending a version number.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check the distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      # The tag says one version and pyproject.toml says another exactly once
+      # per project, and it is always on the release everyone is watching.
+      # Plain python3 rather than uv run: this must be able to fail before an
+      # environment exists.
+      - name: The tag must be the version
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          tagged="${GITHUB_REF_NAME#v}"
+          declared="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          echo "tag=${tagged} pyproject=${declared}"
+          if [ "${tagged}" != "${declared}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} declares ${tagged}, pyproject.toml declares ${declared}"
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+
+      # An editable install proves nothing about a wheel — it would pass with a
+      # `src/` layout the wheel does not actually ship. This imports the built
+      # artifact in a clean interpreter with no project on the path.
+      - name: The built wheel imports on its own
+        run: |
+          set -euo pipefail
+          uv run --isolated --no-project --with "$(echo dist/*.whl)" python -c "
+          import sashimi, sashimi.analysis, sashimi.debye, sashimi.mcp.server
+          from sashimi.protocol import PQRData
+          print('import ok')"
+
+      # Not a second full suite — the tag is cut from a main CI has already run
+      # in full. This is the binary-free tier, which is the part that can break
+      # by packaging rather than by physics.
+      - name: Test
+        run: |
+          uv sync --frozen --all-groups
+          uv run --frozen pytest -q -m "not apbs and not delphi and not tabipb"
+
+      - name: Check the distribution metadata
+        run: uv run --frozen --with twine twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distribution
+          path: dist/
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    # A GitHub environment, so the trusted-publishing claim is scoped to it and
+    # a release can carry a required reviewer without changing this file.
+    environment:
+      name: ${{ github.event_name == 'push' && 'pypi' || inputs.target }}
+    permissions:
+      # Trusted Publishing: PyPI verifies a short-lived OIDC token minted for
+      # this workflow instead of a long-lived API token living in repository
+      # secrets. Nothing to leak and nothing to rotate.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distribution
+          path: dist/
+
+      - name: Publish to PyPI
+        if: github.event_name == 'push' || inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

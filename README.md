@@ -3,16 +3,15 @@
 *Thinly sliced Poisson: a maintained wrapper around APBS for biomolecular electrostatics.*
 
 > [!WARNING]
-> **This is a work in progress. It is not ready to be used, and it is not
-> ready to be depended on.**
+> **This is a work in progress. It is not ready to be depended on.**
 >
-> The repository is public so the work can be *read*, not so it can be
-> installed. Concretely:
+> `sashimi-electro` 0.1.0 is on PyPI so the work can be *installed and read*,
+> not because it is finished. Concretely:
 >
-> - **Nothing is released.** There is no package on PyPI, no version number
->   that means anything, no changelog and no support.
+> - **This is an alpha.** 0.1.0 is the first upload, there is no support, and
+>   [the changelog](CHANGELOG.md) starts there.
 > - **Interfaces change without notice.** There is no deprecation period and no
->   compatibility promise between any two commits.
+>   compatibility promise between any two releases.
 > - **The numbers in here are research notes, not validated results.** They are
 >   measured and they are recorded honestly — including the ones that turned out
 >   to be wrong, which are left in with their corrections — but none of it has
@@ -25,10 +24,9 @@
 > starting point you have adopted rather than a dependency you can expect to be
 > maintained for you.
 
-The name it will be distributed under is **`sashimi-electro`**, imported as
-**`sashimi`** — the plain `sashimi` name on PyPI belongs to an unrelated,
-dormant library. Neither is published yet; **install it by cloning this
-repository**, as below.
+It is distributed as **`sashimi-electro`** and imported as **`sashimi`** — the
+plain `sashimi` name on PyPI belongs to an unrelated, dormant library, so the
+install name and the import name differ.
 
 Computes electrostatic potential maps and polar solvation energies from charged
 structures, using the [APBS](https://www.poissonboltzmann.org/) 3.4.1 binary
@@ -60,8 +58,20 @@ request a backend cannot honor is unrepresentable rather than merely rejected.
 
 ## Install
 
-Two steps, because APBS is a compiled binary that no Python installer can
-provide. Install it from your system package manager first:
+```sh
+pip install sashimi-electro          # or: uv add sashimi-electro
+```
+
+That is the whole install for **`debye`**, the built-in solver, along with
+pdb2pqr and the MCP server — all pure Python, nothing to fetch by hand. If
+`debye` is the backend you want, stop here and read
+["A faster debye"](#if-you-are-doing-real-electrostatics-with-debye-install-the-extra)
+below.
+
+**APBS is a second step, because it is a compiled binary that no Python
+installer can provide.** Platform wheels that would collapse this to one command
+are phase 6 of [ROADMAP.md](ROADMAP.md) and are not built yet. Install it from
+your system package manager:
 
 ```sh
 # Recommended — same channel and build CI tests against, linux-64 and osx-arm64
@@ -88,16 +98,16 @@ writes its grid as `potential-PE0.dx`, where the Homebrew and conda-forge
 builds write `potential.dx`. Same version, same input, same contents.
 `sashimi.apbs.run.find_potential` accepts either.
 
-Then everything else, which is pure Python:
+`SASHIMI_APBS_PATH` overrides binary discovery; otherwise `which apbs` wins,
+with an active conda environment as a fallback.
+
+### From a clone, to work on it
 
 ```sh
 uv sync                       # creates .venv from uv.lock
 uv run pytest                 # full suite
 uv run pytest -m "not apbs"   # skips everything needing the binary
 ```
-
-`SASHIMI_APBS_PATH` overrides binary discovery; otherwise `which apbs` wins,
-with an active conda environment as a fallback.
 
 ### If you are doing real electrostatics with `debye`, install the extra
 
@@ -106,7 +116,7 @@ times faster with `sashimi-electro[fast]`, and you probably want it if you are
 working on proteins rather than peptides.**
 
 ```sh
-uv sync --all-extras
+pip install 'sashimi-electro[fast]'   # or, from a clone: uv sync --all-extras
 ```
 
 **It is an extra rather than a dependency because it is large: ~145 MB**, since
@@ -302,7 +312,7 @@ See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
 ## Status
 
-Phases 0–4 and 7 are done, and phase 5 needs only its PyPI release. The core
+Phases 0–4, 5 and 7 are done — 0.1.0 is the phase 5 release. The core
 library is validated against the closed-form Born ion, converging monotonically
 as the grid refines (0.62% → 0.11% → 0.02% at 0.41 / 0.20 / 0.16 Å spacing).
 
@@ -480,6 +490,6 @@ and `bench` exits non-zero when they differ. An answer-preserving change is held
 to *bit*-identical, not to a tolerance — which is the bar the batched surface
 work in M7 has to meet.
 
-Not yet released to PyPI. See [ROADMAP.md](ROADMAP.md) for where this is
-heading — it is the single planning document, covering the protocol, the
+Released as `sashimi-electro` 0.1.0. See [ROADMAP.md](ROADMAP.md) for where
+this is heading — it is the single planning document, covering the protocol, the
 multi-backend future, distribution and `debye`.
