@@ -820,6 +820,155 @@ APBS 3.4.1, which is a fact about a third party that changes rarely, and every
 commit is exercised on osx-arm64 locally before it is pushed. It still runs on
 main after a merge, weekly against a moving conda-forge, and on demand.
 
+### What a survey of the corpus found, and what it cost to learn
+
+**2026-08-26/27.** A survey of the corpus against its own purpose proposed eight
+additions. Six were attacked adversarially and **one survived**. The kills are
+worth more than the list would have been, because each carries a measurement
+that would be expensive to rediscover — and the survey's own strongest finding
+was that **the binding constraint is referees, not structures.**
+
+Every count below was re-measured against `MANIFEST` rather than carried over
+from the survey.
+
+#### The analytic tier has never refereed a difference
+
+**All 37 closed-form energy cases carry exactly one charge.** Twelve of them
+have two *atoms*, which is not the same thing: those are Kirkwood, where atom 0
+is the uncharged dielectric sphere (`q=0, r=3.0`) and atom 1 is the point charge.
+The net charge is never zero either — 33 cases at +1e, two at −1e, two at +2e.
+
+So the tier that grades against a closed form has never refereed a
+charge–charge interaction, a net-neutral solute, or a **difference of two
+energies** — while the corpus grades differences constantly: binding, ionization,
+titration, protonation. It can check none of them.
+
+#### 27 of 100 cases are graded against nothing but their own APBS recording
+
+`smoothed-molecular` is APBS-only across the entire registry:
+
+| backend | surface models |
+|---|---|
+| APBS | molecular, smoothed-molecular, van-der-waals |
+| DelPhi C++ | gaussian, molecular, van-der-waals |
+| pyDelPhi | gaussian, molecular |
+| TABI-PB | molecular |
+| Generalized Born | molecular |
+| debye | molecular, van-der-waals |
+
+61 cases carry no closed form at all. 34 of those can at least be put to a second
+backend. **The remaining 27 cannot, and every one of them is
+`smoothed-molecular`** — so the only thing they are checked against is what APBS
+said last time.
+
+That set is not a remainder. It holds nearly every *relationship* the corpus
+advertises: the salt sweep (`born-ion-salt`, `peptide-no-salt`,
+`peptide-default`, `peptide-high-salt`), the temperature pair (`peptide-cold` at
+277 K against `peptide-default` at 298.15 K), both ionization pairs
+(`acetic-acid`/`acetate`, `methanol`/`methoxide`), the lysozyme trio
+(`lysozyme`, `lysozyme-protonated`, `lysozyme-deleted-residue`), the binding
+pair (`fkbp-apo`/`fkbp-dmso`), the metalloprotein pair
+(`carbonic-anhydrase`/`hca-complex`) and the convergence pair
+(`fas2`/`fas2-fine`).
+
+**A recorded relationship whose only witness is the backend that produced it is
+a regression test, not a check.** That is the referee gap, stated in cases
+rather than in atoms.
+
+#### The corpus is aimed away from its consumer
+
+protean reads a **1.0 Å potential field** on 250–1,200-residue assemblies, and
+never an energy. The corpus:
+
+| resolution | cases |
+|---|---|
+| 0.25 Å | 26 |
+| 0.35 Å | 1 |
+| 0.5 Å | 70 |
+| 0.6 Å | 1 |
+| **1.0 Å** | **2** |
+
+97 of 100 cases sit at 0.5 Å or finer; two sit where the consumer actually
+reads. Every cross-backend check is on the energy, and 20 cases carry a
+closed-form *field* reference against 37 for the energy. The survey measured
+debye's `fas2` energy at 11.03% out at 1.0 Å against 2.82% at 0.5 Å, **with the
+backend ordering inverted** — a regime nothing in the corpus currently sees.
+
+#### Knobs that are not knobs
+
+Single-valued across all 100 cases: `ion_radius` 2.0, `surface_radius` 1.4,
+`mesh_density` 2.0, `max_points` 4,173,281, `compute_energy` True, and
+`Equation.LINEAR`. `SurfaceModel.GAUSSIAN` has **zero** cases, though both
+DelPhi flavours can build one. `padding` takes two values and `temperature`
+three.
+
+#### The one case that looked like coverage and was not
+
+**`protein-rna` contains no RNA.** Its source is
+`tests/data/apbs-examples/1a63.pqr`: 2,065 ATOM records, eighteen distinct
+residue names, **all of them standard amino acids**, and not one phosphorus atom.
+Phosphorus appears in exactly two atoms corpus-wide, both in actin's ADP.
+
+The case name, the case description ("the only nucleic acid in the corpus, so
+the only case where phosphate backbone charges are exercised at all") and
+`PROVENANCE.md` ("Protein–RNA complex: nucleic acid, which nothing else here
+covers") all assert the opposite. The upstream PDB entry may well be a
+protein–RNA complex; the file APBS's example set vendors is the protein alone.
+
+This is the corpus's most misleading entry, because it is the one that makes a
+real gap look closed — and it did exactly that during this survey before the
+file was read. Corrected separately; the rename touches eight recordings, three
+manifest entries and four test files.
+
+#### The five kills, each with its measurement
+
+- **Multi-charge Kirkwood** — the best idea of the eight, and the first
+  closed-form referee for a *difference*. The closed form is correct and
+  reproduces the shipped single-charge function to 1e-16. **The knob was never
+  swept.** At 0.5 Å, padding 8/10/11/12 Å gives +3.26 / −6.77 / −13.58 / +26.73
+  kJ/mol — two of them with the wrong sign. The celebrated 0.028% agreement was
+  a padding-10 coincidence.
+  It left a real finding behind: `E(+1,−1) + E(+1,+1) − 4·E(single) = 0`
+  identically for any solver linear in the charges. debye violates it by
+  **0.0000**, DelPhi by 0.004%, **APBS by 2.7–13 kJ/mol** — larger than the
+  interaction it was meant to referee.
+- **1.0 Å siblings refereed by TABI-PB** — §12 already says in bold that its
+  recording is one mesh density, "a rung and not a limit".
+- **A Stern-radius sweep** — premise measured false. Ignoring `ion_radius` does
+  not pass at the existing point; it fails by 18%.
+- **An hca binding pair** — the referee sits *inside* APBS's own grid noise:
+  487 / 472 / 486 / 473 kJ/mol at 1.0 / 0.7 / 0.5 / 0.4 Å, a 3.27% spread and
+  non-monotone.
+- **A lysozyme pKa cycle** — leg A needs no new files, and the two new files buy
+  only leg B, where the backends disagree by 7–17%.
+
+Rejected on principle rather than on measurement: the charged rod, whose
+finite-length error (2.2–6.2%) exceeds what it would grade; **Gouy–Chapman and
+Manning condensation, which solve the NONLINEAR equation** and cannot referee a
+solver that is linear in the charges — all 100 cases are `Equation.LINEAR`; two
+dielectric spheres, which is a convergent linear system rather than a formula; a
+membrane, which `SolventModel` cannot express; and experimental pKa values,
+which test the model rather than the solver.
+
+#### What survived
+
+The **1d30 triple** — B-DNA dodecamer, a minor-groove binder, and their complex,
+from APBS 3.4.1's own `examples/bem-binding-energy`, 87 KB, the same BSD-3 tree
+the corpus already vendors from. It closes the chemistry gap `protein-rna` only
+appeared to close — the duplex carries residues DA/DC/DC5/DG/DG3/DT and **22
+phosphorus atoms**, against two in the whole corpus today — and its ΔΔG is a
+rigid-body binding difference: the
+decomposition is exact — verified from the files: 796 = 758 + 38 atoms and
+−20.000 = −22.000 + 2.000 e — and APBS's own ΔΔG moves 0.18% across 0.5/0.4/0.3 Å
+while the energies it is built from move 0.46–1.93%, so the 1.0% cross-family
+spread is five times the noise.
+
+**Not taken yet, and the reason is this section.** Three more cases at 0.5 Å
+graded on the energy add coverage in the regime that already has 97 of 100
+cases, on the observable the consumer never reads. The chemistry argument is
+real; the priority argument is not. If it is taken, it should carry a 1.0 Å
+sibling.
+
 ## 8. Backend strategy beyond APBS
 
 | Phase | Backend | Why | Integration |
