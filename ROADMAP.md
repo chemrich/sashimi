@@ -5,8 +5,8 @@
 > to outlive it. `debye` is the eventual clean-room solver that slots in behind
 > the same interface.
 
-Status: phases 0–4 and 7 shipped, 5 bar the PyPI release; 6 (distribution) not
-started; 8 (debye) in progress — four backends across three solver families
+Status: phases 0–4, 5 and 7 shipped; 6 (distribution) not started; 8 (debye)
+in progress — four backends across three solver families
 (APBS, DelPhi in two flavours, TABI-PB, Generalized Born) and `sashimi validate`
 have landed.
 Last updated: 2026-08-26 (phase 8: M0–M5, M8, M8a and M9 met; M6 recorded
@@ -1107,11 +1107,18 @@ Also done: packaging metadata (`authors`, `classifiers`, `urls`, `keywords`) and
 registration as an MCP server. And the first real end-to-end run, which earned
 its place immediately — see below.
 
-Remaining: the PyPI release itself. The distribution name is settled —
-**`sashimi-electro`**, since plain `sashimi` belongs to an unrelated dormant
-library — so the install name and the import name differ and the README says
-so. Still outstanding: nothing but the upload itself — the manifest is complete
-and the server is registered.
+**Released as `sashimi-electro` 0.1.0.** The distribution name is settled since
+plain `sashimi` belongs to an unrelated dormant library, so the install name and
+the import name differ and the README says so. `.github/workflows/release.yml`
+builds and publishes on a `v*` tag through PyPI Trusted Publishing, refusing to
+run when the tag and `pyproject.toml` disagree — PyPI will not let a version
+number be reused, so a mismatch is not fixable after the fact.
+
+This is §9's **v1**: ship on PyPI, document the conda-forge APBS. What makes v1
+worth more than it was when §9 was written is `debye` — a `pip install
+sashimi-electro` is a *working solver*, pure Python, rather than a wrapper
+idling until a binary arrives. v2, the vendored platform wheels that collapse
+the install to one command, is phase 6 and is not foreclosed by anything here.
 
 **What the first real protein found.** Everything worked, and the numbers were
 meaningful — pdb2pqr gave hen lysozyme its textbook net charge of +8 e with zero
@@ -6679,6 +6686,45 @@ Second-order finding, not acted on: `ion-protein-complex.pqr` is a
 coarse-grained two-chain model with the same disease at 260 atoms, and
 `fas2.pqr` numbers `NTE 544` and `THR 544` as distinct residues — both handled
 by the run rule for free.
+
+### What "nothing but the upload" turned out to mean
+
+**2026-08-27.** Phase 5 was recorded as complete bar the upload, and the
+manifest genuinely was complete — name, version, licence, classifiers, urls,
+both console scripts. The first `uv build` of this project still failed.
+
+**The sdist was 48.9 MB and could not be unpacked.** hatchling had swept
+`.pydelphi/` into it — the pyDelPhi virtual environment the README tells you to
+create in the repository root — and a virtualenv contains absolute symlinks into
+whoever built it. `uv build` unpacks its own sdist to build the wheel from, so
+the build failed on its own artifact, which is the good case: the bad case is a
+release that installs on the machine that made it and nowhere else.
+
+`.pydelphi/` was untracked and **not** in `.gitignore`, which is the same class
+of hole that put two `.DS_Store` files in the tree. It is ignored now, but the
+durable fix is that `[tool.hatch.build.targets.sdist]` carries an **allowlist**:
+an exclude list has to anticipate the next such directory, and there will be
+one. Verified as an allowlist rather than assumed — an untracked, un-ignored
+probe directory does not ship. 48.9 MB to 2.0 MB.
+
+One refinement the check turned up: hatchling globs a bare `README.md` at any
+depth, so `studies/README.md` shipped while the other fifty tracked files under
+`studies/` did not. Leading slashes anchor the patterns to the root, and the
+selection is now deliberate rather than whatever the glob happened to reach.
+
+**What the release workflow checks, and why each one.** The tag must equal
+`pyproject.toml`'s version, because PyPI never lets a version number be reused
+and a mismatched tag cannot be corrected afterwards. The built *wheel* must
+import in a clean interpreter with no project on the path — an editable install
+would pass with a `src/` layout the wheel does not ship. Then the binary-free
+tier runs, since that is the part that breaks by packaging rather than by
+physics; the full suite has already run on the main the tag is cut from.
+
+Publishing is by **Trusted Publishing**: PyPI verifies a short-lived OIDC token
+minted for the workflow rather than a long-lived API token in repository
+secrets. Nothing to leak and nothing to rotate. It requires a pending publisher
+configured on PyPI before the first upload — the one step that is not in this
+repository.
 
 ## 13. Risks and mitigations
 
