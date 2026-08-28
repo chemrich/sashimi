@@ -194,7 +194,7 @@ GB_DEVIATION: dict[str, float] = {
     "fkbp-dmso-molecular": 0.0323,
     "aspartate-residue-molecular": 0.0356,
     "ion-protein-complex-molecular": 0.0359,
-    "protein-rna-molecular": 0.0389,
+    "protein-1a63-molecular": 0.0389,
     "barstar-molecular": 0.0424,
     "acetic-acid-molecular": 0.0451,
     "peptide-molecular": 0.0590,

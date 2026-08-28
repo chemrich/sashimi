@@ -1,6 +1,6 @@
 {
-  "name": "protein-rna-molecular",
-  "description": "2,065 atoms with a phosphate backbone, on the shared surface. No backend but APBS had ever been handed a nucleic acid by the corpus, and a radius set assigned per element is exactly the thing that has no phosphorus entry until someone tries.",
+  "name": "protein-1a63-molecular",
+  "description": "2,065 atoms on the shared surface, and the rung between barnase and hca on it. Its description claimed a phosphate backbone and a per-element radius set with no phosphorus entry; the structure contains no phosphorus, so neither claim was ever exercised here.",
   "source": "apbs-examples/1a63.pqr",
   "tier": "full",
   "family": "finite-difference",

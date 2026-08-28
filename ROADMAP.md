@@ -524,18 +524,20 @@ legitimately moved. What they are made of, by what can contradict them:
 Twenty-one structures from 2 to 18,242 atoms: methanol and methoxide, an acetic
 acid / acetate ionization pair, a lone aspartate residue, an ALA-GLY dipeptide,
 a 906-atom protein with a non-integer net charge, barnase and barstar, three
-lysozyme charge states, a 2,065-atom protein recorded as `protein-rna`, an FKBP
+lysozyme charge states, a 2,065-atom protein (`protein-1a63`), an FKBP
 apo/holo pair, carbonic
 anhydrase with and without its ligand, a 260-atom solute carrying +21.69 e, an
 actin monomer, acetylcholinesterase, and serum albumin at 18,242 atoms.
 
-*One of those names is wrong and the recordings carry it. `protein-rna` is
+*One of those names was wrong and the recordings carried it. `protein-rna` is
 `apbs-examples/1a63.pqr`, whose residues are ALA through VAL and nothing else —
 there is no nucleic acid in it, so the corpus has never covered a protein-RNA
 complex and the claim that it did was inherited from the filename. The case is
-sound as a 2,065-atom protein and its numbers stand; only the label is false.
-Renaming it moves nine recordings and a fixture, so it is recorded here rather
-than done in passing.*
+sound as a 2,065-atom protein and its numbers stand; only the label was false.
+**Renamed to `protein-1a63` on 2026-08-28**, moving nine recordings, three
+manifest entries, four test files and `PROVENANCE.md`. No energy moved: the
+rename edits `name` and `description` in each recording and nothing else, and
+the script asserted every `energy_kj_mol` unchanged as it went.*
 
 **What the corpus can now assert that no single case could.** Solvation goes as
 q², so the ±1e Born pair must agree exactly and the +2e case must be exactly 4×.
@@ -904,7 +906,7 @@ three.
 
 #### The one case that looked like coverage and was not
 
-**`protein-rna` contains no RNA.** Its source is
+**`protein-rna` contained no RNA.** Its source is
 `tests/data/apbs-examples/1a63.pqr`: 2,065 ATOM records, eighteen distinct
 residue names, **all of them standard amino acids**, and not one phosphorus atom.
 Phosphorus appears in exactly two atoms corpus-wide, both in actin's ADP.
@@ -915,10 +917,11 @@ the only case where phosphate backbone charges are exercised at all") and
 covers") all assert the opposite. The upstream PDB entry may well be a
 protein–RNA complex; the file APBS's example set vendors is the protein alone.
 
-This is the corpus's most misleading entry, because it is the one that makes a
-real gap look closed — and it did exactly that during this survey before the
-file was read. Corrected separately; the rename touches eight recordings, three
-manifest entries and four test files.
+This was the corpus's most misleading entry, because it is the one that made a
+real gap look closed — and it did exactly that during this survey, before the
+file was read. **Corrected 2026-08-28: the case is `protein-1a63`**, and the
+count was nine recordings rather than eight, `tests/corpus/tabipb/` having
+gained one in between. No energy moved.
 
 #### The five kills, each with its measurement
 
@@ -954,8 +957,8 @@ which test the model rather than the solver.
 
 The **1d30 triple** — B-DNA dodecamer, a minor-groove binder, and their complex,
 from APBS 3.4.1's own `examples/bem-binding-energy`, 87 KB, the same BSD-3 tree
-the corpus already vendors from. It closes the chemistry gap `protein-rna` only
-appeared to close — the duplex carries residues DA/DC/DC5/DG/DG3/DT and **22
+the corpus already vendors from. It closes the chemistry gap `protein-1a63`
+only appeared to close — the duplex carries residues DA/DC/DC5/DG/DG3/DT and **22
 phosphorus atoms**, against two in the whole corpus today — and its ΔΔG is a
 rigid-body binding difference: the
 decomposition is exact — verified from the files: 796 = 758 + 38 atoms and
@@ -2932,7 +2935,7 @@ backends:**
 | barnase | 1,730 | +26.567 | +28.037 | +29.458 | **1.421** | 2.891 |
 | lysozyme-asp66 | 1,960 | +33.211 | +35.323 | +35.761 | **0.438** | 2.550 |
 | lysozyme-ash66 | 1,961 | +31.668 | +33.819 | +34.117 | **0.298** | 2.449 |
-| protein-rna-1a63 | 2,065 | +16.977 | +17.784 | +18.430 | **0.646** | 1.453 |
+| protein-1a63 | 2,065 | +16.977 | +17.784 | +18.430 | **0.646** | 1.453 |
 | hca | 2,482 | +24.611 | +26.082 | +26.787 | **0.705** | 2.176 |
 | hca-complex | 2,500 | +25.502 | +27.077 | +27.859 | **0.782** | 2.357 |
 | actin-monomer | 5,877 | +27.425 | +29.330 | +30.345 | **1.015** | 2.920 |
@@ -5947,7 +5950,7 @@ either.
 
 Of 58 debye recordings, **6** have a TABI-PB counterpart and **22** carry a gated
 closed form; **30 have neither, including all 16 above 906 atoms** —
-serum-albumin, hca, protein-rna, lysozyme, barnase, fkbp-apo, fkbp-dmso and
+serum-albumin, hca, protein-1a63, lysozyme, barnase, fkbp-apo, fkbp-dmso and
 barstar, on both surfaces. TABI-PB's coverage tops out at fas2 itself; its other
 two cases are 260 and 20 atoms. *(Counts as of 2026-08-24. Six molecular
 recordings were added above 906 atoms on 2026-08-27 — see "The ceiling above 906
@@ -6342,7 +6345,7 @@ to 2,065 atoms**, on a laptop, at the `mesh_density` the corpus already uses:
 | `fkbp-dmso` | 1,673 | — | −2112.8 | +1.39% | −3.62% |
 | `barnase` | 1,730 | 139.9 s | −2631.0 | +1.39% | −4.57% |
 | `lysozyme` | 1,960 | 161.5 s | −4961.6 | +0.78% | −3.52% |
-| `protein-rna` | 2,065 | 300.0 s | −4998.8 | +0.71% | −2.79% |
+| `protein-1a63` | 2,065 | 300.0 s | −4998.8 | +0.71% | −2.79% |
 
 So the sentence to retire is "TABI-PB tops out at `fas2`". What topped out at
 `fas2` was `tests/corpus/tabipb/`, and the distance between those two statements

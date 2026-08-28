@@ -842,7 +842,7 @@ CROSS_FAMILY_DEVIATION: dict[tuple[str, str], float] = {
     ("apbs", "peptide-molecular-cold"): 0.01461,
     ("apbs", "peptide-molecular-high-salt"): 0.01561,
     ("apbs", "peptide-molecular-no-salt"): 0.01447,
-    ("apbs", "protein-rna-molecular"): 0.00713,
+    ("apbs", "protein-1a63-molecular"): 0.00713,
     ("debye", "barnase-molecular"): 0.04574,
     ("debye", "barstar-molecular"): 0.02201,
     ("debye", "fas2-molecular"): 0.02817,
@@ -854,7 +854,7 @@ CROSS_FAMILY_DEVIATION: dict[tuple[str, str], float] = {
     ("debye", "peptide-molecular-cold"): 0.00578,
     ("debye", "peptide-molecular-high-salt"): 0.00477,
     ("debye", "peptide-molecular-no-salt"): 0.00729,
-    ("debye", "protein-rna-molecular"): 0.02792,
+    ("debye", "protein-1a63-molecular"): 0.02792,
     ("delphi", "barnase-molecular"): 0.01139,
     ("delphi", "barstar-molecular"): 0.01674,
     ("delphi", "fas2-molecular"): 0.01525,
@@ -866,7 +866,7 @@ CROSS_FAMILY_DEVIATION: dict[tuple[str, str], float] = {
     ("delphi", "peptide-molecular-cold"): 0.03652,
     ("delphi", "peptide-molecular-high-salt"): 0.03745,
     ("delphi", "peptide-molecular-no-salt"): 0.03502,
-    ("delphi", "protein-rna-molecular"): 0.01367,
+    ("delphi", "protein-1a63-molecular"): 0.01367,
 }
 
 # Both sides are checked-in recordings, so every ratio is exact arithmetic on

@@ -21,8 +21,23 @@ change underneath a recorded number.
 | `barstar.pqr` | 1403 | −5.000 | APBS `examples/pbsam-barn_bars` | The most negatively charged case in the corpus |
 | `barnase.pqr` | 1730 | +2.000 | APBS `examples/pbsam-barn_bars` | Its binding partner; a charge-complementary pair |
 | `2LZT-ASP66.pqr` | 1960 | +8.000 | APBS `examples/bem-pKa` | Hen lysozyme, the structure every finding in this project came from |
-| `1a63.pqr` | 2065 | −1.000 | APBS `examples/bem` | Protein–RNA complex: nucleic acid, which nothing else here covers |
+| `1a63.pqr` | 2065 | −1.000 | APBS `examples/bem` | 2,065 atoms, every residue a standard amino acid — see the note below |
 | `hca.pqr` | 2482 | +1.000 | APBS `examples/hca-bind` | Human carbonic anhydrase; the largest, and metalloprotein chemistry |
+
+## `1a63.pqr` is not a protein–RNA complex
+
+This row read "Protein–RNA complex: nucleic acid, which nothing else here
+covers" until 2026-08-28, and the corpus case built on it was called
+`protein-rna`. **The file contains 2,065 ATOM records and eighteen distinct
+residue names, every one of them a standard amino acid.** There is no
+nucleotide in it and no phosphorus atom; phosphorus appears in exactly two
+atoms corpus-wide, both in actin's ADP.
+
+APBS's upstream `examples/bem/README.md` says only that the file is "1a63" and
+makes no claim about its contents. Whatever the PDB entry holds, the file
+vendored here carries the protein alone. The claim was inherited from the
+filename and propagated into the case name, the case description and this
+table — which is how a real coverage gap came to look closed.
 
 ## A trap, recorded where it will be found
 

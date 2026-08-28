@@ -95,7 +95,7 @@ DEFAULT_OFFSET = 0.09  # angstroms
 #
 #   case                 mbondi   as-given   input radii
 #   barnase               1.65%     55.68%   AMBER-like
-#   protein-rna           3.89%    115.72%   AMBER-like (as-given flips the sign)
+#   protein-1a63          3.89%    115.72%   AMBER-like (as-given flips the sign)
 #   lysozyme (2LZT)      13.45%      8.62%   PARSE-like
 #   carbonic-anhydrase   21.13%      7.34%   PARSE-like
 #   methanol             28.21%     19.15%   3 atoms; one radius moves 0.2 -> 1.2 A
