@@ -6795,18 +6795,89 @@ and 1.52 A. debye's worst at the same rung sits on the *far* pole and never
 moves off 1.86%, so its near-pole error is smaller still at a shorter gap. The
 likely mechanism, offered as a reading rather than a measurement: APBS
 discretizes a point charge over a `chgm spl4` stencil about two cells wide, and
-0.71 A is inside it. `cells_out` stays at (2, 4, 8) regardless, because the near
+0.71 A is inside it. ***Measured 2026-08-28 and wrong in direction*** — narrowing
+the stencil to `chgm spl0` takes the error from 20.96% to 29.55%, where this
+reading predicts an improvement. The section below carries what the effect
+actually is, and it is grid phase. `cells_out` stays at (2, 4, 8) regardless, because the near
 sample is the one this reference exists to take — a ladder that stepped back
 until every backend looked alike would be measuring the step-back.
 
-**An observation this turned up and did not explain.** debye and the DelPhi
+**An observation this turned up, explained 2026-08-28.** debye and the DelPhi
 backend agree with each other on the Kirkwood field to three digits at every
 rung above, and on the recorded probes to 2.7e-5 relative — five significant
 figures — while APBS sits ~0.4% from both. It is not a recording mix-up: a
-mix-up would be bit-identical and these are not. Two codes sharing no source
-agreeing that closely is either a shared discretization convention or a shared
-ancestry in one, and §12's referee work assumes they are independent. Worth
-knowing before either is used to referee the other.
+mix-up would be bit-identical and these are not. The question was whether it is
+a shared discretization convention or a shared ancestry, because §12's referee
+work assumes the two are independent.
+
+**They are independent. What they share is the lattice.**
+
+Two explanations in the *physics* were measured, and both fail:
+
+| | worst sample, d/a = 0.9 |
+|---|---|
+| APBS, `chgm spl4` (default) | 20.96% |
+| APBS, `chgm spl0` — the trilinear assignment debye uses | **29.55%** |
+| APBS, `bcfl mdh` — the boundary condition debye uses | 20.95% |
+| debye | 1.86% |
+| DelPhi | 1.85% |
+
+Charge assignment is not it: `spl0` is APBS's trilinear option and moving to it
+takes APBS *further* from debye, not nearer. The boundary condition is not it
+either: `mdh` is debye's own and moves APBS by 0.006%.
+
+**What is left is where the lattice falls.** The three backends size a box by
+different rules — debye needs `n = 8m + 1`, DelPhi needs an odd `gsize`, APBS
+needs `2^k + 1` — and *every `8m + 1` is odd*, so at the corpus's 0.25 Å debye
+and DelPhi both land on 105 points exactly while APBS cannot and rounds to 129.
+But the coincidence goes further than the spacing, and this is the part that
+settles it:
+
+| requested h | backend | shape | achieved h | origin x | charge cell-phase | worst |
+|---|---|---|---|---|---|---|
+| 0.203125 | APBS | 129³ | 0.203125 | −11.65 | **0.6462** | 20.96% |
+| 0.203125 | debye | 129³ | 0.203125 | −13.00 | **0.2923** | 4.10% |
+| 0.203125 | DelPhi | 129³ | 0.203125 | −13.00 | **0.2922** | 4.10% |
+
+**At an identical shape and an identical spacing APBS still differs fivefold,
+because its origin differs.** debye and DelPhi both take the solute's box
+unshifted; APBS re-centres, so the charge sits 0.65 of a cell from a lattice
+plane where for the other two it sits 0.29. §12 already records that the near
+field swings 5–21× on grid phase. That is sufficient on its own, and no
+agreement about physics is needed to produce the five figures.
+
+**The converse confirms it.** The shared lattice is a fact about the corpus's
+chosen resolutions, not a property of the two codes, and where their point-count
+rules diverge so do their answers: at 0.20 Å they land on 137 and 131 points and
+read 2.04% and 1.85%; at 0.1875 Å on 145 and 141, and read **7.75% and 27.53%**.
+A factor of three, between the two codes whose agreement was the puzzle.
+
+**Two consequences, and the second is the one that matters.**
+
+1. §12's referee work may keep its assumption. debye and DelPhi are independent
+   codes and their energies differ by percent, not by 1e-5 — the confound is
+   specific to a near-field probe on a shared lattice, and does not reach the
+   energy comparisons the referee tier is built on.
+2. **A near-field comparison between debye and DelPhi measures the lattice, not
+   the solvers.** On a shared grid it cannot distinguish them, so it is not
+   evidence either way about their discretizations. Anything that wants to
+   compare their interface treatment has to vary the phase or step off the
+   shared lattice deliberately.
+
+**And it retires a reading recorded above.** The `chgm spl4` explanation for
+APBS's charge-proximity error — "0.71 Å is inside a stencil about two cells
+wide" — was offered as a reading rather than a measurement, correctly labelled.
+It is now measured and it is wrong in *direction*: narrowing the stencil to
+`spl0` makes the near-pole error worse, from 20.96% to 29.55%, where the reading
+predicts it should improve.
+
+**It also makes "APBS is 11× worse than debye" a statement about one lattice.**
+At 0.1875 Å the same measurement puts DelPhi at 27.53% against APBS's 15.99% —
+the ordering inverts. The 11× is real at the rung it was taken on and is not a
+property of the codes. `studies/lattice_phase/debye_delphi_agreement.py` carries
+all of it, and `tests/test_kirkwood_field.py::TestWhyDebyeAndDelphiAgree` pins
+the shared lattice as pure grid arithmetic, so a change to either sizing rule
+fails rather than silently invalidating this section.
 
 ### The exterior field evaluator, designed against a measurement
 

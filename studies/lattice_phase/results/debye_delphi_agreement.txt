@@ -1,0 +1,29 @@
+1. Two physics hypotheses, both refuted (d/a = 0.9, worst sample)
+
+   apbs chgm spl4     20.9586%
+   apbs chgm spl0     29.5454%
+   apbs bcfl mdh      20.9527%
+   debye               1.8599%
+   delphi              1.8548%
+
+   spl0 is APBS's trilinear option, which is what debye uses, and it is
+   worse. mdh is debye's boundary condition, and it moves nothing.
+
+2. The lattices, and where the charge at x=2.7 falls in a cell
+
+     h asked backend            shape      h got   origin x  phase x      worst
+    0.250000 apbs     (129, 129, 129)   0.203125   -11.6500   0.6462   20.9586%
+    0.250000 debye    (105, 105, 105)   0.250000   -13.0000   0.8000    1.8599%
+    0.250000 delphi   (105, 105, 105)   0.250000   -13.0000   0.7999    1.8548%
+
+    0.203125 apbs     (129, 129, 129)   0.203125   -11.6500   0.6462   20.9586%
+    0.203125 debye    (129, 129, 129)   0.203125   -13.0000   0.2923    4.1023%
+    0.203125 delphi   (129, 129, 129)   0.203125   -13.0000   0.2922    4.1043%
+
+    0.200000 apbs     (161, 161, 161)   0.162500   -11.6500   0.3077   15.9948%
+    0.200000 debye    (137, 137, 137)   0.191176   -13.0000   0.1231    2.0390%
+    0.200000 delphi   (131, 131, 131)   0.200000   -13.0000   0.5000    1.8454%
+
+    0.187500 apbs     (161, 161, 161)   0.162500   -11.6500   0.3077   15.9948%
+    0.187500 debye    (145, 145, 145)   0.180556   -13.0000   0.9538    7.7492%
+    0.187500 delphi   (141, 141, 141)   0.185714   -13.0000   0.5385   27.5301%
