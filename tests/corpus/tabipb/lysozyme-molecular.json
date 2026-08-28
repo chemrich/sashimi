@@ -1,0 +1,50 @@
+{
+  "name": "lysozyme-molecular",
+  "description": "Hen lysozyme where all four backends can be asked the same question.",
+  "source": "apbs-examples/2LZT-ASP66.pqr",
+  "tier": "full",
+  "family": "boundary-element",
+  "backend": "tabipb+nanoshaper-0.7.5",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.5,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "temperature": 298.15,
+    "surface_radius": 1.4,
+    "tabipb": {
+      "mesh": "ses",
+      "sdens": 2.0,
+      "srad": 1.4,
+      "tree_degree": 1,
+      "tree_theta": 0.0,
+      "tree_max_per_leaf": 50,
+      "precondition": true
+    }
+  },
+  "energy_kj_mol": -4961.64954,
+  "surface": {
+    "n_vertices": 33776,
+    "potential_stats_kT_e": {
+      "min": -8.409303893155275,
+      "max": 12.487166832805105,
+      "mean": 0.9794556127066647,
+      "std": 2.203037260886529
+    }
+  }
+}

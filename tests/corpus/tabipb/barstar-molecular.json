@@ -1,0 +1,50 @@
+{
+  "name": "barstar-molecular",
+  "description": "-5e on 1,403 atoms, on the shared surface. Every other protein a second backend can take is positively charged, so this is the sign of the charge at protein scale rather than on a sphere.",
+  "source": "apbs-examples/barstar.pqr",
+  "tier": "full",
+  "family": "boundary-element",
+  "backend": "tabipb+nanoshaper-0.7.5",
+  "analytic": null,
+  "grid_spec": {
+    "resolution": 0.5,
+    "padding": 10.0,
+    "max_points": 4173281
+  },
+  "solvent_model": {
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "ion_radius": 2.0,
+    "temperature": 298.15,
+    "surface_model": "molecular",
+    "surface_radius": 1.4
+  },
+  "resolved_parameters": {
+    "surface_model": "molecular",
+    "solvent_dielectric": 78.54,
+    "solute_dielectric": 2.0,
+    "ionic_strength": 0.15,
+    "temperature": 298.15,
+    "surface_radius": 1.4,
+    "tabipb": {
+      "mesh": "ses",
+      "sdens": 2.0,
+      "srad": 1.4,
+      "tree_degree": 1,
+      "tree_theta": 0.0,
+      "tree_max_per_leaf": 50,
+      "precondition": true
+    }
+  },
+  "energy_kj_mol": -3026.322946,
+  "surface": {
+    "n_vertices": 24578,
+    "potential_stats_kT_e": {
+      "min": -6.073018943137835,
+      "max": 6.796355402216195,
+      "mean": -0.7664837121643353,
+      "std": 1.8248877562417172
+    }
+  }
+}
