@@ -27,6 +27,7 @@ import numpy as np
 import pytest
 
 from sashimi.analytic import kirkwood_potential
+from sashimi.corpus import MANIFEST
 
 CORPUS = Path(__file__).resolve().parent / "corpus"
 RADIUS = 3.0  # every Kirkwood case is a 3 A sphere
@@ -115,3 +116,78 @@ def test_the_field_gets_harder_as_the_charge_nears_the_boundary():
             recorded, exact = _graded(path)
             medians.append(float(np.median(np.abs(recorded - exact) / np.abs(exact))))
         assert medians == sorted(medians), f"{backend or 'apbs'}: {medians}"
+
+
+class TestWhyDebyeAndDelphiAgree:
+    """The five-figure agreement is a shared lattice, not a shared discretization.
+
+    ROADMAP.md section 12 recorded the observation and did not explain it: debye
+    and the DelPhi backend agree on the Kirkwood field to 2.7e-5 relative while
+    APBS sits ~0.4% from both, and "two codes sharing no source agreeing that
+    closely is either a shared discretization convention or a shared ancestry in
+    one" — which matters because section 12's referee work assumes they are
+    independent.
+
+    They are independent. Two candidate *physics* explanations were measured and
+    both failed: APBS at `chgm spl0`, which is the trilinear assignment debye
+    uses, moves **away** (20.96% to 29.55%), and APBS at `bcfl mdh`, which is
+    debye's boundary condition, moves 0.006%. What debye and DelPhi actually
+    share is the box: same shape, same spacing and the same origin, so the
+    lattice falls identically against the charge. The near-field observable is
+    phase-dominated, so that is sufficient on its own.
+
+    These assertions are pure grid arithmetic — no solver, no binary — which is
+    the point: the dependency is structural and can be checked anywhere.
+    `studies/lattice_phase/debye_delphi_agreement.py` carries the measurement.
+    """
+
+    @staticmethod
+    def kirkwood_cases():
+        return [c for c in MANIFEST if c.name.startswith("kirkwood-vdw-")]
+
+    def test_debye_and_delphi_resolve_to_the_same_lattice(self):
+        """If this ever fails, the agreement above needs re-reading rather than fixing."""
+        from sashimi.debye.grid import size_grid as debye_grid  # noqa: PLC0415
+        from sashimi.delphi.grid import size_grid as delphi_grid  # noqa: PLC0415
+
+        cases = self.kirkwood_cases()
+        assert cases, "no kirkwood-vdw cases in the manifest"
+
+        differing = []
+        for case in cases:
+            structure, spec = case.structure(), case.grid
+            mine, theirs = debye_grid(structure, spec), delphi_grid(structure, spec)
+            same_shape = mine.shape[0] == theirs.gsize
+            same_spacing = mine.spacing[0] == pytest.approx(theirs.spacing[0], rel=1e-9)
+            # DelPhi describes its box by centre and side, so the origin is derived.
+            theirs_origin = np.asarray(theirs.center) - theirs.box_length / 2.0
+            same_origin = np.allclose(np.asarray(mine.origin), theirs_origin)
+            if not (same_shape and same_spacing and same_origin):
+                differing.append(
+                    f"{case.name}: debye {mine.shape[0]}^3 h={mine.spacing[0]:.6f} "
+                    f"o={mine.origin} vs delphi {theirs.gsize}^3 "
+                    f"h={theirs.spacing[0]:.6f} o={theirs_origin}"
+                )
+
+        assert not differing, "\n  ".join(
+            ["debye and DelPhi no longer share a lattice:", *differing]
+        )
+
+    def test_the_point_count_rules_are_what_make_them_coincide(self):
+        """debye needs `8m + 1` and DelPhi needs an odd `gsize`; every `8m + 1` is odd.
+
+        That is the whole coincidence, and it is one-directional: DelPhi can sit
+        on point counts debye cannot reach. So the agreement is not guaranteed at
+        every resolution, and the study measures two where it breaks — at 0.20 A
+        they land on 137 and 131, and at 0.1875 A on 145 and 141, where the worst
+        samples are 7.75% and 27.53%. A shared lattice is a fact about the
+        corpus's chosen resolutions, not a property of the two codes.
+        """
+        from sashimi.debye.grid import LATTICE_STEP, _lattice_ceil  # noqa: PLC0415
+        from sashimi.delphi.grid import odd_gsize  # noqa: PLC0415
+
+        assert LATTICE_STEP % 2 == 0, "8m + 1 is odd only while the step is even"
+        for minimum in (9, 100, 105, 129, 137):
+            n = _lattice_ceil(minimum)
+            assert (n - 1) % LATTICE_STEP == 0
+            assert odd_gsize(n) == n, f"DelPhi cannot sit on debye's {n}"
