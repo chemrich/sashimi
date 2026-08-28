@@ -5949,7 +5949,13 @@ Of 58 debye recordings, **6** have a TABI-PB counterpart and **22** carry a gate
 closed form; **30 have neither, including all 16 above 906 atoms** —
 serum-albumin, hca, protein-rna, lysozyme, barnase, fkbp-apo, fkbp-dmso and
 barstar, on both surfaces. TABI-PB's coverage tops out at fas2 itself; its other
-two cases are 260 and 20 atoms. The 22 closed forms are **one-charge geometries,
+two cases are 260 and 20 atoms. *(Counts as of 2026-08-24. Six molecular
+recordings were added above 906 atoms on 2026-08-27 — see "The ceiling above 906
+atoms was a property of the recordings, not the tool" — taking the counterparts
+to 12, "neither" to 24 and the above-906 remainder to 10, all of them
+`van-der-waals`, `hca` or `serum-albumin`. The reasoning below is unaffected:
+what changed is coverage, not the argument about what a shared discretization
+can referee.)* The 22 closed forms are **one-charge geometries,
 blind by construction**: born-ion is a single atom, so
 `single_debye_huckel_solute` returns its input bit-identically, and kirkwood is a
 3 Å cavity with exactly one charge in it — swapping `mdh` for `sdh` moves them
@@ -6309,10 +6315,128 @@ independent check and none above 906 atoms has any, and phase 5's release.
 Every one of the 58 already had **two same-family referees** in this repository
 and nobody had written the relationship down; #72 did, and the section below
 carries what it says. What is genuinely open is **no cross-family referee above
-906 atoms** — TABI-PB's coverage tops out at `fas2` — and **no *independent*
-referee for an interface change**, which is the ramp's problem and not a
-coverage one. *Whether reaching higher is a cost question or a feasibility one
-is unmeasured: nothing above `fas2` has been meshed by this project.*
+906 atoms** — TABI-PB's *recordings* topped out at `fas2` — and **no
+*independent* referee for an interface change**, which is the ramp's problem and
+not a coverage one. *Whether reaching higher was a cost question or a
+feasibility one was unmeasured. **It is measured now, and it is cost**: TABI-PB
+solves every `molecular` case up to 2,482 atoms. See "The ceiling above 906
+atoms was a property of the recordings, not the tool" below — what topped out at
+`fas2` was `tests/corpus/tabipb/`.*
+
+### The ceiling above 906 atoms was a property of the recordings, not the tool
+
+**2026-08-27.** Four places in this document said TABI-PB's coverage "tops out
+at `fas2`", and the referee gap was scoped around that: *no cross-family referee
+above 906 atoms*, with the honest caveat attached that **whether reaching higher
+was a cost question or a feasibility one was unmeasured** — "no protein above
+`fas2` has ever been meshed by this project".
+
+It has now been meshed. **TABI-PB records every `molecular` case in the corpus up
+to 2,065 atoms**, on a laptop, at the `mesh_density` the corpus already uses:
+
+| case | atoms | wall | TABI-PB kJ/mol | vs APBS | debye vs TABI-PB |
+|---|---|---|---|---|---|
+| `fas2` | 906 | 49.9 s | −2020.7 | +1.26% | −2.82% |
+| `barstar` | 1,403 | 59.8 s | −3026.3 | +0.31% | −2.20% |
+| `fkbp-apo` | 1,663 | 98.0 s | −2118.5 | +1.41% | −3.69% |
+| `fkbp-dmso` | 1,673 | — | −2112.8 | +1.39% | −3.62% |
+| `barnase` | 1,730 | 139.9 s | −2631.0 | +1.39% | −4.57% |
+| `lysozyme` | 1,960 | 161.5 s | −4961.6 | +0.78% | −3.52% |
+| `protein-rna` | 2,065 | 300.0 s | −4998.8 | +0.71% | −2.79% |
+
+So the sentence to retire is "TABI-PB tops out at `fas2`". What topped out at
+`fas2` was `tests/corpus/tabipb/`, and the distance between those two statements
+is the whole of this section. **The gap above 906 atoms is a cost question**, and
+`tests/corpus/tabipb/` now holds twelve files instead of six.
+
+**`hca` is the boundary, and it is recorded as one rather than accommodated.**
+2,482 atoms **completed once at 576.3 s and timed out on a second attempt at
+identical settings**. `DEFAULT_TIMEOUT` is 600 s, so the margin was 4%, which is
+not a margin — it is a case that passes on a quiet machine. Moving the timeout
+would have made the table above read cleanly and hidden that; a limit relaxed
+until a marginal case fits is the same edit as a limit removed, which is the
+thread §12 already carries under guards that guard nothing.
+
+**How far the cost ceiling actually is, stated as loosely as the data allows.**
+Over the six timed rungs the wall clock goes as **`atoms^1.95`**. Including
+`hca`'s single successful run it goes as `atoms^2.41` — and the difference
+matters, because extrapolating to `serum-albumin` at 18,242 atoms gives **4.8
+hours** on the first exponent and 19 on the second. **Neither number should be
+quoted.** The fit spans a factor of 2.3 in atoms and the extrapolation is a
+factor of 8.8 beyond it, off a power law whose exponent moves by 0.46 when one
+questionable point is added. What the data supports is that `serum-albumin` is
+**hours rather than minutes**, and that how many is not determined by anything
+measured here.
+
+**What the seven rungs say.** `E_delphi > E_tabipb > E_apbs > E_debye`, on 7 of
+7. `test_the_three_codes_bracket` already asserts `E_delphi > E_apbs > E_debye`
+on all 18 cases at or above 906 atoms, and is careful in its own docstring that
+those three **share a discretization** — all of them assign the dielectric hard
+at face centres, so none is independent of the others. A boundary-element solver
+has no volumetric lattice at all. Inserting one into the bracket is a different
+claim from widening the bracket, and the ordering survives it.
+
+**The finding, and it is not the coverage.** **debye's low bias survives a
+lattice-free referee.** It sits 2.2–4.6% below TABI-PB at every size, same sign
+on every rung. Until now debye had only been compared against codes sharing its
+face-centre assignment — the shared-bias trap `debye/dielectric.py` warns about —
+so the deviation could not be separated from the convention. It can now, and it
+does not go away.
+
+**And it overturned a reading that had one data point.** #73 pinned each grid
+code against TABI-PB and recorded that **debye was closest of the three on five
+of six cases and furthest on `fas2-molecular`**, "the only real protein among
+them" — concluding that *no story about a uniformly better or worse solver fits
+both halves*. Six more proteins supply the story, and the exception was the
+beginning of it:
+
+| | debye vs TABI-PB | closest of the three |
+|---|---|---|
+| five solutes ≤ 260 atoms | **0.48–0.86%** | debye, all five |
+| seven proteins ≥ 906 atoms | **2.20–4.57%** | never debye, all seven |
+
+**The split is at size, not at `fas2`.** debye is nearest the lattice-free
+answer on every small solute and furthest on every protein, without exception in
+either direction. Among the proteins APBS is nearest on six of seven and
+`barnase-molecular` is DelPhi's — asserted too, so that a change reordering the
+*other* two codes while leaving debye last does not pass unread. This is what
+`test_debye_is_closest_on_small_solutes_and_furthest_on_every_protein` now
+holds, in place of the `fas2` special case.
+
+*A finding that rested on n=1 was not wrong to record — it was the whole sample
+there was. It was wrong to read as "no story fits", and what fixed that was six
+more rows rather than a better argument.*
+
+**Asserted as an ordering, for two reasons.** The first is the one
+`test_the_three_codes_bracket` gives: a magnitude bar against a referee is
+exactly the trap this section warns about, and an ordering is not something a
+tolerance can be widened to admit. The second is specific to this backend —
+every recording here is at a **single mesh density**, and this document is
+already explicit that one density is "a rung and not a limit". The magnitudes
+are not converged. The ordering does not depend on their being converged.
+
+**A struck claim that turned out to be true, and was still right to strike.**
+The note above records "a session note claiming a 1,403-atom TABI-PB solve is
+not a recording". `barstar` is 1,403 atoms and solves in 59.8 s, so the number
+was right. Striking it was still correct: an unsourced number is not evidence,
+and the remedy was never to trust it harder. It was to run it.
+
+**What is left of the referee gap.** `serum-albumin` and `hca`, and **every
+`van-der-waals` and `smoothed-molecular` case above 906** — TABI-PB refuses both
+as *grid* concepts, not as missing features, so those are out of a surface
+solver's reach permanently rather than expensively. Of 58 debye recordings, the
+count with neither a TABI-PB counterpart nor a gated closed form falls from 30
+to 24, and above 906 atoms from 16 to 10. The decision this section was blocking
+on shrinks accordingly: not "accept same-family referees above 906 atoms", but
+"accept them for the surfaces a boundary-element solver cannot express, and for
+the two cases that are hours away".
+
+**Still unexplained, and it prices the rest.** debye and the DelPhi backend
+agree on the Kirkwood field to 2.7e-5 relative — five significant figures —
+while APBS sits ~0.4% from both. If those two share a discretization convention
+then the two same-family referees are one, and §14 records that as worth knowing
+before either referees the other. Nothing here settles it; the cross-family rungs
+sidestep it rather than answer it.
 
 ### The referee gap, closed from recordings already in the repo
 
@@ -6384,8 +6508,10 @@ unsettled as well as the bar being unpassable.
 
 **What is left of the gap, precisely.** Not "30 recordings with no check" —
 **no cross-family referee above 906 atoms**, and **no *independent* referee for
-an interface change**. TABI-PB's coverage tops out at `fas2` itself; its other
-cases are 260 and 20 atoms, and `tests/corpus/tabipb/` holds six files.
+an interface change**. TABI-PB's coverage topped out at `fas2` itself; its other
+cases were 260 and 20 atoms, and `tests/corpus/tabipb/` held six files. *It now
+holds twelve, reaching 2,065 atoms — the ceiling was the recordings, not the
+tool, and the section above carries the ladder.*
 
 *Two things not to overstate here. Whether reaching higher is a cost question or
 a feasibility one is **unmeasured** — no protein above `fas2` has ever been
@@ -6764,9 +6890,11 @@ independent check on near-field magnitude, and `ala-gly` carries net charge
 0.0000 e, where the spurious monopole has nothing to couple to — a caveat that
 happens to point the right way, and one to test rather than assume.
 
-**Two ceilings.** TABI-PB tops out at `fas2`, 906 atoms, which is exactly where
-the referee gap begins ("none above 906 atoms has any"), so this deepens the
-referee below the gap rather than closing it. And there is no Kirkwood fixture
+**Two ceilings.** *Corrected 2026-08-27: the first of these was a property of
+the recordings and not of the tool — TABI-PB reaches 2,482 atoms, so an exterior
+evaluator built on it reaches there too.* As written: TABI-PB's recordings
+topped out at `fas2`, 906 atoms, which is exactly where the referee gap begins,
+so this appeared to deepen the referee below the gap rather than closing it. And there is no Kirkwood fixture
 for it: `kirkwood_pqr` emits two atoms and the mesher refuses fewer than four,
 so an off-centre BEM reference needs the same hand-built tetrahedron trick, or a
 different geometry.

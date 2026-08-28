@@ -494,3 +494,101 @@ def test_the_corpus_largest_solute_is_its_widest_disagreement():
     assert abs(DEBYE_DEVIATION["serum-albumin-vdw"][0]) > 1.6 * max(
         abs(DEBYE_DEVIATION[n][0]) for n in others
     )
+
+
+# The cases at or above 906 atoms that TABI-PB can answer *and record*.
+# `molecular` only: it refuses `smoothed-molecular` and `van-der-waals` as
+# *grid* concepts, which is a statement about what a surface solver represents
+# rather than a missing feature. Two large cases are absent for cost:
+#
+#   `hca` (2,482 atoms) completed once at 576.3 s and **timed out on a second
+#   attempt at identical settings** — `DEFAULT_TIMEOUT` is 600 s, so the margin
+#   was 4%, which is not a margin. It is recorded here as out of reach at this
+#   mesh density rather than accommodated by moving the timeout, because a limit
+#   relaxed until a marginal case fits is the same edit as a limit removed.
+#
+#   `serum-albumin` (18,242 atoms) extrapolates to roughly nineteen hours at the
+#   `atoms^2.41` wall clock measured across this ladder.
+CROSS_FAMILY_ABOVE_906 = (
+    "barnase-molecular",
+    "barstar-molecular",
+    "fas2-molecular",
+    "fkbp-apo-molecular",
+    "fkbp-dmso-molecular",
+    "lysozyme-molecular",
+    "protein-rna-molecular",
+)
+
+
+def test_every_large_tabipb_recording_is_in_the_cross_family_table():
+    """Set equality, so a recording added above 906 cannot escape the ordering.
+
+    The same argument as `test_every_debye_recording_has_a_recorded_deviation`:
+    a count floor under a growing set stops guarding the moment the set outgrows
+    it, and this table is expected to grow — every case here was added because
+    the ceiling turned out to be higher than this document claimed.
+    """
+    sizes = {case.name: case.structure().n_atoms for case in MANIFEST}
+    recorded = {path.stem for path in corpus_dir_for("tabipb").glob("*.json")}
+    large = {name for name in recorded if sizes.get(name, 0) >= 906}
+
+    assert set(CROSS_FAMILY_ABOVE_906) == large
+
+
+def test_a_referee_with_no_lattice_sits_inside_the_bracket():
+    """`E_delphi > E_tabipb > E_apbs > E_debye`, on every case at or above 906 atoms.
+
+    `test_the_three_codes_bracket` says the strongest thing that can be said
+    without a reference — and its own docstring is careful that the three codes
+    it orders **share a discretization**: APBS, DelPhi C++ and debye all assign
+    the dielectric hard at face centres, so none of them is independent of the
+    others. That is the shared-bias trap `debye/dielectric.py` warns about, and
+    it is why §12 called "no cross-family referee above 906 atoms" the largest
+    remaining accuracy question.
+
+    TABI-PB is a boundary-element solver. It has no volumetric lattice at all,
+    so it shares neither the discretization nor the dielectric assignment with
+    any of the three. Inserting it into the bracket is therefore a different
+    claim from widening the bracket, and the finding is that **debye stays at
+    the bottom**: it is 2.2-4.6% more negative than a solver that shares none of
+    its construction, at every size, with the same sign on every rung.
+
+    An ordering rather than a magnitude, for the reason the bracket test gives
+    and for one more that is specific to this backend: every recording here is
+    at a single `mesh_density`, and §12 is explicit that one density is "a rung
+    and not a limit". The magnitudes are not converged. The ordering does not
+    depend on their being converged.
+    """
+    out_of_order = []
+    for name in CROSS_FAMILY_ABOVE_906:
+        case = next(c for c in MANIFEST if c.name == name)
+        energies = {
+            backend: float(load_summary(case, backend=backend)["energy_kj_mol"])
+            for backend in ("delphi", "tabipb", "apbs", "debye")
+        }
+        if not (energies["delphi"] > energies["tabipb"] > energies["apbs"] > energies["debye"]):
+            out_of_order.append(f"{name}: {energies}")
+
+    assert not out_of_order, "\n  ".join(["the cross-family bracket broke:", *out_of_order])
+
+
+def test_the_cross_family_referee_is_a_boundary_element_answer():
+    """What produced these files, asserted rather than assumed.
+
+    The same argument as `test_every_debye_recording_has_two_referees`: this
+    table's whole claim is that the referee shares no lattice with the codes it
+    referees, and that claim is carried entirely by which solver wrote the file.
+    A grid recording misfiled here would leave the ordering above comparing four
+    codes that share a discretization while saying it compares three that do and
+    one that does not.
+    """
+    wrong = []
+    for name in CROSS_FAMILY_ABOVE_906:
+        case = next(c for c in MANIFEST if c.name == name)
+        summary = load_summary(case, backend="tabipb")
+        if summary.get("family") != SolverFamily.BOUNDARY_ELEMENT.value:
+            wrong.append(f"{name}: family {summary.get('family')!r}")
+        if not str(summary.get("backend", "")).startswith("tabipb"):
+            wrong.append(f"{name}: backend {summary.get('backend')!r}")
+
+    assert not wrong, "\n  ".join(["not a boundary-element recording:", *wrong])

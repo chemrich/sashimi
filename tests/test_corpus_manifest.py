@@ -806,16 +806,23 @@ def test_the_boundary_element_tier_agrees_with_the_grid_tier():
 #
 # What the columns say, and it is not what anyone would have guessed:
 #
-# - **debye is the closest of the three to TABI-PB on five of the six cases** —
-#   0.48% to 0.86% where APBS is 1.01% to 1.56% and DelPhi 1.71% to 3.75%.
-# - **And the furthest on the sixth**, `fas2-molecular`, the only real protein
-#   in the boundary-element set: 2.82% against APBS's 1.27% and DelPhi's 1.53%.
+# - **debye is the closest of the three to TABI-PB on every solute at or below
+#   260 atoms** — 0.48% to 0.86% where APBS is 1.01% to 1.56% and DelPhi 1.71%
+#   to 3.75%.
+# - **And the furthest on every protein at or above 906 atoms** — 2.20% to
+#   4.57%, on all seven, without exception.
 #
-# So the one case where an independent referee is worth most is the one case
-# debye does worst on, and no story about a uniformly better or worse solver
-# fits both halves. `tests/test_corpus_debye.py` records the same structure
-# sitting -1.53% from APBS and -4.41% from DelPhi, so the disagreement is real
-# and not an artifact of the denominator.
+# *Extended 2026-08-27 from six recordings to twelve. At six this read "closest
+# on five of six and furthest on `fas2-molecular`, the only real protein among
+# them", and concluded that no story about a uniformly better or worse solver
+# fitted both halves. Six more proteins say the split is at **size**, and that
+# the lone exception was the beginning of the pattern rather than an anomaly in
+# it. The original reading is left visible here because a finding that turned
+# out to be an n=1 artefact is worth seeing next to what replaced it.*
+#
+# `tests/test_corpus_debye.py` records `fas2-molecular` sitting -1.53% from APBS
+# and -4.41% from DelPhi, so the disagreement is real and not an artifact of the
+# denominator.
 #
 # **Pinned two-sided, with no ceiling.** A bar would have to sit above 2.82% to
 # admit `fas2-molecular` today, which is above every other number here and
@@ -824,24 +831,42 @@ def test_the_boundary_element_tier_agrees_with_the_grid_tier():
 # records this milestone being caught by three times. A pin cannot be satisfied
 # by loosening it.
 CROSS_FAMILY_DEVIATION: dict[tuple[str, str], float] = {
+    ("apbs", "barnase-molecular"): 0.01412,
+    ("apbs", "barstar-molecular"): 0.00307,
     ("apbs", "fas2-molecular"): 0.01273,
+    ("apbs", "fkbp-apo-molecular"): 0.01430,
+    ("apbs", "fkbp-dmso-molecular"): 0.01405,
     ("apbs", "ion-protein-complex-molecular"): 0.01006,
+    ("apbs", "lysozyme-molecular"): 0.00785,
     ("apbs", "peptide-molecular"): 0.01456,
     ("apbs", "peptide-molecular-cold"): 0.01461,
     ("apbs", "peptide-molecular-high-salt"): 0.01561,
     ("apbs", "peptide-molecular-no-salt"): 0.01447,
+    ("apbs", "protein-rna-molecular"): 0.00713,
+    ("debye", "barnase-molecular"): 0.04574,
+    ("debye", "barstar-molecular"): 0.02201,
     ("debye", "fas2-molecular"): 0.02817,
+    ("debye", "fkbp-apo-molecular"): 0.03692,
+    ("debye", "fkbp-dmso-molecular"): 0.03617,
     ("debye", "ion-protein-complex-molecular"): 0.00862,
+    ("debye", "lysozyme-molecular"): 0.03519,
     ("debye", "peptide-molecular"): 0.00583,
     ("debye", "peptide-molecular-cold"): 0.00578,
     ("debye", "peptide-molecular-high-salt"): 0.00477,
     ("debye", "peptide-molecular-no-salt"): 0.00729,
+    ("debye", "protein-rna-molecular"): 0.02792,
+    ("delphi", "barnase-molecular"): 0.01139,
+    ("delphi", "barstar-molecular"): 0.01674,
     ("delphi", "fas2-molecular"): 0.01525,
+    ("delphi", "fkbp-apo-molecular"): 0.01853,
+    ("delphi", "fkbp-dmso-molecular"): 0.01885,
     ("delphi", "ion-protein-complex-molecular"): 0.01709,
+    ("delphi", "lysozyme-molecular"): 0.01298,
     ("delphi", "peptide-molecular"): 0.03652,
     ("delphi", "peptide-molecular-cold"): 0.03652,
     ("delphi", "peptide-molecular-high-salt"): 0.03745,
     ("delphi", "peptide-molecular-no-salt"): 0.03502,
+    ("delphi", "protein-rna-molecular"): 0.01367,
 }
 
 # Both sides are checked-in recordings, so every ratio is exact arithmetic on
@@ -883,23 +908,44 @@ def test_the_grid_tier_sits_where_it_was_measured_against_the_surface_tier(backe
     assert not off, "\n  ".join([f"{backend} moved against TABI-PB:", *off])
 
 
-def test_debye_is_closest_to_the_independent_family_except_where_it_matters_most():
-    """The finding above, asserted so that either half changing gets read.
+def test_debye_is_closest_on_small_solutes_and_furthest_on_every_protein():
+    """Where debye stands against the independent family, split by size.
 
-    debye is the closest of the three grid codes to TABI-PB on five of six
-    cases and the furthest on `fas2-molecular`, the only real protein among
-    them. Both halves are pinned: a change that made debye uniformly closest
-    would fail here, and so would one that made it uniformly worst. Neither is
-    a regression on its own — but neither should land without somebody saying
-    which of the two stories is now true.
+    **This replaces a reading that had one data point.** With six TABI-PB
+    recordings the table said debye was closest on five of six and furthest on
+    `fas2-molecular`, "the only real protein among them" — and concluded that no
+    story about a uniformly better or worse solver fitted both halves. With
+    twelve there is a story, and the exception was the beginning of it:
+
+    - debye is **closest of the three on all five solutes at or below 260
+      atoms** — 0.48% to 0.86%, against APBS's 1.01% to 1.56%.
+    - debye is **furthest of the three on all seven proteins at or above 906
+      atoms** — 2.20% to 4.57%, without exception.
+
+    The split is at size, not at `fas2`. That is a sharper claim than the one it
+    replaces and it is pinned the same way, in both directions: a change making
+    debye uniformly closest fails here, and so does one making it uniformly
+    furthest. Neither is a regression by itself; neither should land without
+    somebody saying which story is now true.
+
+    Among the proteins APBS is nearest the boundary-element answer on six of
+    seven, `barnase-molecular` being DelPhi's. That third-place detail is
+    asserted too, because a change that reordered the *other* two codes while
+    leaving debye last would otherwise pass unread.
     """
-    closest = {
-        name: min(GRID_BACKENDS, key=lambda b: CROSS_FAMILY_DEVIATION[(b, name)])
+    sizes = {case.name: case.structure().n_atoms for case in MANIFEST}
+    ranked = {
+        name: sorted(GRID_BACKENDS, key=lambda b: CROSS_FAMILY_DEVIATION[(b, name)])
         for _, name in CROSS_FAMILY_DEVIATION
     }
 
-    assert closest.pop("fas2-molecular") == "apbs"
-    assert set(closest.values()) == {"debye"}, closest
+    small = {n: r for n, r in ranked.items() if sizes[n] <= 260}
+    proteins = {n: r for n, r in ranked.items() if sizes[n] >= 906}
+    assert len(small) == 5 and len(proteins) == 7, (len(small), len(proteins))
+
+    assert {r[0] for r in small.values()} == {"debye"}, small
+    assert {r[-1] for r in proteins.values()} == {"debye"}, proteins
+    assert {n for n, r in proteins.items() if r[0] == "delphi"} == {"barnase-molecular"}
 
 
 def test_the_expensive_boundary_element_recordings_are_present():
