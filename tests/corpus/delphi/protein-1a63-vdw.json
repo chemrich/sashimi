@@ -1,6 +1,6 @@
 {
-  "name": "protein-rna-vdw",
-  "description": "The van der Waals half of `protein-rna-molecular`. The one pair here that is not all protein: a nucleic acid packs differently, and its probe worth (+18.4%) sits with fas2's rather than with the similarly sized proteins' +27% to +36%.",
+  "name": "protein-1a63-vdw",
+  "description": "The van der Waals half of `protein-1a63-molecular`. Its probe worth (+18.4%) sits with fas2's rather than with the similarly sized proteins' +27% to +36%, which was attributed to nucleic-acid packing this structure does not have. The outlier is real and is now unexplained; the attribution is withdrawn.",
   "source": "apbs-examples/1a63.pqr",
   "tier": "full",
   "family": "finite-difference",

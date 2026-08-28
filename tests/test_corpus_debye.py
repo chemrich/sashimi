@@ -291,8 +291,8 @@ DEBYE_DEVIATION: dict[str, tuple[float, float]] = {
     "barnase-vdw": (-0.01088, -0.07947),
     "lysozyme-molecular": (-0.02713, -0.04881),
     "lysozyme-vdw": (-0.02034, -0.08323),
-    "protein-rna-molecular": (-0.02064, -0.04216),
-    "protein-rna-vdw": (-0.01267, -0.05244),
+    "protein-1a63-molecular": (-0.02064, -0.04216),
+    "protein-1a63-vdw": (-0.01267, -0.05244),
     "hca-molecular": (-0.01839, -0.04822),
     "hca-vdw": (-0.00870, -0.06911),
     # Serum albumin, 18,242 atoms — the corpus's largest solute and the widest
@@ -516,7 +516,7 @@ CROSS_FAMILY_ABOVE_906 = (
     "fkbp-apo-molecular",
     "fkbp-dmso-molecular",
     "lysozyme-molecular",
-    "protein-rna-molecular",
+    "protein-1a63-molecular",
 )
 
 

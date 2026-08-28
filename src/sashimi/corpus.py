@@ -912,10 +912,11 @@ MANIFEST: tuple[Case, ...] = (
         tier=CaseTier.STANDARD,
     ),
     Case(
-        name="protein-rna",
+        name="protein-1a63",
         description=(
-            "2,065 atoms. The only nucleic acid in the corpus, so the only case "
-            "where phosphate backbone charges are exercised at all."
+            "2,065 atoms, every residue a standard amino acid. Carried the name "
+            "`protein-rna` until 2026-08-28 on the strength of its filename: "
+            "there is no nucleic acid in this file, or anywhere in the corpus."
         ),
         source="apbs-examples/1a63.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
@@ -2026,12 +2027,12 @@ MANIFEST: tuple[Case, ...] = (
         tier=CaseTier.FULL,
     ),
     Case(
-        name="protein-rna-molecular",
+        name="protein-1a63-molecular",
         description=(
-            "2,065 atoms with a phosphate backbone, on the shared surface. No "
-            "backend but APBS had ever been handed a nucleic acid by the corpus, "
-            "and a radius set assigned per element is exactly the thing that has "
-            "no phosphorus entry until someone tries."
+            "2,065 atoms on the shared surface, and the rung between barnase and "
+            "hca on it. Its description claimed a phosphate backbone and a "
+            "per-element radius set with no phosphorus entry; the structure "
+            "contains no phosphorus, so neither claim was ever exercised here."
         ),
         source="apbs-examples/1a63.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
@@ -2137,12 +2138,13 @@ MANIFEST: tuple[Case, ...] = (
         tier=CaseTier.FULL,
     ),
     Case(
-        name="protein-rna-vdw",
+        name="protein-1a63-vdw",
         description=(
-            "The van der Waals half of `protein-rna-molecular`. The one pair "
-            "here that is not all protein: a nucleic acid packs differently, and "
-            "its probe worth (+18.4%) sits with fas2's rather than with the "
-            "similarly sized proteins' +27% to +36%."
+            "The van der Waals half of `protein-1a63-molecular`. Its probe "
+            "worth (+18.4%) sits with fas2's rather than with the similarly "
+            "sized proteins' +27% to +36%, which was attributed to nucleic-acid "
+            "packing this structure does not have. The outlier is real and is "
+            "now unexplained; the attribution is withdrawn."
         ),
         source="apbs-examples/1a63.pqr",
         grid=GridSpec(resolution=0.5, padding=10.0),
