@@ -6317,10 +6317,13 @@ independent check and none above 906 atoms has any, and phase 5's release.
 *Updated 2026-08-25. The gap is narrower and more precisely stated than that.
 Every one of the 58 already had **two same-family referees** in this repository
 and nobody had written the relationship down; #72 did, and the section below
-carries what it says. What is genuinely open is **no cross-family referee above
+carries what it says. What was genuinely open is **no cross-family referee above
 906 atoms** — TABI-PB's *recordings* topped out at `fas2` — and **no
 *independent* referee for an interface change**, which is the ramp's problem and
-not a coverage one. *Whether reaching higher was a cost question or a
+not a coverage one. *The first is settled: six recordings were added above 906,
+and the ten that remain are covered by a recorded decision — see "Decision:
+same-family referees are accepted above 906 atoms, for ten cases". The second
+is still open, and is not a coverage problem.* *Whether reaching higher was a cost question or a
 feasibility one was unmeasured. **It is measured now, and it is cost**: TABI-PB
 solves every `molecular` case up to 2,482 atoms. See "The ceiling above 906
 atoms was a property of the recordings, not the tool" below — what topped out at
@@ -6425,9 +6428,18 @@ was right. Striking it was still correct: an unsourced number is not evidence,
 and the remedy was never to trust it harder. It was to run it.
 
 **What is left of the referee gap.** `serum-albumin` and `hca`, and **every
-`van-der-waals` and `smoothed-molecular` case above 906** — TABI-PB refuses both
-as *grid* concepts, not as missing features, so those are out of a surface
-solver's reach permanently rather than expensively. Of 58 debye recordings, the
+`van-der-waals` case above 906**. *Corrected 2026-08-28, and the correction
+matters: an earlier version of this paragraph said van der Waals was out of a
+surface solver's reach "permanently rather than expensively", by lumping it in
+with `smoothed-molecular`. That is true of `smoothed-molecular` and `gaussian`,
+which are volumetric dielectrics a BEM solver has no equivalent for — the
+protocol behaving correctly. **It is not true of `van-der-waals`**, which
+`sashimi.tabipb.options` declines for a different reason entirely: it "would be
+`srad 0`, and NanoShaper does not return from it in any reasonable time on a
+dipeptide". That is the mesher, not the method. Re-checked 2026-08-28 and the
+observation still holds — 90 s and no return on a 20-atom peptide — but a
+triangulator that handles a zero probe would unblock it, where nothing unblocks
+a smoothed dielectric.* Of 58 debye recordings, the
 count with neither a TABI-PB counterpart nor a gated closed form falls from 30
 to 24, and above 906 atoms from 16 to 10. The decision this section was blocking
 on shrinks accordingly: not "accept same-family referees above 906 atoms", but
@@ -6881,6 +6893,76 @@ property of the codes. `studies/lattice_phase/debye_delphi_agreement.py` carries
 all of it, and `tests/test_kirkwood_field.py::TestWhyDebyeAndDelphiAgree` pins
 the shared lattice as pure grid arithmetic, so a change to either sizing rule
 fails rather than silently invalidating this section.
+
+### Decision: same-family referees are accepted above 906 atoms, for ten cases
+
+**2026-08-28.** §12's oldest open accuracy question was "30 of 58 debye
+recordings have no independent check and none above 906 atoms has any". It was
+blocked on two things that were assumed rather than measured, and both have now
+been measured — the ceiling (above) and the independence of the same-family pair
+(below). This records the decision they unblock.
+
+**The decision.** For the **ten** debye recordings above 906 atoms that still
+have no cross-family referee, the two same-family referees already in the
+repository are accepted as the check. No further backend is pursued for them.
+
+**What makes that defensible now, and did not before.** The worry was never that
+APBS and DelPhi say nothing — it was that they might not be independent of debye
+or of each other, in which case agreement is shared bias rather than
+confirmation. Three measurements bound that:
+
+- **debye and DelPhi are independent.** Their five-figure agreement on the
+  Kirkwood field was a shared *lattice*, not a shared discretization; two
+  candidate physics explanations were tested and both fail, and the agreement
+  breaks the moment their point-count rules diverge. The confound is specific to
+  a near-field probe on a shared grid and does not reach the energies, which
+  differ by percent.
+- **What two same-family referees can say has been written down** (#72):
+  `E_delphi > E_apbs > E_debye` on all 18 cases at or above 906 atoms, and a
+  probe-worth asymmetry running opposite for each code, which locates the
+  residual in how the three construct the boundary rather than in how they solve
+  on it.
+- **Where a cross-family referee *is* obtainable, it agrees with them.** On the
+  seven `molecular` rungs from 906 to 2,065 atoms, inserting a solver with no
+  volumetric lattice leaves the ordering intact —
+  `E_delphi > E_tabipb > E_apbs > E_debye`, 7 of 7 — and debye stays furthest.
+  So extrapolating the same-family reading to the cases a BEM solver cannot be
+  run on is an **evidenced** extrapolation rather than an assumption. That is
+  the whole argument, and it is worth more than the ten recordings it licenses.
+
+**What the decision does not license.** Not a magnitude bar against a
+same-family referee — that is the shared-bias trap `debye/dielectric.py` warns
+about, and #73's pins are two-sided *records* rather than bounds. And not a
+near-field comparison between debye and DelPhi as evidence about either's
+discretization: on a shared lattice that measures the box.
+
+**Where the extrapolation is weakest, stated because it is the reason to revisit
+this.** Eight of the ten are `van-der-waals` and **every cross-family
+confirmation above is on `molecular`**. #72 measured the two surfaces
+disagreeing in *opposite directions* — `|debye − DelPhi|` larger on
+`van-der-waals` in 12 of 12 and `|debye − APBS|` larger on `molecular` in 11 of
+12 — so crossing from one surface to the other is exactly where this reasoning
+has least support. The decision is taken with that on the record rather than
+around it.
+
+**None of the ten is out of reach in principle**, which is the other reason to
+expect this to be revisited:
+
+| what blocks it | cases | what would unblock it |
+|---|---|---|
+| the mesher | eight `van-der-waals` | a triangulator that returns at `srad 0`; NanoShaper does not, on 20 atoms, in 90 s |
+| cost | `hca-molecular` (2,482 atoms) | a budget above `DEFAULT_TIMEOUT`; it completed once at 576.3 s and timed out twice |
+| cost | `serum-albumin` (18,242 atoms) | hours, on an exponent too weakly determined to say how many |
+
+*A `smoothed-molecular` case would be the one genuinely permanent gap, and there
+are none here: debye supports `molecular` and `van-der-waals` only, so no
+`smoothed-molecular` case is among the 58 at all.*
+
+**What reopens this.** Any of the three unblocks above; a change to how debye
+constructs its boundary, since that is where #72 located the residual; or a
+fourth solver family. Until then the ten are checked by two codes that are
+independent of debye and of each other, and the ordering they agree on is the
+claim — not the magnitudes.
 
 ### The exterior field evaluator, designed against a measurement
 
