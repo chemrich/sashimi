@@ -298,7 +298,14 @@ DEBYE_DEVIATION: dict[str, tuple[float, float]] = {
     # Serum albumin, 18,242 atoms — the corpus's largest solute and the widest
     # disagreement in it, by a factor of two over the next. See
     # `test_the_corpus_largest_solute_is_its_widest_disagreement`.
-    "serum-albumin": (-0.06639, -0.10405),
+    #
+    # Re-pinned at M3a (2026-08-28) from (-0.06639, -0.10405), the only entry in
+    # this table the ion-exclusion change moved past `DEVIATION_BAND`: +6.83e-04
+    # against APBS and +7.12e-04 against DelPhi. Both shrank, and that is
+    # recorded rather than claimed — this test is two-sided precisely because
+    # moving toward a shared-bias referee is not evidence of an improvement. What
+    # says M3a was right is the closed form in `tests/test_debye_m3.py`, not this.
+    "serum-albumin": (-0.06571, -0.10334),
     "serum-albumin-vdw": (-0.09092, -0.17513),
 }
 
