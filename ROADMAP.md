@@ -3058,7 +3058,7 @@ spread, which is exactly what `AccuracyTier` was built to keep separate.
 | ~~M4a~~ | ~~**Fractional-volume dielectric**~~ | **dropped by M1c, on cost/benefit rather than infeasibility.** True area-fraction averaging was *not* tested and neither of M1c's failure mechanisms would apply to it. What carries is that the goal is worth less than scoped: the most favourable variant moved the worst-case near-field error only 4.138% → 3.085%, where debye is already at parity with both incumbents. Numbers to beat if revived: 3.085% field, −0.107% Born energy |
 | M5 ✅ | Registry integration | **met**: `sashimi corpus verify --backend debye --tier fast` passes, and so does `--tier standard`. debye is in `sashimi.backends`, so `--backend`, `sashimi_solve` and `sashimi_capabilities` all reach it — that was two lines, which is §2's claim about the registry cashed. It records 23 of the 40 fast cases and 39 of 75 standard, refusing the rest **by design**: `smoothed-molecular` is APBS's harmonic averaging and `gaussian` is DelPhi's. Getting there needed three supporting changes and one measured tolerance, below |
 | M6 | **Potential field out** | a DX map protean's viewer loads, *and* residue potentials on a real protein inside the cross-backend band — loadable is not the same as right, and M1b is the sphere-scale half of this claim — **the protean-replacement milestone**. **The second half is met by measurement and recorded rather than gated**, decided 2026-08-17 by Charlie: debye sits inside the band, but the band is the same width as each solver's own grid noise, so a gate there would have a 0.001 margin and would go red for reasons unrelated to debye. ~~Revisit when fractional-volume dielectric averaging damps the oscillation.~~ **The lever exists now: M8/M8a shipped the sub-cell ramp and #75/#77 made it affordable, so "revisit when the oscillation is damped" has a mechanism rather than an intention. What stands in the way is that the field axis M6 lives on is where the ramp's case is weakest, and the molecular-surface evidence is two tests on one dipeptide.** See the section below |
-| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. **Reopened 2026-08-29 for the seat kernel, which did not exist when M7 was parked.** Three redundancies inside `_compiled_seats` — a two-cursor single sweep, a nearest-first legality scan, and the counting pass, which is exactly half the stage — are together **4.45–4.82× on `surface.seats`** and **1.333× on an albumin solve at 1.0 Å** against a **0.998× same-code control**, falling to **1.087× at 0.5 Å** because the stage is flat in seconds while the lattice around it is not. Bit-identical to the numpy reference on all seven homogeneous rungs, on arm64 and on amd64 (#99), and the single pass costs **0.643×** the memory of the dual pass. **Un-parking is Charlie's call; nothing under `src/` has moved.** Respecified bar, and the argument against, in the sections below |
+| M7 | Performance claim | the §11 benchmark-VM question, revisited only here. **Groundwork done 2026-08-17**: debye is *geometry*-bound, not solver-bound (86% surface classification against 11% linear solve), so the dielectric lever was the wrong one; and wall clock is not a usable instrument here — identical code varies 1.9x on load. **Planned 2026-08-18** against a direct measurement of the rim loop rather than the profile: the `decided` early-out that forces the loop to be sequential prunes only **16%**, and the batched answer must come out **bit-identical**, so the rewrite is safer than its size suggests. **Landed 2026-08-18: 1.209× on the solve**, CPU time, minimum of 3, interleaved, energies bit-identical — against a **0.993× control on identical code**. The ~4.4× projected from a microbenchmark was wrong and is retracted: it timed arithmetic on contiguous arrays where the stage is a gather, and batching every stage measured **1.000×**. What batching actually buys is the coarse multigrid levels, 3–21×; the finest level had 2% per-call overhead to recover and got 1.4× *worse* when its legality test was batched. **Parked 2026-08-18**, and the measurement that parks it is that debye had been graded at 0.5 Å where protean asks for 1.0 Å — fas2 is 7.7 s, not 21.7 s, so the gap was about three times narrower than charted. **At protean's 1.0 Å the batched query is worth 1.966× / 1.902× on fas2 / barnase**, bit-identical — where it reads 1.209× at 0.5 Å. Threading inverts the other way: 2.28× at 0.5 Å, **1.06× at 1.0 Å**, and is dropped. Each lever is worth about what the other was worth depending only on the resolution it is graded at, because coarsening moves work out of large-array numpy and into per-call overhead. **Reopened 2026-08-29 for the seat kernel, which did not exist when M7 was parked, and re-parked the same day — M7's status is unchanged.** Three redundancies in the compiled seat path — a single mirror sweep, a nearest-first legality scan, and the counting pass in `probe_seats`, which is half of it — are together **3.77–4.23× on `_probe_seats` with the table build charged as D-G2 requires** (4.45–4.82× with in-kernel ordering, which needs no table), and **1.333× on an albumin solve at 1.0 Å** against a **0.998× same-code control**. It falls to **1.087× at 0.5 Å** because the kernel is flat in seconds while the lattice around it is not, and to **1.1615× on fas2 at 1.0 Å** because its share grows with atom count — where M7's own batched rim query read 1.966× on that structure — a ratio that took a ~16 s solve down to the 7.7 s recorded below, where the same request now costs 1.05 s and already contains that lever — so the two ratios have different denominators and do not compare. Bit-identical to the numpy reference on all seven homogeneous rungs plus `ala-gly`, on arm64 and on amd64 (#99); the single pass costs **0.643×** the memory of the dual pass at albumin, 1.733× at fas2. **Parked as a constant factor, not on a failed gate — though D-G3's corpus half was never run.** Nothing under `src/` has moved. The bar, the argument against, and what would un-park it, in the sections below |
 | M8 ✅ | **The interface, graded without a reference** | **met for `van-der-waals` 2026-08-22, and the default surface is not that.** Two halves. The *instrument*: a pose spread sees only the phase-dependent half of the discretization error, so `grade_refinement` adds the other by Richardson over h, h/2, h/4 — validated against the Born closed form at **0.08–0.48%**, with a `converging` guard that refuses a ladder reading −172.6, −177.0, −171.7 rather than fitting it. *Both halves of that sentence were corrected 2026-08-24: the extrapolation does **not** beat its finest rung every time — three of sixteen Born windows do not — and the guard was a half-guard that admitted a 269.688% error until `MIN_SHRINKAGE` and a sign test were added.* The *scheme*: a hard face-centre dielectric replaced by a solute fraction ramped across **one cell** from a signed distance — a *bound* rather than a distance on the interior until the M8a row's 2026-08-25 repair — and blended harmonically, **4.8–7.8× against the Born closed form at `w = 0.5` (3.4–52.5× at `w = 0.25`) and 3.6–5.6× on pose dispersion**, with the ramp at 0.5 Å closer to converged than the hard assignment at 0.25 Å. Shipped off by default and bit-identical when off. Three claims of this document died in the process: the fitted convergence order is a property of the ladder and not the method, `posed`'s translation moves nothing because the box follows the solute, and averaging the indicator over a band of *whole* cells is worse than not averaging at all. **The precondition M1c set — the field axis — was measured 2026-08-25 and the ramp does not win it**: on `ala-gly`, refereed at **4×** the coarse spacing, the potential 2-3 Å outside the surface is **2.4-13× further** from the referee at `w ≥ 0.75`, while the energy on the same fixture and lattice is **4.9-8.8× closer**. On a Born sphere with an exact reference the two summaries disagree — worst-direction improves 12-23%, shell RMS is flat with a doubled floor — so there is no clean gain there either. *At `w = 0.5` the verdict is bounded rather than settled, and `w = 0.25` and `fas2` are not settled at all: a referee that shares a construction with a candidate is nearest that candidate, which is the shared-bias trap caught for the first time **inside one solver**, between two settings of one knob. The axis is bounded rather than discharged, and the bound is the deliverable. **Its premise is no longer a theorem: both schemes converge to the exact Born field, measured 2026-08-26, so the comparison is bounded and not meaningless.*** The two axes disagree and debye's consumer reads the field, so **the default stays off for a measured reason rather than a coverage one** |
 | M8a ✅ | **The solvent-excluded distance** | **met 2026-08-22**, and it moved the number M8 could not: the ramp raises the energy's convergence order to **2.31–2.48**, from **1.009** on molecular and from a hard van der Waals ladder that the repaired `converging` **refuses to fit at all** — an interface treatment ceasing to bound the accuracy. *Re-measured 2026-08-24: the recorded "0.32" baseline came from a ladder whose corrections shrink by 1.2031x, under `MIN_SHRINKAGE`, so it never described a fit and is withdrawn; the conclusion survives, the left-hand number does not.* `ReducedSurface.signed_gap` is `probe - dist(x, A)`, out of the same three families that decide `inside`, and `sign(gap)` reproduces `inside` node for node. Both ramp widths work on both surfaces. *Their limits agreeing to 0.14% and 0.16% was offered as evidence they are real rather than fitted and is **struck**: the width is in cells, so the band vanishes with h and the limits must agree whatever the ramp does.* *An earlier draft reported the best width as surface-dependent; that was a one-sided distance of its own making and is withdrawn below.* *And the branch that repair left alone was not a distance either: `min_i(|x - c_i| - r_i)` is an upper bound inside a union of spheres, so the `van-der-waals` ramp read a bound as a depth on **19.0%** of its interior band faces until 2026-08-25. Repaired by taking the same three families with the probe removed — a union of spheres is the solvent-excluded surface of a zero probe — which moves `fas2` by **+44.79 kJ/mol at 1.0 Å and +10.06 at 0.5 Å**, 19.8% and 7.0% of the ramp's own offset, and makes the ramp **cheaper** (2.62× → 1.28× of hard at 0.5 Å) because the clamp it needs is what lets the bound be windowed. The molecular branch had the same defect in its search *reach* — `probe` where the consumer reads to `probe + band` — worth 0.012–0.024% and free to fix. The Born ion is bit-identical across both, which is why neither was ever seen.* Pose dispersion alone would have ratified the bug, which is what Q0's other half is for |
 | M9 ✅ | **A boundary that does not cost `O(nodes × atoms)`** | *Shipped 2026-08-23 — #68 the decision, #70 the implementation.* The exact multi-atom Debye-Hückel sum evaluated on a **strided sub-lattice of the box face** and interpolated up, in place of one sum per face node; pitch in ångströms, capped at 0.6× the solute's clearance. Serum albumin's boundary goes **12.94 s → 0.24 s** and the whole solve 30.05 → 17.94 s. *Named "focusing" until the step (c) review priced a coarse pre-solve at 2.0–2.5 s against the strided face's 0.24 s, at no better accuracy and for a second grid hierarchy — the milestone kept its purpose and lost its mechanism.* **Exit criterion retired 2026-08-23, and it is worth reading as a record rather than a bar.** *Met:* total CPU strictly lower than the `mdh` baseline on **every** rung of the 906→18,242 ladder, 1.18–1.74× and widening with size; and, on the 3–4 Å shell against the exact sum on the same box and lattice, **r = 1.000000, sign 100.00%, magnitude within 0.04% and energy within 0.052%** on fas2, 1a63 and serum albumin, against bars of 0.999 / 99% / 1.02× / 0.5%. *Struck, each measured — and the first one for a corrected reason:* **atoms^≤1.05**, not because it is unreachable but because **it measures the ladder as much as the solver**. Two of the nine rungs use different input conventions — `2LZT-ASP66` has a mean radius of 1.031 Å against ~1.55 elsewhere, and `hca` is 17.8% hydrogen against ~49% — and dropping them to leave seven homogeneous rungs moves the fit from 1.075 to **1.048 ± 0.026** for `sdh` and 1.084 to **1.057 ± 0.023** for the shipped solver, halving the standard error and reproducing across two independent runs. *That composition effect is 0.027, against M9's own improvement of 0.113 in the same units — a quarter of the signal, coming from the choice of structures rather than from the solver.* So the honest reading is that the floor sits **at** the bar rather than above it and the shipped solver is one standard error over — marginal, not impossible. **An earlier version of this row said the bar sat below the floor and was wrong**; it was fitted across a ladder that mixes radius sets. **fas2 within 0.5% of its TABI-PB recording**, because the whole span from the exact boundary to `sdh` is 1.090 pp where the bar needs 2.375, so it graded discretization; and **`residue_potentials` as the observable**, because `sdh` passes it on all three structures at r ≥ 0.99998 — residue pooling averages away the near-surface `l ≥ 1` error that is the whole defect. **The three struck clauses share one cause, and it is the lesson of this milestone:** each graded something other than the quantity M9 changes — the wrong axis, the wrong referee, the wrong observable — while the *thresholds* were right every time. **A gate is a threshold and an observable, and the observable is the half that failed three times.** The Born ion and `ala-gly` pose dispersion remain regression anchors and were never bars: one atom makes `sdh` and `mdh` bit-identical, and a net-neutral dipeptide makes an `sdh` boundary identically zero. §12 carries the measurements and the forensics |
@@ -3687,125 +3687,175 @@ own label is "not a Poisson-Boltzmann solution; magnitudes are indicative only"
 of the three that is both. **That, and not a constant factor, is the case for
 shipping it.**
 
-#### The seat kernel, and the gate it has to pass
+#### The seat kernel, graded and parked
 
-**2026-08-29.** The list above has four entries and the seat kernel is not one of
-them, for a good reason: when it was written `_probe_seats` was still numpy. It
-was compiled later (#57, and the section at :4292), and the compiled version
-carries three redundancies that the numpy version could not have had. The third
-is what makes this worth reopening.
+**2026-08-29. Measured, prototyped, and not shipped.** Three redundancies in the
+compiled seat path are worth **1.333× on an albumin solve at 1.0 Å** and
+**1.087× at 0.5 Å**, on a kernel bit-identical to the numpy reference on arm64 and
+on amd64. Charlie parked it on those numbers. Nothing under `src/` has moved and
+M7's status is unchanged.
 
-1. **Two mirror sweeps of the triple loop** (`kernel.py:1110`), where one sweep
-   with two write cursors is row-order identical. This strikes a claim the code
-   makes about itself at `kernel.py:1096-1097` — *"Two sweeps of the triple loop,
-   one per mirror, is the cost of a comparable test"* — which was believed
-   necessary and is false. Worth **1.42-1.57×** of the stage.
+The seat kernel is not on the "leaves on the table" list above because when that
+list was written `_probe_seats` was still numpy; it was compiled three days later
+(#57, "The one-time build, compiled — and a square that was not one").
+
+1. **Two mirror sweeps of the triple loop** (`kernel.py:1110`). One sweep that
+   appends each atom's `+z` seats and holds its `−z` seats in a small scratch
+   until the atom is done is row-order identical — which also strikes a claim the
+   code makes about itself at `kernel.py:1096-1097`, *"Two sweeps of the triple
+   loop, one per mirror, is the cost of a comparable test."* Worth **1.48-1.57×**
+   of the kernel.
 2. **An index-ascending legality scan** (`kernel.py:1173-1182`), where
-   nearest-first cuts blocker tests **6.4-7.9×**. The scan AND-reduces with an
-   early `break`, so no permutation of it can change a verdict — and the numpy
-   reference already scans in a *different* order and is still bit-identical,
-   which is measurement rather than argument.
-3. **The counting pass** (`kernel.py:1218-1228`). `probe_seats` runs the
-   identical triple loop twice, a counting call and then a fill call. Removing it
-   is worth **exactly 2.00×** of the stage: E/B = 2.004 / 1.993 / 1.979 and
-   F/D = 2.071 / 1.994 / 2.044 on `fas2`, `actin-monomer` and `serum-albumin`.
-   Two independent routes to the same constant.
+   nearest-first cuts blocker tests **6.4-8.9×** on the protein rungs (1.15× at
+   ala-gly's 20 atoms). The scan AND-reduces with an early `break`, so no
+   permutation of it can change a verdict — and **four different orderings were
+   run, all giving bit-identical seats on every rung**, which is measurement
+   rather than argument.
+3. **The counting pass**, which is not in `_compiled_seats` but in its caller
+   `probe_seats` (`kernel.py:1218-1228`): the identical triple loop runs twice, a
+   counting call and then a fill call. Worth **2.00× of the kernel**, to the
+   precision the instrument allows — E/B = 2.004 / 1.993 / 1.979 and F/D = 2.071 /
+   1.994 / 2.044 on `fas2` / `actin-monomer` / `serum-albumin`, two ratios inside
+   one run. The independent confirmation is the prior session's direct measurement
+   of the same quantity at **50.0%** of the stage, by a different route.
 
-Together, **4.45-4.82× on the stage**, or 3.77-4.23× with a separate order table
-charged — and the recommendation is to charge nothing, because the ordering can
-be computed inside the kernel for **+0 B persistent and +0 B transient**, with
-blocker-test counts identical to the digit (`fas2` 3,088,784, `actin-monomer`
-31,133,082, `serum-albumin` 83,399,860). *The vectorised table build that looked
-like the obvious answer is a trap:* a global lexsort is **2.37× slower** than the
-per-atom Python loop it would replace, and spikes 80 MB of transient where the
-loop spikes none.
+**The single pass costs less memory at albumin, not more** — the open question at
+18,242 atoms. The a-priori bound is what makes it look impossible:
+`U = 2 Σ C(n_i,2)` is 32,094,754 rows = 770 MB, **1,978×** the 16,224 seats
+actually emitted. A buffer grown from `max(1024, natoms)` plus the per-atom `−z`
+scratch removes the bound and reproduces the reference's emission order without
+knowing the split point in advance. Peak **438,412 B against the dual pass's
+682,268 B, 0.643×** (0.611× at actin), because the dual pass carries `per_atom`
+and `offset` a single pass has no use for. *It is 1.733× at fas2*, on a 74 KB
+peak, and 0.643× is the untrimmed view — trimming trades it for 1.53×. Nothing
+exceeded 1.05 MB.
 
-**The single pass costs less memory, not more**, which was the open question at
-18,242 atoms. The a-priori bound is what makes over-allocation look impossible —
-`U = 2 Σ C(n_i,2)` is 32,094,754 rows = 770 MB on albumin, **1,978×** the 16,224
-seats actually emitted. A buffer grown geometrically from `natoms`, plus a small
-per-atom scratch holding that atom's `−z` seats until its `+z` seats are done,
-removes the bound entirely and reproduces the reference's emission order without
-ever knowing the split point in advance. Measured peak **438,412 B against the
-dual pass's 682,268 B, 0.643×** — because the dual pass carries `per_atom` and
-`offset` that a single pass has no use for.
+*The vectorised order table is a trap.* On albumin a global lexsort is **2.37×
+slower** than the per-atom Python loop it would replace (2.14× actin, 1.50× fas2)
+and peaks at 80 MiB of transient against the loop's 10 MiB. The ordering can
+instead be computed inside the kernel for **+0 B persistent and ≈2 KiB of
+scratch**, with blocker-test counts identical to the digit.
 
-##### Why the original bar could not be graded, and what replaces it
+##### What the original gates did and did not have to name
 
-The bar this initiative set itself was *"≥ 1.75× on `fas2`, `actin-monomer` and
-`serum-albumin`, with a same-code control at 1.00 ± 0.02×"*, and it **named no
-resolution** — which is exactly the ambiguity :3619-3621 says parked M7.
+The initiative set three gates, and the plan had *already* separated the kernel
+from the solve: D-G2 named three structures and no resolution, D-G3 named
+"≥ 1.10× on an albumin solve at 1.0 Å". Nothing had to be replaced. What the
+measuring added is the reason the split is right, and one reporting rule.
 
-But the missing resolution is not the defect it looks like, and saying so
-precisely is the point. **`_probe_seats` reads atoms and never the lattice:** the
-albumin seat stage is **10.76 s at 1.0 Å and 11.14 s at 0.5 Å**, flat to 3.5%
-across a 7.6× span of node count. So *a gate on the stage does not need a
-resolution, and a gate on the solve cannot do without one* — because the stage's
-**share** moves from **34.6% to 9.5%** over that same span while its seconds do
-not. The two halves separate, and only one of them was ever ambiguous:
+**`_probe_seats` reads atoms and never the lattice** — structurally, not just
+empirically: it loops over atoms, their neighbour lists and the triples those
+admit, and no grid quantity enters it. Four tracer profiles of the same stage read
+**10.22-11.14 s across a 24× span of node count**, non-monotone. So a gate on the
+kernel needs no resolution, and a gate on the solve cannot do without one, because
+the kernel's **share** of a solve falls from **~33% to ~11%** between the two
+solve grids below — 7.6× in nodes — while its seconds do not. *(Those shares are
+back-solved from the whole-solve ratios against the measured charged kernel ratio,
+so they do not depend on the tracer. The tracer's own figures for the same stage
+are 34.6% and 9.5%; the document's quiet record is 5.81 s and 30.5%. The tracer
+inflates whole-solve CPU 1.60-1.67× and this stage ~1.85×, so its absolute seconds
+are not quoted here for cost.)*
 
 * **D-G1 — bit-identity, exact. Met, on two platforms.**
-  `np.array_equal(reference, compiled)` against the *numpy* reference on the
-  seven homogeneous rungs plus `ala-gly`, `_Spheres` built once and handed to
-  both sides. True on all eight here and on CI's native amd64 (#99), including a
-  variant whose buffer is seeded at 1 so the reallocation fires on nearly every
-  emitted row. The shipped kernel matches the reference on the same eight, so
-  nothing here uncovers a defect on main. The falsifying mutation still fires:
-  one cursor emitting both mirrors adjacently gives the identical seat *set* and
-  reorders 578 of `fas2`'s 1,144 rows and 8,942 of albumin's 16,224.
-* **D-G2 — stage CPU. Met, and it should not name a resolution.**
-  ≥ 1.75× on `fas2`, `actin-monomer` and `serum-albumin`, same-code control
-  1.00 ± 0.02, minimum-of-N on `time.process_time`. Measured **4.45 / 4.82 /
-  4.46×** uncharged and **3.77 / 4.23 / 3.99×** charged, control 0.999 / 1.005 /
-  0.980.
-* **D-G3 — whole solve. Respecified: it must name the resolution, and report the
-  other one.** The original said "≥ 1.10× on an albumin solve at 1.0 Å". That is
-  the consumer's resolution and the right primary bar, but a single-resolution
-  bar is what let threading look like a 2.28× win two sections above. **The bar
-  is ≥ 1.30× on an albumin solve at an achieved h ≈ 1.0 Å, with the 0.5 Å figure
-  recorded beside it and not gated**, and every recorded debye corpus energy
-  unchanged to the last digit.
+  `np.array_equal` against the *numpy* reference on the seven homogeneous rungs
+  plus `ala-gly`, `_Spheres` built once and handed to both sides. True on all
+  eight here and on CI's native amd64 (#99), including a variant seeded at 1 so
+  the buffer reallocates on nearly every emitted row. The shipped kernel matches
+  the reference on the same eight, so nothing here uncovers a defect on main. The
+  falsifying mutation still fires: one cursor emitting both mirrors adjacently
+  gives the identical seat *set* and reorders 578 of `fas2`'s 1,144 rows and 8,942
+  of albumin's 16,224.
+* **D-G2 — `_probe_seats` CPU, table build charged. Met on the ratio, on a loaded
+  instrument.** ≥ 1.75× on `fas2`, `actin-monomer`, `serum-albumin`, same-code
+  control 1.00 ± 0.02, minimum-of-15 on `time.process_time`. **Charged, as the
+  gate is written: 3.77 / 4.23 / 3.99×** (4.45 / 4.82 / 4.46× with the in-kernel
+  ordering, which needs no table), controls 0.999 / 1.005 / 0.980, at 1-minute
+  load **5.9-8.1** on 8 cores — not idle by this document's standard, so the
+  absolute milliseconds are not quoted. `actin-monomer` reads 4.82 against 4.45
+  and 4.46, which the ±2% control does not cover and which nothing here explains;
+  the verdict does not turn on it, since the lowest of the three clears 1.75× by
+  2.2×.
+* **D-G3 — whole solve. Level unchanged; a reporting rule added.** It stays at
+  "≥ 1.10× on an albumin solve at 1.0 Å". Raising it to sit just *beneath* a
+  number already measured would be setting a gate after the reading. What is added
+  is that a claim here **must state the achieved h and report the other resolution
+  beside it, ungated** — a single-resolution bar is what let threading look like a
+  2.28× win two sections above. **Its second half was never run:** every recorded
+  debye corpus energy unchanged to the last digit is untested.
 
-Measured end to end, four arms in one process, interleaved with a rotating order,
-`time.process_time`, energies compared bit-for-bit across arms:
+Measured end to end, four arms in one process, interleaved and alternating the
+order each round, `time.process_time`, energies compared bit-for-bit across arms.
+Both arms below charge the table build, so 1.333× is a floor for the in-kernel
+form:
 
-| albumin | n | achieved h | control | counting pass only | all three |
-|---|---|---|---|---|---|
-| **1.0 Å**, N=9 | 1,625,505 | 0.963-0.991 | **0.998** | 1.296× | **1.333×** |
-| **0.5 Å**, N=5 | 12,381,369 | 0.487-0.500 | **1.008** | 1.073× | **1.087×** |
+| albumin | n | achieved h | load | control | single pass, no nearest-first | all three |
+|---|---|---|---|---|---|---|
+| **1.0 Å**, N=9 | 1,625,505 | 0.963-0.991 | 6.2 → 4.5 | **0.998** | 1.296× | **1.333×** |
+| **0.5 Å**, N=5 | 12,381,369 | 0.487-0.500 | 7.8 → 4.5 | **1.008** | 1.073× | **1.087×** |
 
-Energies bit-identical across all four arms at both grids
-(`−42709.646499786555` and `−39936.75341456189`). Note the 0.5 Å row needs
-`max_points` raised to 20 M: at the default the request silently clamps to a
-161³ lattice at h = 0.64-0.83, and 0.5 and 0.35 resolve to the *same* grid.
+Energies bit-identical across all four arms at both albumin grids
+(`−42709.646499786555` and `−39936.75341456189`). The middle column is the single
+pass *without* nearest-first — two of the three redundancies, not the counting
+pass alone; at 0.5 Å the increment from the third is inside the instrument and
+inverts under the paired median. The 0.5 Å row needs `max_points` raised to 20 M:
+at the default the request silently clamps to a 161³ lattice at h = 0.64-0.83, and
+0.5 and 0.35 resolve to the *same* grid.
 
-**The instrument is still the hard part, and it failed once here.** A `fas2`
-0.5 Å run at N=15 was **discarded** because its same-code control read 0.980
-while the machine's load climbed from 4.6 to 7.3 mid-run. The rule that :3386
-sets — CPU-time ratios, back to back, on one machine — is necessary and is not
-sufficient; the control has to be read *before* the ratio, every time, and a run
+**The instrument is the hard part, and it failed once here.** A `fas2` 0.5 Å run
+at N=15 was **discarded** because its same-code control read 0.9799 while load
+climbed from 4.6 to 7.3 mid-run — 1 part in 10⁴ outside the same ±0.02 band
+D-G2's albumin arm sits exactly on, which is an argument about the band as much as
+about the run. The rule holds: the control is read *before* the ratio, and a run
 that fails it is thrown away rather than caveated.
 
-##### The argument against, which stands
+##### The argument against, and the decision
 
-**D optimises the cheap end of the resolution range.** Its value falls from
-1.333× to 1.087× as the grid refines, because the stage is flat in seconds while
-everything around it grows. That is the opposite of threading, which this section
-dropped, and the same direction as the batched rim query it kept — and it means
-D is worth least exactly where a solve is expensive enough to care.
+**The ratio falls with refinement; the seconds saved do not.** D reads 1.333× at
+1.0 Å and 1.087× at 0.5 Å — and saves **4.85 s and 5.65 s** of CPU respectively. A
+kernel that is flat in seconds, sped up ~4×, returns a saving that does not fall
+with refinement: 17% *higher* at the finer grid, while the denominator grows 3.6×
+(19.40 s → 70.32 s). The 17% is outside both runs' controls and is not explained
+here. So "worth less at high resolution" is true of the ratio and false of the
+time, and which of those matters depends on whether a caller is comparing
+backends or waiting for a solve. The *ratio's* direction is still the
+opposite of threading, which this section dropped, and the same as the batched rim
+query it kept.
 
-It is also **below M7's own landed precedent** at the resolution that counts:
-the batched rim query was 1.966× / 1.902× on `fas2` / `barnase` at 1.0 Å, and
-2.017× after the `PAIR_BATCH` fix. 1.333× on albumin does not reach that.
+*The comparison to M7's own landed precedent needed a matching structure, so it was
+taken.* The batched rim query was **1.966× on `fas2` at 1.0 Å**; measured on the same
+structure at the same resolution, D is **1.1615×** (control 0.998, N=21, energies
+bit-identical, achieved h 0.880-0.965) — fas2's 0.5 Å companion is the run the
+control rejected, so no second resolution is reported for this structure. Two
+things follow. D is worth *more* on albumin than on fas2 at one resolution —
+**1.333× against 1.1615×** — the mirror of its behaviour in h, and for the
+same reason: the kernel's share grows with atom count and shrinks with node
+count. And the two ratios are **not commensurable as
+"which lever is bigger"**: M7's 1.966× took a fas2 solve of ~16 s down to the
+7.7 s recorded above, where the same request now costs **1.05 s** (min of 21 at
+1-minute load 10.9 → 8.8, so an upper bound). The compiled kernels and M9's
+boundary landed in between, and the batched rim query is inside *both* figures —
+so D is graded against a denominator that already contains M7's own lever.
+Sequential optimisations compound; their ratios do not compare.
 
-And the sentence this section already ends on still stands: debye's case for
-shipping is that it is the only one of the three that is both binary-free and
-Poisson-Boltzmann, **"and not a constant factor."** D does not change that. What
-it changes is that a constant factor in 73% of the runtime was already sanctioned
-at :6294-6298, and this is the largest answer-preserving one left.
+**Charlie parked it, 2026-08-29** — as a constant factor, not on a failed gate,
+in a project whose phase 6 has not started. That a constant factor in 73% of the
+runtime was already sanctioned ("Where the residual cost actually is, and why it
+is not an exponent problem") is what made it worth measuring; it is not by itself
+what makes it worth building now.
 
-**Un-parking M7 for it is Charlie's call.** The six measurements that decision was
-waiting on are all taken and recorded above; nothing under `src/` has moved.
+*So the next reader does not re-derive any of it:*
+
+* **The prototype exists and is graded.** Branch
+  `d-seat-kernel-platform-measurement` (#99, closed unmerged, branch kept) carries
+  the single-pass kernel with in-kernel nearest-first ordering and the
+  bit-identity test over the seven homogeneous rungs plus `ala-gly`, green on
+  amd64.
+* **What would un-park it.** Work at albumin scale and 1.0 Å in volume, which is
+  protean at the top of its stated range rather than a hypothetical; the linear
+  solve getting faster, which *raises* the kernel's share and D's value with it;
+  or somebody being inside the seat path for another reason, since most of D's
+  cost is review and risk rather than the writing.
+* **What is not measured.** D-G2 on a quiet machine, and D-G3's corpus half.
 
 ### The size range protean actually uses, and a compiled-kernel spike
 
