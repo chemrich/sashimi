@@ -7062,6 +7062,25 @@ a `sashimi.tabipb.field` module carrying the expression above. The parse side is
 already done and already tested. `vtk.py` needs nothing: `parse_vtk` forwards
 `normal_derivative` today and `tests/test_tabipb.py` already asserts it survives.
 
+***Shipped 2026-08-28, with the field named for its side.*** The protocol field
+is **`interior_normal_derivative`**, not the bare `normal_derivative` budgeted
+above, and the continuity factor is applied by
+`SurfacePotential.exterior_normal_derivative(solvent)` rather than at each call
+site. The reason is the one this section already gives: the two sides differ by
+`eps_s/eps_p` and the difference is invisible in the array, so an unqualified
+name is a 39× error that reads as a textbook identity. It is a *name* and not an
+`EnergyTerm`-style discriminator because the two sides are an exact
+multiplication where two energy terms are not — nothing has to be recorded
+per-instance, only fixed once and made unmissable. **`vtk.py` did need one
+thing** after all, though not parsing: the `SurfacePotential` is constructed
+there, so the field is populated there, in the file's own units, and
+`to_kt_per_e` divides both blocks by `RT`. *The gate that carries this is the
+`eps_p` sweep, and it needs a second leg: with `eps_s` held fixed, a hardcoded
+`1/39.27` cancels the `eps_p` dependence exactly as a correct conversion does,
+so the sweep must also vary `eps_s`, where the hardcode reads 1.000 against a
+required 1.9635.* `tests/test_tabipb_normal_derivative.py` and
+`tests/test_normal_derivative_side.py` carry it.
+
 ### `residue_potentials` reported one number for two chains
 
 **2026-08-26.** `sashimi.analysis.residue_potentials` is one of exactly two
