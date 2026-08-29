@@ -226,12 +226,48 @@ def screening_nodes(
     **M4 changes what the Stern layer sits around.** It is the region within
     `ion_radius` of the *solute*, and on a molecular surface the solute is no
     longer the union of spheres — so the exclusion is the solvent-excluded
-    volume dilated by `ion_radius`, not a union inflated by it. The two
-    coincide exactly on `van-der-waals`, which is what keeps M3's measurements
-    describing the same quantity, and `tests/test_debye_m4.py` asserts the
-    coincidence rather than assuming it. The union path stays for that surface
-    because it is exact and needs no dilation, where the general one quantises
-    the offset to the lattice.
+    volume dilated by `ion_radius`, not a union inflated by it.
+
+    **M3a: above the probe those are the same region, so the exact test is
+    taken on both.** For any dilation radius `r >= probe`,
+    `dilate(SES, r) == dilate(vdw_union, r)` exactly, in the continuum. *Proof.*
+    Take `x` within `r` of an SES point `s`. Because `s` is solute, every `w`
+    with `|w - s| <= probe` has `dist(w, vdw) < probe` — otherwise `w` is a legal
+    probe centre whose ball covers `s`, making `s` solvent. If `|x - s| <=
+    probe`, take `w = x`. Otherwise take `w = s + probe*(x - s)/|x - s|`, so
+    `|x - w| <= r - probe`; `dist(., vdw)` is 1-Lipschitz, so
+    `dist(x, vdw) < probe + (r - probe) = r`. Either way `x` is in
+    `dilate(vdw, r)`, and the reverse inclusion is free because vdw is inside
+    SES. **`r >= probe` is used exactly once and is sharp.**
+
+    So the union test — exact, and needing no lattice dilation — is correct for
+    `molecular` too whenever `ion_radius >= surface_radius`, which every shipped
+    case satisfies at 2.0 against 1.4. What that buys is not tidiness: `dilate`
+    quantises its reach to the lattice, so its accuracy is decided by whether
+    `ion_radius` happens to be commensurate with the achieved spacing. Measured
+    across nineteen spacings between 0.82 and 1.00 A, the dilated path lands
+    outside 2% on twelve of them and the union path on none; two spacings 0.8%
+    apart, 0.8929 and 0.9000 A, differ four-fold in error because 2.0 A is
+    representable on one lattice and not the other. `dilate` also degrades to
+    the identity once `ion_radius < min(spacing)`, and `build_levels`
+    re-discretizes at every level, so the coarse levels carried no Stern layer
+    at all.
+
+    **Below the probe the dilated path stays, because there the union is not
+    less accurate but wrong.** At `ion_radius = 0` — the standard "no Stern
+    layer" request, which `dilate` serves exactly, since a zero-radius ball is
+    the identity — the union would leave 13.5% of fas2's solute nodes carrying
+    bulk screening *inside* the dielectric body. Falling back rather than
+    raising is deliberate: raising would turn a working request into an
+    exception.
+
+    *An earlier version of this docstring said the two constructions "coincide
+    exactly on `van-der-waals`" and credited `tests/test_debye_m4.py` with
+    asserting it. The second half was false — no test in that file calls this
+    function — and the first was true only in the continuum, where the shipped
+    lattice `dilate` disagreed with the exact union on 18.8% of `ala-gly`'s
+    excluded nodes at 0.87 A. `tests/test_debye_m3a.py` asserts what this one
+    now claims.*
     """
     if solvent.ionic_strength <= 0.0:
         return np.zeros(grid.shape, dtype=np.float64), 0.0
@@ -242,7 +278,13 @@ def screening_nodes(
     bulk = solvent.solvent_dielectric * kappa * kappa  # 1/A^2
 
     axes = axis_coordinates(grid)
-    if solvent.surface_model is SurfaceModel.MOLECULAR:
+    if (
+        solvent.surface_model is SurfaceModel.MOLECULAR
+        and solvent.ion_radius < solvent.surface_radius
+    ):
+        # Below the probe the two constructions genuinely diverge and this is
+        # the correct one. Above it they are the same region, so the branch
+        # below is taken instead: exact, and free of the lattice quantisation.
         solute = (surface or ReducedSurface(structure, solvent)).inside(axes)
         excluded = dilate(solute, grid.spacing, solvent.ion_radius)
     else:

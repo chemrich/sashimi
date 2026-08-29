@@ -55,7 +55,20 @@ from sashimi.protocol import GridSpec, PotentialGrid, SolventModel, SurfaceModel
 ZERO_SALT = "born-ion-vdw"
 SALTED = ("born-ion-vdw-salt", "born-ion-vdw-high-salt")
 
+# M3a's arm, on the surface debye *defaults* to. M3 was graded on
+# `van-der-waals` and its bar never covered `molecular`, which did not exist
+# when the bar was set -- the branch arrived one PR later, in M4.
+MOLECULAR_SALTED = ("born-ion-molecular-salt", "born-ion-molecular-high-salt")
+
 M3_BAR = 0.02
+
+# Tighter than M3_BAR on purpose, and the margin is measured from both sides.
+# On a lone sphere the two surface models describe the same ion-exclusion
+# region, so `molecular` must read what `van-der-waals` reads: 0.0993% and
+# 0.1404%. The shipped lattice dilation read 0.7339% and 1.0696% instead, so a
+# bar here both fails the construction M3a replaced (by 4.3x) and passes the one
+# it installed (with 1.8x to spare). A bar at M3_BAR would have graded nothing.
+M3A_BAR = 0.0025
 
 # What a Stern layer at the solvent probe rather than the ion radius reads, at
 # 0.15 M. The bar has to sit below this or it grades nothing about the
@@ -128,6 +141,49 @@ def test_debye_reproduces_the_screened_born_ionic_term(name):
         f"closed-form {want:.4f}, {error:.3%} out and past the {M3_BAR:.1%} "
         "ROADMAP.md section 12 M3 holds it to."
     )
+
+
+@pytest.mark.parametrize("name", MOLECULAR_SALTED)
+def test_the_molecular_surface_reproduces_the_same_ionic_term(name):
+    """M3a's exit criterion. Needs no binary.
+
+    The ion-exclusion region is the solute dilated by `ion_radius`, and above the
+    probe that is the same region whether the solute is the union of spheres or
+    the solvent-excluded surface -- proved in `screening_nodes`. On a lone sphere
+    the two surface models coincide outright, so this must land where the
+    `van-der-waals` arm lands, and it does: the two agree to the last digit.
+
+    Before M3a it did not. The lattice dilation quantises its reach to the grid,
+    so it read 0.73% and 1.07% here against the union path's 0.10% and 0.14%.
+    """
+    case = case_named(name)
+    got = ionic_contribution(name)
+    want = exact_ionic_contribution(case)
+    error = (got - want) / abs(want)
+
+    assert abs(error) <= M3A_BAR, (
+        f"{name}: debye's ionic contribution is {got:.6f} kJ/mol against a "
+        f"closed-form {want:.6f}, {error:.4%} out and past the {M3A_BAR:.2%} "
+        "ROADMAP.md section 12 M3a holds it to."
+    )
+
+
+def test_the_two_surface_models_agree_on_a_lone_sphere():
+    """The identity M3a rests on, asserted rather than assumed.
+
+    A lone sphere's solvent-excluded surface *is* that sphere, so the two models
+    describe one ion-exclusion region and the ionic term cannot depend on which
+    is asked for. This is the fixture where any disagreement is purely how the
+    region was computed -- which is what made the 0.634% the shipped dilation
+    showed here a measurement of the lattice rather than of the physics.
+    """
+    for salted, molecular in zip(SALTED, MOLECULAR_SALTED, strict=True):
+        vdw = ionic_contribution(salted)
+        mol = ionic_contribution(molecular)
+        assert mol == pytest.approx(vdw, rel=1e-12), (
+            f"{molecular} reads {mol:.9f} against {salted}'s {vdw:.9f}; on a lone "
+            "sphere these are the same region and must be the same number"
+        )
 
 
 def test_the_bar_rejects_a_stern_layer_at_the_probe_radius():

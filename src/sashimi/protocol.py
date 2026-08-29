@@ -236,6 +236,10 @@ class SolventModel:
             raise ValueError("dielectric constants must be positive")
         if self.ionic_strength < 0:
             raise ValueError(f"ionic_strength must be non-negative, got {self.ionic_strength}")
+        # Unvalidated until 2026-08-28: a negative radius silently produced an
+        # empty ion-exclusion region rather than an error.
+        if self.ion_radius < 0:
+            raise ValueError(f"ion_radius must be non-negative, got {self.ion_radius}")
         if self.temperature <= 0:
             raise ValueError(f"temperature must be positive, got {self.temperature}")
         if self.surface_radius < 0:
