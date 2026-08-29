@@ -7046,6 +7046,21 @@ independent check on near-field magnitude, and `ala-gly` carries net charge
 0.0000 e, where the spurious monopole has nothing to couple to — a caveat that
 happens to point the right way, and one to test rather than assume.
 
+***Tested 2026-08-28, and it does not hold. The hope is dead.*** Neutrality
+removes only the part of the flux error that couples to the monopole. The error
+is an exact linear functional of the charge vector — doubling `ala-gly`'s charges
+at fixed net zero doubles the spurious charge to eight digits, `2.000000006` —
+and **affine** in the net charge rather than proportional, `dQ = a + bQ` with
+`a = −0.00543 e` and `b = +0.00806 e` at `sdens` 3. The `a` term survives
+neutrality. In absolute terms neutral `ala-gly` carries **0.005469 e** of
+spurious charge against **0.002634 e** for the same molecule at net `+1 e` on the
+identical triangulation — 2.08x *worse*, and 0.405x against net `−1 e`, so the
+direction of the comparison is set by the control's sign and no absolute
+statement of the form "neutral is better" is stable at all. Relative to the
+evaluator's own near-field magnitude it reads 0.975% against a charged Born
+sphere's 1.262%: 10–25% better, not a decade. **The pricing two paragraphs above
+stands, and this section's one escape from it is closed.**
+
 **Two ceilings.** *Corrected 2026-08-27: the first of these was a property of
 the recordings and not of the tool — TABI-PB reaches 2,482 atoms, so an exterior
 evaluator built on it reaches there too.* As written: TABI-PB's recordings
@@ -7061,6 +7076,33 @@ change, §2 already names it as half of what a BEM solver produces), the same
 a `sashimi.tabipb.field` module carrying the expression above. The parse side is
 already done and already tested. `vtk.py` needs nothing: `parse_vtk` forwards
 `normal_derivative` today and `tests/test_tabipb.py` already asserts it survives.
+
+***Built 2026-08-28, and it lives at `sashimi.surface_field`, not
+`sashimi.tabipb.field`.*** It consumes only protocol types — a
+`SurfacePotential`, a `SolventModel`, target points — and contains no TABI-PB
+concept, so `field.py`'s "one owner for a rule two engines need" applies and any
+future boundary-element backend reaches it without importing another backend's
+package. *The deciding argument is the test tier rather than tidiness:*
+`pyproject.toml` gates the `tabipb` marker on the binary, so a module under
+`tabipb/` drags its checks out of the binary-free leg — and the two that matter
+most do not need a solver at all. The orientation identity is refereed by the
+divergence theorem, and the null-field identity by the representation itself; both
+run on an analytically generated icosphere carrying Born's exact Cauchy data,
+which is what cuts the circularity of a referee validated by the codes it
+referees. **The evaluator reproduces this section's own measured ladder — 1.279%,
+0.791%, 0.502% against the recorded 1.278%, 0.790%, 0.502% at `sdens` 3, 5, 8 —
+and the corrected expression returns +1.00791 against the recorded +1.00790.**
+`tests/test_surface_field_identities.py` and `tests/test_surface_field.py` carry
+fourteen gates between them, including the Kirkwood fixture this section records
+as missing: five atoms, the same four-sphere tetrahedron plus a charge of radius
+0.5 A at 1.5 A, which meshes as a clean single component (vertex-radius spread
+0.0095 A) and returns `a_1` within **1.046%** of the closed form at `sdens` 5.
+*That gate is not redundant with the monopole ones and the measurement says why:
+the double layer carries 3.4e-5 of `a_0` on a centred charge and **0.3335 of
+`a_1`** here, so every spherically symmetric fixture is blind to the term that
+does the work on a real molecule.* A winding flip is likewise invisible on a
+centred sphere — it moves the field by 0.06% — which is why the orientation
+identity is its own gate rather than a corollary of a magnitude check.
 
 ***Shipped 2026-08-28, with the field named for its side.*** The protocol field
 is **`interior_normal_derivative`**, not the bare `normal_derivative` budgeted
