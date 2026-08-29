@@ -7,9 +7,15 @@ small and rigidly ordered — `POINTS`, `POLYGONS`, then `POINT_DATA` with two
 saves, the same reasoning `dx.py` records for OpenDX.
 
 The second scalar block, `NormalPotential`, is the normal derivative of the
-potential on the surface. It is the other half of what a boundary-element solve
-natively produces, and `SurfacePotential` has nowhere to put it yet, so it is
-parsed and handed back separately rather than silently dropped.
+potential on the surface -- the other half of what a boundary-element solve
+natively produces. **It is the *interior* derivative, `eps_p`'s side**, measured
+rather than assumed: sweeping the solute dielectric on a four-atom Born sphere
+moves the file's values as `1/eps_p` exactly and leaves them invariant to
+`eps_s` to six figures. The two sides differ by `eps_s/eps_p`, so a reader that
+takes this for the solvent-side gradient is wrong by 39.27 at the protocol's
+defaults. `SurfacePotential.interior_normal_derivative` carries it under that
+name for exactly that reason; it is also still handed back on `ParsedSurface`,
+which is what `tests/test_tabipb.py` asserts against.
 
 **Units here are TABI-PB's, not the protocol's.** The file carries the potential
 in kJ/mol/e; the protocol boundary fixes kT/e (ROADMAP §4). This module is a
@@ -95,6 +101,9 @@ def parse_vtk(text: str) -> ParsedSurface:
             vertices=vertices,
             values=potential,
             triangles=triangles,
+            # In the file's units here, like `values` -- `backend.to_kt_per_e`
+            # converts both on the way to the protocol boundary.
+            interior_normal_derivative=normal,
         ),
         normal_derivative=normal,
     )

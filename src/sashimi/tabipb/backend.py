@@ -51,9 +51,21 @@ def to_kt_per_e(potential: SurfacePotential, temperature: float) -> SurfacePoten
     extrapolating to RT exactly. `studies/tabipb_units/born_sphere.py` records it
     at two radii, and re-derives by a second route that the values carry no 1/T
     and so were never kT/e at any temperature.
+
+    **The normal derivative takes the same divisor and nothing else.** It arrives
+    in kJ/(mol e A) and `RT` alone puts it in kT/(e A) -- measured, not assumed:
+    the raw block over the exact *interior* closed form is 1.00393 at `sdens` 5
+    and converges on 1 as h^2. No dielectric factor belongs here; the side is
+    named by the field rather than corrected by the unit, and
+    `SurfacePotential.exterior_normal_derivative` is what crosses the interface.
     """
     rt = GAS_CONSTANT * temperature / JOULES_PER_KJ
-    return dataclasses.replace(potential, values=potential.values / rt)
+    derivative = potential.interior_normal_derivative
+    return dataclasses.replace(
+        potential,
+        values=potential.values / rt,
+        interior_normal_derivative=None if derivative is None else derivative / rt,
+    )
 
 
 @dataclass

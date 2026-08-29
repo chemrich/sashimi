@@ -381,12 +381,29 @@ class SurfacePotential:
     carries kJ/mol/e and `sashimi.tabipb.backend.to_kt_per_e` converts on the way
     out; a backend that skips that step returns numbers RT too large, and no
     energy check will notice.
+
+    **The normal derivative names its side, and the name is load-bearing.**
+    `dphi/dn` is discontinuous across the dielectric interface —
+    `eps_p (dphi/dn)_in = eps_s (dphi/dn)_out` — so the interior and exterior
+    values differ by `eps_s/eps_p`, which is **39.27** at this protocol's
+    defaults, and the difference is invisible in the array. A field written
+    against the wrong side is wrong by that factor while looking like a textbook
+    identity. So the stored quantity is the *interior* one, `eps_p`'s side, which
+    is what a boundary-element solver of the Juffer/TABI family natively
+    produces, and the exterior side is reached through `exterior_normal_derivative`
+    rather than by a caller re-deriving the ratio.
+
+    That is the same hazard `EnergyTerm` exists for, with one difference that is
+    why this is a field name and not a discriminator enum: an energy term cannot
+    be converted into another without re-solving, where the two sides here are an
+    exact multiplication.
     """
 
     vertices: FloatArray  # (M, 3), A
     values: FloatArray  # (M,), kT/e
     normals: FloatArray | None = None  # (M, 3), unit outward normals
     triangles: npt.NDArray[np.int64] | None = None  # (T, 3) vertex indices
+    interior_normal_derivative: FloatArray | None = None  # (M,), kT/(e A), eps_p's side
 
     def __post_init__(self) -> None:
         m = len(self.values)
@@ -394,8 +411,31 @@ class SurfacePotential:
             raise ValueError(f"vertices must be (M, 3) to match {m} values")
         if self.normals is not None and self.normals.shape != (m, DIMENSIONS):
             raise ValueError(f"normals must be (M, 3) to match {m} values")
+        if (
+            self.interior_normal_derivative is not None
+            and self.interior_normal_derivative.shape != (m,)
+        ):
+            raise ValueError(f"interior_normal_derivative must be (M,) to match {m} values")
         if m == 0:
             raise ValueError("SurfacePotential needs at least one vertex")
+
+    def exterior_normal_derivative(self, solvent: SolventModel) -> FloatArray | None:
+        """The solvent-side `dphi/dn`, kT/(e A), from the stored interior one.
+
+        Flux continuity across the interface gives
+        `eps_p (dphi/dn)_in = eps_s (dphi/dn)_out`, so the conversion is exact and
+        the only way to get it wrong is to skip it. It lives here rather than at
+        each call site because there is exactly one correct ratio and a hardcoded
+        `1/39.27` passes at the default dielectrics and fails everywhere else --
+        a defect no single-dielectric test can see.
+
+        Returns None when the backend supplied no derivative, which every
+        finite-difference backend does.
+        """
+        if self.interior_normal_derivative is None:
+            return None
+        ratio = solvent.solute_dielectric / solvent.solvent_dielectric
+        return self.interior_normal_derivative * ratio
 
     @property
     def n_vertices(self) -> int:
@@ -403,7 +443,7 @@ class SurfacePotential:
 
     def stats(self) -> Diagnostics:
         v = self.values
-        return {
+        out: Diagnostics = {
             "kind": "surface",
             "n_vertices": self.n_vertices,
             "min": float(v.min()),
@@ -411,6 +451,15 @@ class SurfacePotential:
             "mean": float(v.mean()),
             "std": float(v.std()),
         }
+        # Only when present: every consumer selects min/max/mean/std by name, so
+        # an unconditional key changes no recording -- but it would put a null in
+        # front of every caller reading a finite-difference result, which has no
+        # normal derivative and never will.
+        if self.interior_normal_derivative is not None:
+            d = self.interior_normal_derivative
+            out["interior_normal_derivative_mean"] = float(d.mean())
+            out["interior_normal_derivative_std"] = float(d.std())
+        return out
 
 
 Potential = PotentialGrid | SurfacePotential
