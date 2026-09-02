@@ -58,6 +58,7 @@ from sashimi.errors import InputError
 from sashimi.protocol import (
     DIMENSIONS,
     AccuracyTier,
+    Diagnostics,
     EnergyTerm,
     Equation,
     FiniteDifferenceRequest,
@@ -89,6 +90,7 @@ __all__ = [
     "System",
     "check_same_lattice",
     "check_samples_clear_the_box",
+    "compare_grids",
     "compare_results",
     "grade_field",
     "overlap_probe_points",
@@ -97,6 +99,11 @@ __all__ = [
 ]
 
 N_PROBES = 200
+# A spread needs a stable mean and 200 draws give one. `compare_grids` also
+# reports a maximum, which is an extreme-value statistic that 200 uniform samples
+# underestimate badly, so it samples harder. Interpolating both grids costs
+# 0.6 ms at 200 points and 6.2 ms at 20,000 — free beside reading the maps.
+COMPARE_PROBES = 20_000
 PROBE_SEED = 20260811  # pinned; a spread must not depend on where we sampled
 PROBE_INSET = 0.5  # sample the middle 50% of the shared box, away from boundaries
 
@@ -329,7 +336,7 @@ def check_comparable(runs: list[BackendRun], *, allow_mismatch: bool = False) ->
     return notes
 
 
-def overlap_probe_points(grids: list[PotentialGrid]) -> FloatArray:
+def overlap_probe_points(grids: list[PotentialGrid], *, n: int = N_PROBES) -> FloatArray:
     """Deterministic sample coordinates inside the box every grid covers.
 
     The heart of comparing backends whose grids differ by construction. Both
@@ -349,8 +356,126 @@ def overlap_probe_points(grids: list[PotentialGrid]) -> FloatArray:
     centre = (lo + hi) / 2.0
     half = (hi - lo) * PROBE_INSET / 2.0
     rng = np.random.default_rng(PROBE_SEED)
-    offsets = rng.uniform(-1.0, 1.0, size=(N_PROBES, DIMENSIONS)) * half
+    offsets = rng.uniform(-1.0, 1.0, size=(n, DIMENSIONS)) * half
     return np.asarray(centre + offsets, dtype=np.float64)
+
+
+def compare_grids(a: PotentialGrid, b: PotentialGrid) -> Diagnostics:
+    """Compare two potential maps, on a shared lattice or across different ones.
+
+    **Two backends usually do not land on the same lattice, and that is the case
+    this exists for.** Each sizes its box by its own rules, so asking two of them
+    for 0.5 A on one structure generally gives two boxes with different origins,
+    shapes and achieved spacings, and a comparison that demanded an identical
+    lattice refused exactly the solver-versus-solver question it is meant to
+    answer — with a geometry error, which reads like a caller mistake rather
+    than a fact about finite-difference solvers.
+
+    *Usually, not always, and the exception matters more than the rule.* debye
+    and the DelPhi backend resolve to a bit-identical lattice on 23 of the
+    corpus's 100 cases — every Kirkwood case and most Born-ion ones — which
+    `tests/test_kirkwood_field.py` pins. So a `"lattice"` result does **not**
+    imply one solver produced both maps, and ROADMAP.md section 12 records what
+    follows: where two solvers share a lattice, a near-field comparison between
+    them measures the lattice and not the solvers. This function is handed two
+    grids and cannot know their provenance, so it cannot make that call for the
+    caller — it says which comparison it made and leaves the reading to them.
+
+    So there are two methods and the result always says which one ran:
+
+    - `"lattice"` — identical shape, origin and spacing, so every node pairs
+      with its twin and the difference is exact. This is the mutant-versus-
+      wildtype case, where one solver produced both maps.
+    - `"sampled"` — the boxes differ, so the maps are interpolated at
+      deterministic points inside the region both cover and compared there.
+      Fewer points, and each carries interpolation error on top of the
+      solvers' own.
+
+    *The two numbers are not interchangeable and the method field is how a
+    caller tells them apart.* A sampled RMSD is over `n_points` probes in the
+    shared box; a lattice RMSD is over every node of a box the two agreed on.
+    Reporting one as the other is how a grid-phase artefact gets read as a
+    physics disagreement — ROADMAP.md section 12 records a five-figure agreement
+    between two solvers that turned out to be a shared lattice rather than
+    shared physics.
+
+    Raises `Incomparable` when the boxes do not overlap at all, because there is
+    then no region in which the question has an answer.
+    """
+    same_lattice = (
+        a.shape == b.shape and np.allclose(a.spacing, b.spacing) and np.allclose(a.origin, b.origin)
+    )
+
+    if same_lattice:
+        diff = a.values - b.values
+        flat_a, flat_b = a.values.reshape(-1), b.values.reshape(-1)
+        n_points = int(a.values.size)
+        method = "lattice"
+    else:
+        points = overlap_probe_points([a, b], n=COMPARE_PROBES)
+        if len(points) == 0:
+            raise Incomparable(
+                "these maps cover no common region, so there is no volume in which "
+                "to compare them; re-solve them on boxes that overlap"
+            )
+        sampled = np.array([g.value_at(points) for g in (a, b)])
+        usable = ~np.any(np.isnan(sampled), axis=0)
+        if not usable.any():
+            raise Incomparable(
+                "no sample point fell inside both maps, although their boxes overlap; "
+                "the shared region is too thin to compare in"
+            )
+        flat_a, flat_b = sampled[0, usable], sampled[1, usable]
+        diff = flat_a - flat_b
+        n_points = int(usable.sum())
+        method = "sampled"
+
+    rmsd = float(np.sqrt(np.mean(diff**2)))
+    max_abs = float(np.abs(diff).max())
+
+    # A constant map has undefined correlation, not zero — but "constant" is not
+    # `std == 0` once interpolation is involved. Trilinear sampling of a constant
+    # field returns values differing in the last bits, so its std is ~1e-16
+    # rather than 0, and an exact-zero guard hands `corrcoef` pure rounding noise:
+    # two byte-identical fields reported r = 0.023 beside an RMSD of 2e-16. The
+    # threshold has to be relative to the values, and a non-finite result is
+    # undefined however it arose.
+    scale = max(float(np.abs(flat_a).max()), float(np.abs(flat_b).max()), 1.0)
+    correlation: float | None = None
+    if flat_a.std() > 1e-12 * scale and flat_b.std() > 1e-12 * scale:
+        candidate = float(np.corrcoef(flat_a, flat_b)[0, 1])
+        correlation = candidate if np.isfinite(candidate) else None
+
+    out: Diagnostics = {
+        "method": method,
+        "n_points": n_points,
+        "rmsd_kT_e": rmsd,
+        "mean_diff_kT_e": float(diff.mean()),
+        "correlation": correlation,
+        "shape": list(a.shape),
+    }
+
+    # The maximum is the one statistic sampling cannot estimate. A mean and an
+    # RMS converge over the shared region; a maximum over N draws is a lower
+    # bound on the true maximum and stays one however many draws there are. So
+    # it does not get to share a key with the exact maximum the lattice path
+    # computes — a caller reading `max_abs_diff_kT_e` gets the real thing or a
+    # KeyError, never a quiet underestimate wearing its name.
+    if method == "lattice":
+        out["max_abs_diff_kT_e"] = max_abs
+    else:
+        out["max_abs_diff_over_samples_kT_e"] = max_abs
+        out["shape_b"] = list(b.shape)
+        out["note"] = (
+            "grids differ in geometry, so this is an interpolated comparison over "
+            f"{n_points} points in the *interior* of the region both cover — the "
+            "middle half of each axis, away from the boundaries where a smoothed "
+            "surface makes values sensitive to details that are not the solvers' "
+            "arithmetic. Not a node-for-node difference and not comparable to one. "
+            "The maximum is over those samples and is a lower bound on the true "
+            "maximum, which is why it is not reported under `max_abs_diff_kT_e`"
+        )
+    return out
 
 
 def _relative_spread(energies: list[float]) -> tuple[float, tuple[float, float]]:

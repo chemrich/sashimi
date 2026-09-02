@@ -43,6 +43,7 @@ from sashimi.protocol import (
     SurfacePotential,
     System,
 )
+from sashimi.validate import compare_grids
 
 __all__ = ["mcp"]
 
@@ -207,11 +208,13 @@ def sashimi_solve(
         Field(
             description=(
                 "Which solver to run. `sashimi_capabilities` lists what this "
-                "installation has and what each supports. apbs and delphi fill a "
-                "volume and return a map; tabipb solves on the dielectric "
+                "installation has and what each supports. apbs, delphi and debye "
+                "fill a volume and return a map; tabipb solves on the dielectric "
                 "surface and returns statistics over it, with no map to write; "
-                "gb approximates the energy in process, needs no binary at all, "
-                "and returns no field of any kind."
+                "gb approximates the energy in process and returns no field of "
+                "any kind. **debye and gb need no binary**, so on a bare "
+                "`pip install` they are what works — debye solves the same "
+                "equation apbs does, in this process."
             )
         ),
     ] = "apbs",
@@ -454,42 +457,45 @@ def sashimi_compare_maps(
 ) -> dict[str, Any]:
     """Compare two potential maps: RMSD, maximum absolute difference, correlation.
 
-    Useful for mutant-versus-wildtype questions now, and it doubles as the
-    solver-versus-solver validation tool when a second backend exists. The two
-    maps must share a grid; differing geometry is an error rather than a
-    silently resampled comparison.
+    Answers both the mutant-versus-wildtype question and the
+    solver-versus-solver one, and **says which comparison it made**. Two maps
+    from one solver share a lattice, so every node pairs with its twin and the
+    difference is exact (`method: "lattice"`). Two *backends* usually do not,
+    because each sizes its box by its own rules, so those are compared by
+    interpolating both at points inside the region they share
+    (`method: "sampled"`).
+
+    A sampled RMSD is not comparable to a lattice one: it carries interpolation
+    error on top of the solvers'. The sampled maximum is reported under its own
+    key, `max_abs_diff_over_samples_kT_e`, because a maximum over samples is a
+    lower bound on the true one. Read `method` before comparing two of these
+    numbers to each other.
+
+    A `"lattice"` result does not prove one solver made both maps — some solvers
+    do land on the same box at the same resolution — and when two *different*
+    solvers share a lattice, an exact-looking agreement between them is partly a
+    fact about that lattice.
     """
     a, b = _load_grid(dx_a), _load_grid(dx_b)
+    try:
+        out = compare_grids(a, b)
+    except SashimiError as exc:
+        raise ToolError(str(exc)) from exc
 
-    if a.shape != b.shape:
-        raise ToolError(f"grid shapes differ: {a.shape} vs {b.shape}; maps are not comparable")
-    if not np.allclose(a.spacing, b.spacing) or not np.allclose(a.origin, b.origin):
-        raise ToolError(
-            "grid geometry differs (origin or spacing); re-solve both on the same grid "
-            "rather than comparing across geometries"
-        )
-
-    diff = a.values - b.values
-    rmsd = float(np.sqrt(np.mean(diff**2)))
-    max_abs = float(np.abs(diff).max())
-    flat_a, flat_b = a.values.reshape(-1), b.values.reshape(-1)
-    # A constant map has zero variance, so correlation is undefined, not 0.0.
-    correlation = (
-        float(np.corrcoef(flat_a, flat_b)[0, 1]) if flat_a.std() > 0 and flat_b.std() > 0 else None
+    if out["method"] == "lattice":
+        extreme = f", max |diff| {out['max_abs_diff_kT_e']:.4g} kT/e"
+        scope, tail = "grid points", ""
+    else:
+        extreme = f", max |diff| >= {out['max_abs_diff_over_samples_kT_e']:.4g} kT/e"
+        scope = "shared-region sample points"
+        tail = " Grids differ in geometry, so these are estimates; see note."
+    out["summary"] = (
+        f"RMSD {out['rmsd_kT_e']:.4g} kT/e{extreme}"
+        + (f", correlation {out['correlation']:.6f}" if out["correlation"] is not None else "")
+        + f" over {out['n_points']:,} {scope}."
+        + tail
     )
-
-    return {
-        "rmsd_kT_e": rmsd,
-        "max_abs_diff_kT_e": max_abs,
-        "correlation": correlation,
-        "mean_diff_kT_e": float(diff.mean()),
-        "shape": list(a.shape),
-        "summary": (
-            f"RMSD {rmsd:.4g} kT/e, max |diff| {max_abs:.4g} kT/e"
-            + (f", correlation {correlation:.6f}" if correlation is not None else "")
-            + f" over {a.values.size:,} grid points."
-        ),
-    }
+    return out
 
 
 @mcp.tool
@@ -572,27 +578,76 @@ def sashimi_potential_in_sphere(
     dx_path: Annotated[str, Field(description="Path to an OpenDX map.")],
     centre: Annotated[list[float], Field(description="Sphere centre [x, y, z] in angstroms.")],
     radius: Annotated[float, Field(description="Sphere radius in angstroms.", gt=0)],
+    pqr_path: Annotated[
+        str | None,
+        Field(
+            description=(
+                "The structure the map came from. Strongly recommended: a pocket "
+                "contains atoms, and the values at atom centres are those charges' "
+                "own self-energy singularities — hundreds of kT/e — so an unmasked "
+                "mean describes the solute rather than the field a ligand would "
+                "feel. Supplying it masks the solute interior."
+            )
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Summarise the potential inside a sphere — a ligand pocket, say.
 
     Check `n_points` before trusting the mean: a sphere smaller than the grid
     spacing may contain almost nothing.
+
+    **Pass `pqr_path`.** Without it this averages the point-charge singularities
+    at the atom centres along with the field, and the result looks like an
+    ordinary number — a mean hides that better than a maximum does.
     """
     grid = _load_grid(dx_path)
+    structure = None
+    if pqr_path is not None:
+        try:
+            structure = read_pqr(Path(pqr_path).expanduser())
+        except (OSError, ValueError) as exc:
+            raise ToolError(f"could not read PQR {pqr_path}: {exc}") from exc
+
     try:
-        stats = potential_in_sphere(grid, np.asarray(centre, dtype=float), radius)
+        stats = potential_in_sphere(
+            grid, np.asarray(centre, dtype=float), radius, exclude_near=structure
+        )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
 
+    # Gated on the mask having *bitten*, not on the argument being present. A PQR
+    # that does not match the map — a different structure, a re-centred box —
+    # masks nothing, and `_solute_mask` reports that silently by skipping every
+    # atom whose bounding box misses the grid. The caller would otherwise get the
+    # unmasked mean labelled `solute_masked: true`: the confidently wrong number
+    # this argument exists to prevent, wearing a badge saying it is not.
+    if structure is None:
+        caveat = " (solute not masked — pass pqr_path)"
+    elif stats.get("n_points_excluded_as_solute", 0) == 0:
+        caveat = " (pqr_path masked nothing — does this structure match this map?)"
+    else:
+        caveat = ""
     if stats["n_points"] == 0:
+        # Two different zeros: nothing sampled the sphere at all, or everything
+        # that did was solute. They have different fixes, so they read differently.
         stats["summary"] = (
-            f"No grid points inside a {radius} A sphere at {centre} — "
-            "is it outside the map, or smaller than the grid spacing?"
+            str(stats["note"]) + "."
+            if stats.get("n_points_in_sphere")
+            else (
+                f"No grid points inside a {radius} A sphere at {centre} — "
+                "is it outside the map, or smaller than the grid spacing?"
+            )
         )
     else:
+        excluded = stats.get("n_points_excluded_as_solute", 0)
+        share = (
+            f", {excluded:,} of {stats['n_points_in_sphere']:,} masked as solute"
+            if excluded
+            else ""
+        )
         stats["summary"] = (
             f"{stats['n_points']:,} points: mean {stats['mean_kT_e']:+.3g} kT/e, "
-            f"range {stats['min_kT_e']:+.3g} to {stats['max_kT_e']:+.3g}."
+            f"range {stats['min_kT_e']:+.3g} to {stats['max_kT_e']:+.3g}{share}." + caveat
         )
     return stats
 
