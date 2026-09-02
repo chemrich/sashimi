@@ -127,10 +127,14 @@ structure and never notice the difference.
 
 What it buys, and where. Nearly all of a `debye` solve is geometry — building
 the solvent-excluded surface and then classifying grid points against it — and
-the extra swaps six loops for compiled ones: the three classification families
+the extra swaps eight loops for compiled ones: the three classification families
 (9x, 17x, 28x) and the three construction steps that feed them (6-10x on the
 probe seats, ~12x on the rims, and 93-116x on the neighbour search, which was a
-numpy call per candidate atom pair). Measured on this machine, CPU seconds at
+numpy call per candidate atom pair), plus the union test the ion-exclusion
+region takes on every solve except the one M3a left on the lattice dilation, and
+its signed-distance twin, which the sub-cell dielectric ramp reads. *Those last
+two landed after the table below was taken, so it is a six-kernel measurement
+and understates today's extra.* Measured on this machine, CPU seconds at
 1.0 Å, interleaved and best of three:
 
 | structure | pure numpy | with the extra | |
@@ -312,7 +316,8 @@ See [ROADMAP.md](ROADMAP.md) for the full design and phasing.
 
 ## Status
 
-Phases 0–4, 5 and 7 are done — 0.1.0 is the phase 5 release. The core
+Phases 0–5, 7 and 8 are done — 0.1.0 is the phase 5 release, and phase 8 is
+the clean-room solver. The core
 library is validated against the closed-form Born ion, converging monotonically
 as the grid refines (0.62% → 0.11% → 0.02% at 0.41 / 0.20 / 0.16 Å spacing).
 
@@ -352,11 +357,11 @@ The golden corpus is a first-class feature:
 
 ```sh
 sashimi corpus verify              # the standard tier, diffed against record
-sashimi corpus verify --tier full  # all 98 cases
+sashimi corpus verify --tier full  # all 100 cases
 sashimi corpus build --force       # re-record, deliberately
 ```
 
-Ninety-eight cases, summaries in `tests/corpus/`, split by measured wall time
+One hundred cases, summaries in `tests/corpus/`, split by measured wall time
 into `fast` (what `pytest` runs), `standard` (a CI step per push) and `full` (on
 demand). It is the regression net for the unpinned APBS, and it is the
 acceptance gate the clean-room solver was held to: `sashimi corpus verify
@@ -364,9 +369,9 @@ acceptance gate the clean-room solver was held to: `sashimi corpus verify
 
 Many of those cases are on a surface model more than one solver supports, so
 they carry answers from more than one backend: `tests/corpus/delphi/` holds
-fifty-six, `tests/corpus/debye/` fifty-six from the clean-room solver,
-`tests/corpus/gb/` thirty from the in-process Generalized Born tier, and
-`tests/corpus/tabipb/` six from the boundary-element one. No backend answers
+fifty-eight, `tests/corpus/debye/` fifty-eight from the clean-room solver,
+`tests/corpus/gb/` thirty-one from the in-process Generalized Born tier, and
+`tests/corpus/tabipb/` twelve from the boundary-element one. No backend answers
 the whole corpus — debye declines APBS's harmonic averaging and DelPhi's
 Gaussian dielectric by name, and `corpus verify` reports those as refusals
 rather than as gaps. Comparing
@@ -488,7 +493,7 @@ make every revision before this one unmeasurable.
 by computing something else, so both sides report their energy to full precision
 and `bench` exits non-zero when they differ. An answer-preserving change is held
 to *bit*-identical, not to a tolerance — which is the bar the batched surface
-work in M7 has to meet.
+work in M7 was held to, and met.
 
 Released as `sashimi-electro` 0.1.0. See [ROADMAP.md](ROADMAP.md) for where
 this is heading — it is the single planning document, covering the protocol, the
