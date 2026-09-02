@@ -2,15 +2,20 @@
 
 > Thin, protocol-first wrapper around Poisson–Boltzmann electrostatics solvers,
 > exposed as an MCP server. APBS is the first backend; the protocol is designed
-> to outlive it. `debye` is the eventual clean-room solver that slots in behind
-> the same interface.
+> to outlive it, and `debye` — the clean-room solver phase 8 built behind that
+> same interface — is the evidence that it does. It needs no binary at all.
 
-Status: phases 0–4, 5 and 7 shipped; 6 (distribution) not started; 8 (debye)
-in progress — four backends across three solver families
-(APBS, DelPhi in two flavours, TABI-PB, Generalized Born) and `sashimi validate`
-have landed.
-Last updated: 2026-08-26 (phase 8: M0–M5, M8, M8a and M9 met; M6 recorded
-rather than gated and M7 parked; §12 carries the ladder)
+Status: phases 0–5, 7 and 8 shipped; 6 (distribution) not started; 9
+(integration) ongoing — five backends across three solver families and
+`sashimi validate` have landed. Finite difference is APBS, DelPhi in two
+flavours and `debye`; boundary element is TABI-PB; analytic is Generalized
+Born. APBS came with phases 0–3 and phase 7 added the other three; phase 8
+added `debye`, which is the one that needs nothing installed.
+Last updated: 2026-09-01 (phase 8 **closed**: M0–M5, M3a, M8, M8a and M9 met;
+M6 recorded rather than gated; M7 parked, twice, and the seat kernel with it;
+~~M4a~~ dropped. Its one unmet scope clause — a green `linux-aarch64` — moved
+to phase 6, where §11 had already assigned the platform. §12 carries the ladder
+and the close-out that grades it clause by clause)
 
 This is the single planning document. It supersedes the earlier split between
 ROADMAP.md (intent) and PLAN.md (APBS implementation), which had two
@@ -102,6 +107,7 @@ sashimi/
 │   ├── validate.py           # cross-solver spread and accuracy tiers
 │   ├── analytic.py           # Born, Kirkwood and screened closed forms
 │   ├── analysis.py, field.py, invariants.py, artifacts.py, bench.py
+│   ├── surface_field.py      # exterior field from a BEM surface — deliberately not in tabipb/
 │   ├── constants.py, bem_stub.py
 │   ├── apbs/
 │   │   ├── backend.py        # ApbsSolver implements Solver
@@ -1123,10 +1129,10 @@ trimmed reproducible builds exist partly for this.
 | GitHub Actions | linux-64 | conda-forge via micromamba | **full suite per push**, three legs: every backend, APBS alone, and nothing installed | in use |
 | GitHub Actions | osx-arm64 | conda-forge via micromamba | platform proof: main, weekly, on demand — 10x billing, see §7 | in use |
 | OrbStack container | linux/amd64 (Rosetta) | conda-forge | local linux reproduction when CI is too slow a loop | optional |
-| Proxmox Ubuntu VM | linux-64 native | conda-forge / owned build | stable timings for benchmarking | **deferred to phase 8** |
+| Proxmox Ubuntu VM | linux-64 native | conda-forge / owned build | stable timings for benchmarking | **retired unbuilt, in phase 8** |
 | (future) arm64 Linux | linux-aarch64 | owned build | the platform gap of §9 | phase 6 |
 
-### Why the benchmark VM is deferred
+### Why the benchmark VM was deferred, and then retired unbuilt
 
 This section originally justified a native amd64 VM on the grounds that Rosetta
 timings are unrepresentative, "which matters for timeout handling and any timing
@@ -1150,6 +1156,19 @@ architecture because its runners are shared and noisy. Nothing needs that until
 **debye makes a performance claim against APBS (phase 8)** — that is the trigger
 to revisit, and the honest one: the first time a decision depends on a timing
 number.
+
+**The trigger fired in M7, and the answer was that the VM was never the missing
+piece. Retired unbuilt 2026-08-17, recorded here at phase 8's close.** Identical
+code varies 1.9× run to run on this machine, and that is a problem an
+*instrument* solves and a *machine* does not. A VM on the same host contends the
+same way. What replaced it is a protocol, applied at the strength each
+measurement needed: the seat kernel's **1.333×** is CPU time, min-of-N, four
+arms interleaved, against a same-code **0.998× control** — the full form; M7's
+**1.209×** at 0.5 Å carries its own **0.993×** control; M9's **12.94 s → 0.24
+s** is min-of-N `process_time` on a deliberately idle machine, with no control
+because it is a stage time and not a ratio between arms. *What the paragraph
+above got right is that the question was real; what it got wrong is that
+hardware was the answer.*
 
 Worth being clear about what it would *not* buy: the `linux-aarch64` gap is the
 real platform debt (§9), and an x86 VM does nothing for it. That needs arm64
@@ -1217,7 +1236,7 @@ recorded summaries are `surface_method: "smol"` becoming
 Content-addressed DX filenames and the corpus reference type landed in phase
 5 rather than here, as additive follow-ups.
 
-**Phase 5 — Ship it. ◐ in progress.**
+**Phase 5 — Ship it. ✅**
 
 Done: MIT licence; content-addressed DX filenames, so re-solving with different
 parameters can no longer silently overwrite an earlier map and an identical
@@ -1225,8 +1244,8 @@ request reuses its file; the artifact contract (`sashimi.artifacts`) stating in
 one place that maps are never deleted and paths are local; and the corpus
 `Reference` protocol — `RecordedReference` answers "has this backend changed?",
 `BackendReference` answers "do these two agree right now?", through the same
-`verify_case`. Cross-solver validation now works end to end and only lacks its
-CLI.
+`verify_case`. Cross-solver validation now works end to end; the CLI it lacked
+here landed in phase 7 — see "`sashimi validate` ✅" below.
 
 Also done: the **derived-query tools** §6 argues are the real agent-facing
 value. `sashimi.analysis` is pure and binary-free; three MCP tools sit on it —
@@ -1294,7 +1313,10 @@ which nothing needs until debye makes a performance claim.
 **Phase 6 — Distribution.** Owned APBS build matrix (trimmed, mostly static,
 feedstock-derived); `linux-aarch64` build offered upstream; license-file audit
 of the vendored FETK/MALOC versions; platform wheels so
-`pip install sashimi-electro` works end to end.
+`pip install sashimi-electro` works end to end; **and the suite green natively
+on `linux-aarch64`, moved here from phase 8 on 2026-09-01** — §10's fourth
+validation rung names three architectures and this is the one that has never
+run, in CI or anywhere else.
 
 **Phase 7 — Multi-backend. ✅** Four backends, three solver families, one
 unchanged protocol.
@@ -1671,8 +1693,70 @@ difference (APBS, DelPhi ×2 flavours), boundary element (TABI-PB), analytic
 (GB) — all exercised in CI, and the protocol absorbed every one of them with
 two enum members and no new types.
 
-**Phase 8 — debye.** The validation ladder of §10; drop-in behind the backend
+**Phase 8 — debye. ✅** The validation ladder of §10; drop-in behind the backend
 interface; portability suite green on all architectures; BEM engine later.
+
+**Closed 2026-09-01.** The scope line above is four clauses and they are graded
+one at a time below, because one of them was not met and did not become met by
+the phase ending. *A phase that closes by quietly dropping a clause it named is
+worth less than one that says which clause and where it went.*
+
+- **The validation ladder of §10 — met, with its third rung met by
+  substitution.** M0–M5, M3a, M8, M8a and M9 ✅; ~~M4a~~ dropped by M1c on
+  cost/benefit; M6 met by measurement and **recorded rather than gated**, by
+  Charlie's decision, because the band is the width of each solver's own grid
+  noise and a gate there would go red for reasons unrelated to debye; M7
+  **parked**, twice. Rung 3 named three referees — "MIBPB arbitrates when debye
+  and APBS disagree; DelPhi/PBSA for additional triangulation" — and they did
+  not fare alike. **DelPhi is here in two flavours**, is exercised in CI, and
+  does exactly the triangulation the rung asked of it; §12's gap analysis leans
+  on its 58 recordings. **MIBPB and PBSA are absent**, and TABI-PB plus the
+  recorded decision on same-family referees above 906 atoms stand in for the
+  arbiter. So: met as written on the triangulation, met by substitution on the
+  arbiter. That is a substitution, not a quiet pass, and it is graded as one.
+- **Drop-in behind the backend interface — met, and it is the one clause with
+  no defect anywhere.** `debye` is in `sashimi.backends`, so `--backend`,
+  `sashimi_solve`, `sashimi_capabilities` and `sashimi corpus verify` all reach
+  it, and it heads the `portable` preference. M5 records that this was two
+  lines, which is §2's claim for the registry cashed.
+- **Portability suite green on all architectures — NOT met, and moved to phase
+  6.** **There is no such suite.** The scope line above is the only place in
+  this repository that phrase has ever appeared, and nothing implements or
+  retires it. §10's fourth rung defines the architectures as osx-arm64,
+  linux-aarch64 and linux-64. CI covers two of the three: linux-64 in three
+  profiles on every pull request and on main, and osx-arm64 on main, weekly
+  and on demand — §11
+  records why that one is not per-PR, at 10× billing. It has **never executed a
+  single test on linux-aarch64**, in CI or in any recorded local measurement.
+  §11's environment table already carries arm64 Linux as phase 6's,
+  and phase 6's scope line already names the `linux-aarch64` build, so the
+  clause was in the wrong phase rather than unattempted. *Closing phase 8
+  asserts nothing whatever about aarch64.* The nearest thing phase 8 has is the
+  measurement recorded from #99 — *closed unmerged, branch kept* — where the
+  seat kernel is bit-identical to the numpy reference on arm64 **and** amd64
+  across seven homogeneous rungs. That is evidence about compiled kernels on two
+  ISAs, from a branch that never landed; it is not a green suite on
+  linux-aarch64 and is not offered as one.
+- **BEM engine later — still later, and now deliberately unowned.** §10 names
+  BEM as debye's eventual second engine and no phase ever owned it. It is not
+  phase 8's and was never started; it goes to whatever phase a consumer asks for
+  it in, and nothing asks today. *Writing down that no one owns it is the whole
+  of the change — it is not ownership and is not offered as any.*
+  `sashimi.bem_stub` and TABI-PB already prove the protocol
+  side, which is what phase 4 built it for.
+
+**M7 is parked, not deferred, and the difference matters.** An earlier plan
+proposed closing phase 8 by deferring M7 into phase 6 on the grounds that it
+needed the benchmark VM. It does not, and §12 says so directly: the VM is not
+what was missing — the instrument was — and a VM on the same host contends the
+same way. M7 is a **recorded decision that a constant factor is not worth its
+risk**, taken twice on measurements, not a task waiting on hardware. Its one
+genuine debt is named in its own row: **D-G3's second half — every recorded
+debye corpus energy unchanged to the last digit — was never run**, and it
+belongs to any future implementation rather than to this close-out.
+
+*The paragraph below is phase 8's opening position, left standing because the
+phase overturned it.* **Neither the VM nor Tailscale was built; see §11.**
 
 This is where benchmark infrastructure finally earns its place. A performance
 claim against APBS is the first decision in the project that depends on a timing
@@ -2947,6 +3031,25 @@ protonation-state pair, so it is not a single-structure
 coincidence. Above ~5,000 atoms `max_points` relaxes the lattice and the three
 codes relax differently, so those two rows compare across lattices.
 
+*The debye column moved slightly under M3a, 2026-09-01.* **Eight** of these
+twelve are corpus cases and can be recomputed from the recordings; all eight
+rose by **+0.006 to +0.016 percentage points** when #96 replaced the lattice
+dilation with the exact union test (fas2 +17.647 → +17.659, lysozyme-asp66
++35.323 → +35.339, protein-1a63 +17.784 → +17.800). The other four —
+`lysozyme-ash66`, `hca-complex`, `actin-monomer` and `mache` — were measured
+here and nowhere else, so the table is left as the record of one run rather than
+half-restated.
+
+**"Strictly between" is untouched. The "2–8×" is not, and not in the direction
+it first looks.** Every shift is toward APBS, so `dby−APBS` narrows and
+therefore *every* ratio **rises** — which buys room at the 2× floor (barnase
+2.034 → 2.049) and spends it at the 8× ceiling. The ceiling is the tight end and
+it was already breached before this: `lysozyme-ash66` reads **8.218**, and it is
+one of the four that cannot be recomputed. So "2–8×" was a rounding of
+**2.03–8.22** when it was written, and M3a widens it rather than confirming it.
+*Stated the other way round in the first draft of this footnote, which had the
+inference backwards.*
+
 **The probe's worth climbs 4–8× from peptide to protein in all three codes** —
 buried volume grows faster than surface — so debye's +17.65% on fas2 is physics
 rather than a defect. It was nearly filed as one.
@@ -3686,6 +3789,23 @@ own label is "not a Poisson-Boltzmann solution; magnitudes are indicative only"
 — and APBS **0.95 s** with a binary. debye is now **5.9 s** and is the only one
 of the three that is both. **That, and not a constant factor, is the case for
 shipping it.**
+
+*Flagged 2026-09-01 — and deliberately not re-argued here, because swapping one
+number is what would make it wrong.* Three things stand between this paragraph
+and a current reading. **(1) The 5.9 s is the pure-numpy path**, and it is also
+the `debye` row of the range table below, so the 8.7× and the ~1,290-residue
+crossover move with it — while the **1.05 s** in the seat-kernel section is a
+`[fast]` build, and README's own interleaved table reads **1.39 s** for that
+install on this structure. **(2) That 1.05 s is min-of-21 at 1-minute load
+10.9 → 8.8**, which by this document's own standard is an upper bound, not an
+idle measurement. **(3) Replacing debye's arm alone would leave `coulombic` and
+APBS at figures from a different run** — *changing two variables at once, which
+is the error this document keeps catching.* **"Speed: the crossover is ~244
+residues, not ~1,290", below, measures this pair properly**: interleaved, at
+protean's defaults, 0.51 s `coulombic` against 1.19 s debye at 61 residues. Read
+that section for the comparison. What survives here is the claim the paragraph
+actually makes, which never rested on the size of the gap: debye is the only one
+of the three that is both binary-free and a real Poisson–Boltzmann solution.
 
 #### The seat kernel, graded and parked
 
@@ -5458,11 +5578,15 @@ resolution reachable here, which is the ceiling on all of it.
 
 **And `w = 0.5` is the width that matters**, because it is the energy optimum.
 What would settle it is a reference that is not debye at all: a TABI-PB exterior
-field — `tabipb/vtk.py` already parses the surface `phi` and `dphi/dn` it needs
-and `SolveResult` drops them — or a Kirkwood potential for an off-centre charge,
-which `sashimi.analytic.kirkwood_potential` has provided since #85 and which has
-not yet been pointed at `w = 0.5`. Until it is, the field axis is graded at
-`w ≥ 0.75` and *bounded* at `w = 0.5`.
+field — `tabipb/vtk.py` already parses the surface `phi` and `dphi/dn` it needs,
+and ~~`SolveResult` drops them~~ **#95 carried the interior derivative across
+the protocol and #98 built the evaluator on top of it — so the reference now
+exists and has still not been pointed at `w = 0.5`, because what it has refereed
+so far is magnitudes and not the interface question** — or a Kirkwood potential
+for an off-centre charge, which `sashimi.analytic.kirkwood_potential` has
+provided since #85 and which has not yet been pointed at `w = 0.5` either. Until
+one of them is, the field axis is graded at `w ≥ 0.75` and *bounded* at
+`w = 0.5`.
 
 ##### The two axes disagree on one fixture, and that is the finding
 
@@ -5527,7 +5651,14 @@ serve.
   debye, and the subsection above measures exactly how far that can be trusted.
   A **TABI-PB exterior field** is the one genuinely independent option and
   `tabipb/vtk.py` already parses the surface `phi` and `dphi/dn` it needs —
-  `SolveResult` drops them. A **Kirkwood potential** for an off-centre charge is
+  ~~`SolveResult` drops them~~ **and since #95 it does not: the interior
+  derivative reaches the protocol, and #98 built the evaluator that consumes it.
+  So this lever is available and *still* unpulled, exactly like the Kirkwood one
+  — the evaluator was validated against the divergence theorem, an analytic
+  icosphere and a Kirkwood tetrahedron, and its own verdict is that it is "a
+  referee for magnitudes, not yet for the interface question". See "The exterior
+  field evaluator, designed against a measurement".** A
+  **Kirkwood potential** for an off-centre charge is
   the other, and `sashimi.analytic.kirkwood_potential` has been the field half
   since #85 — so this lever is now available and unpulled, not absent. Either
   would decide `w = 0.5` in an afternoon.
@@ -6485,6 +6616,11 @@ until a structure that size exists in the corpus.
 about speed at all — §12's referee gap, where 30 of 58 debye recordings have no
 independent check and none above 906 atoms has any, and phase 5's release.
 
+*Both halves are now settled, 2026-09-01. The referee half is corrected
+immediately below. **Phase 5's release shipped on 2026-08-27**: `sashimi-electro`
+0.1.0 is on PyPI, verified by installing from the index into a clean environment
+and solving a Born ion to 1.879% of the closed form.*
+
 *Updated 2026-08-25. The gap is narrower and more precisely stated than that.
 Every one of the 58 already had **two same-family referees** in this repository
 and nobody had written the relationship down; #72 did, and the section below
@@ -6620,9 +6756,13 @@ the two cases that are hours away".
 **Still unexplained, and it prices the rest.** debye and the DelPhi backend
 agree on the Kirkwood field to 2.7e-5 relative — five significant figures —
 while APBS sits ~0.4% from both. If those two share a discretization convention
-then the two same-family referees are one, and §14 records that as worth knowing
-before either referees the other. Nothing here settles it; the cross-family rungs
-sidestep it rather than answer it.
+then the two same-family referees are one, and that is worth knowing before
+either referees the other. Nothing here settles it; the cross-family rungs
+sidestep it rather than answer it. ~~§14 records that~~ — *it never did, and the
+question has since been answered outright: see "An observation this turned up,
+explained 2026-08-28" under "The field reference stops being a Born ion". The
+agreement is a **shared lattice, not shared physics**, so the two referees are
+not one.*
 
 ### The referee gap, closed from recordings already in the repo
 
@@ -6668,8 +6808,10 @@ moved. **Signed**, because the sign is the finding.
   any one solver cannot produce that: it locates the residual in how the three
   **construct the boundary**, not in how they solve on it.
 - **`serum-albumin-vdw` is the argmax against both referees**, −9.09% against
-  APBS and −17.51% against DelPhi, with `serum-albumin` second on both at −6.64%
-  and −10.41%. The corpus's largest solute is its widest disagreement, and it is
+  APBS and −17.51% against DelPhi, with `serum-albumin` second on both at
+  ~~−6.64% and −10.41%~~ **−6.57% and −10.33%** — re-pinned by M3a, which moved
+  this one entry past `DEVIATION_BAND` and no other. The corpus's largest solute
+  is its widest disagreement, and it is
   the sole exception to the surface asymmetry. Excluding both its rows the
   widest real structure is `barnase-molecular` at −3.12% against APBS and
   `fkbp-dmso-vdw` at −8.87% against DelPhi. Pinned rather than excluded, so a
@@ -6902,13 +7044,17 @@ six vertex counts are bit-identical; every one of the twenty-four surface
 statistics moved by exactly RT at that case's own temperature, including the
 277 K case, where the divisor is 2.3031 rather than 2.4790.
 
-**Still open, two things.** `normal_derivative` is parsed, carried through
-`run.py`, and dropped at `backend.py` because `SurfacePotential` has no field for
-it. §2 names it as half of what a BEM solver natively produces, so the type
-should grow one — a protocol change, deliberately not bundled with a
-corpus-changing units fix. It is in the same kJ/mol/e per Å and will need the
-same divisor — **and it is the interior derivative, not the exterior one, which
-is measured and designed against two sections below.**
+**~~Still open, two things.~~ One, since #95.** `normal_derivative` was parsed,
+carried through `run.py`, and dropped at `backend.py` because `SurfacePotential`
+had no field for it. §2 names it as half of what a BEM solver natively produces,
+so the type should grow one — a protocol change, deliberately not bundled with a
+corpus-changing units fix. It is in the same kJ/mol/e per Å and needed the same
+divisor — **and it is the interior derivative, not the exterior one, which is
+measured and designed against two sections below.** *Closed by #95:
+`SurfacePotential.interior_normal_derivative`, named for the side it is on
+because the two differ by `eps_s/eps_p` = 39.27 and the difference is invisible
+in the array; shipped 2026-08-28, merged the next day. The second thing below
+is still open.*
 
 And the exclusion above should be narrowed from the family to the measurement:
 grading a BEM answer against a closed form on the interface is sound, and only
@@ -7137,9 +7283,13 @@ claim — not the magnitudes.
 
 ### The exterior field evaluator, designed against a measurement
 
-**Not built. This section is the design, and the reason it is written down before
-any code is that two of its three physical premises turned out to be wrong when
-measured, and both were wrong in ways that read as correct.**
+**~~Not built.~~ Built 2026-08-28 and merged 2026-08-29 as #98, as
+`sashimi.surface_field` — the two addenda at the end of this section carry what
+it cost and what it can referee.
+The design below stands as written.** This section was the design, and the reason
+it was written down before any code is that two of its three physical premises
+turned out to be wrong when measured, and both were wrong in ways that read as
+correct.
 
 The motivation is §12's oldest open item. `_analytic_field_summary` grades a
 field against a closed form, and closed forms exist for two geometries; every
