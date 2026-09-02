@@ -118,7 +118,9 @@ def test_missing_binary_raises_with_an_install_hint(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda _: None)
     monkeypatch.setattr("pathlib.Path.cwd", staticmethod(lambda: Path("/")))
     try:
-        with pytest.raises(ApbsNotFound, match="brew install apbs"):
+        # Pins the tap, not the sentence: `brew install apbs` was never a command
+        # that works, so matching it pinned the defect. See tests/test_capabilities.py.
+        with pytest.raises(ApbsNotFound, match="brewsci/bio"):
             discover.discover_apbs()
     finally:
         discover._discover_cached.cache_clear()
