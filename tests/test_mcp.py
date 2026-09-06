@@ -6,6 +6,7 @@ path — that is what an agent actually hits.
 """
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -451,6 +452,40 @@ class TestDerivedQueries:
         assert result["n_points"] == 0
         assert "outside the map" in result["summary"]
 
+    async def test_a_structure_that_masks_nothing_is_not_reported_as_masked(self, client, tmp_path):
+        """The badge has to mean the mask bit, not that an argument arrived.
+
+        A PQR from a different frame — or in different units, or simply the
+        wrong file — overlaps no part of the map, so the search is exactly as
+        unmasked as one with no `pqr_path` at all. Reporting `solute_masked:
+        true` there is the confidently-wrong answer #104 removed from
+        `sashimi_potential_in_sphere` and left in this sibling.
+        """
+        dx = self.peaked_map(tmp_path)
+        far = tmp_path / "elsewhere.pqr"
+        far.write_text("ATOM      1  N   ALA A   1     900.000 900.000 900.000 -0.3000 1.5000\n")
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_extrema", {"dx_path": str(dx), "pqr_path": str(far)}
+            )
+        )
+        assert result["solute_supplied"] is True
+        assert result["solute_masked"] is False
+        assert result["n_points_excluded_as_solute"] == 0
+        assert "masked nothing" in result["summary"]
+
+    async def test_a_structure_that_does_mask_says_how_much(self, client, tmp_path):
+        dx = self.peaked_map(tmp_path)
+        pqr = self.pqr_at(tmp_path, (10.0, 10.0, 10.0), radius=3.0)
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_extrema", {"dx_path": str(dx), "pqr_path": str(pqr)}
+            )
+        )
+        assert result["solute_masked"] is True
+        assert 0 < result["n_points_excluded_as_solute"] < result["n_points"]
+        assert "points masked as solute" in result["summary"]
+
     async def test_residue_potentials_rank_residues(self, client, tmp_path):
         dx = self.peaked_map(tmp_path)
         pqr = tmp_path / "two.pqr"
@@ -467,6 +502,77 @@ class TestDerivedQueries:
         assert [r["residue"] for r in residues] == ["ALA 1", "GLY 2"]
         assert residues[0]["mean_kT_e"] < residues[1]["mean_kT_e"]
         assert "Most negative" in result["summary"]
+
+    async def test_the_response_says_how_much_of_the_sample_was_masked(self, client, tmp_path):
+        """The two fixtures above are too far apart to mask anything.
+
+        Their atoms sit 20.8 A apart, so every probe is legal and every masking
+        count is zero — which means a response that reported masking correctly
+        and one that had the neighbour test deleted are indistinguishable on
+        them. This packs three atoms inside each other's reach so the counts
+        have to be non-zero, and asserts the identity that ties them together.
+        """
+        dx = self.peaked_map(tmp_path)
+        pqr = tmp_path / "packed.pqr"
+        pqr.write_text(
+            "ATOM      1  N   ALA A   1       9.000  10.000  10.000 -0.3000 1.8000\n"
+            "ATOM      2  CA  ALA A   1      10.000  10.000  10.000 -0.1000 1.9000\n"
+            "ATOM      3  N   GLY A   2      11.000  10.000  10.000  0.3000 1.8000\n"
+        )
+        result = payload(
+            await client.call_tool(
+                "sashimi_residue_potentials", {"dx_path": str(dx), "pqr_path": str(pqr)}
+            )
+        )
+
+        assert result["n_probes_excluded_as_solute_all_residues"] > 0
+        assert result["n_probes_used_all_residues"] < result["n_probes_all_residues"]
+        assert (
+            result["n_probes_used_all_residues"]
+            + result["n_probes_excluded_as_solute_all_residues"]
+            + result["n_probes_outside_grid_all_residues"]
+            == result["n_probes_all_residues"]
+        )
+        assert result["exclusion_margin_a"] == 1.4
+        assert "masked as solute" in result["summary"]
+        # Structure, not wording: a summary built by concatenating conditional
+        # clauses runs sentences together, and the first version of this one did.
+        summary = result["summary"]
+        assert summary.endswith(".")
+        assert "  " not in summary
+        # A full stop that ends a word and is not followed by a space. Anchored on
+        # the preceding letter so a decimal point (-2.28e-09) is not a match.
+        assert not re.search(r"(?<=[A-Za-z)])\.\S", summary), f"sentences run together: {summary!r}"
+        for row in result["residues"]:
+            assert row["n_probes_excluded_as_solute"] > 0
+
+    async def test_top_does_not_change_what_the_totals_count(self, client, tmp_path):
+        """`top` truncates the rows and nothing else.
+
+        A summary that said "2 residue(s)" for a `top=1` call on a two-residue
+        structure would be the same sentence with a different denominator, and
+        a caller cannot see which it got.
+        """
+        dx = self.peaked_map(tmp_path)
+        pqr = tmp_path / "two.pqr"
+        pqr.write_text(
+            "ATOM      1  N   ALA A   1       4.000   4.000   4.000 -0.3000 1.5000\n"
+            "ATOM      2  N   GLY A   2      16.000  16.000  16.000  0.3000 1.5000\n"
+        )
+        args = {"dx_path": str(dx), "pqr_path": str(pqr)}
+        whole = payload(await client.call_tool("sashimi_residue_potentials", args))
+        topped = payload(await client.call_tool("sashimi_residue_potentials", {**args, "top": 1}))
+
+        assert len(topped["residues"]) == 1
+        assert topped["n_residues"] == whole["n_residues"] == 2
+        assert topped["n_residues_returned"] == 1
+        assert "1 of 2 residue(s)" in topped["summary"]
+        for key in (
+            "n_probes_all_residues",
+            "n_probes_used_all_residues",
+            "n_probes_excluded_as_solute_all_residues",
+        ):
+            assert topped[key] == whole[key], f"{key} changed denominator under top"
 
     async def test_a_structure_without_labels_is_a_clean_error(self, client, tmp_path):
         dx = self.peaked_map(tmp_path)

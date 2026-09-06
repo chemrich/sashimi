@@ -12,16 +12,20 @@ import numpy as np
 import pytest
 
 from sashimi.analysis import (
+    DEFAULT_EXCLUSION_MARGIN_A,
+    PROBE_DIRECTIONS,
+    _buried_probes,
     _labelled,
     _residue_groups,
     _residue_of,
-    _solute_mask,
     potential_extrema,
     potential_in_sphere,
     residue_potentials,
+    solute_mask,
 )
+from sashimi.debye.surface import ReducedSurface
 from sashimi.pqr import read_pqr
-from sashimi.protocol import PotentialGrid, PQRData
+from sashimi.protocol import PotentialGrid, PQRData, SolventModel
 
 SPACING = 1.0
 
@@ -74,7 +78,7 @@ class TestExtrema:
         grid = grid_with_peaks({(4, 4, 4): 5.0, (16, 16, 16): 1.0})
         assert len(potential_extrema(grid, n=5, min_separation=5.0)) == 2
 
-    def test_solute_masking_finds_the_solvent_side_feature(self):
+    def testsolute_masking_finds_the_solvent_side_feature(self):
         """Unmasked, the answer is always "at the atoms" — true and useless."""
         grid = grid_with_peaks({(10, 10, 10): 50.0, (16, 16, 16): 3.0})
         atom = PQRData(
@@ -231,7 +235,7 @@ class TestSphere:
                 in_sphere = (
                     (xx - centre[0]) ** 2 + (yy - centre[1]) ** 2 + (zz - centre[2]) ** 2
                 ) <= radius**2
-                expected = in_sphere & ~_solute_mask(grid, structure, 1.4)
+                expected = in_sphere & ~solute_mask(grid, structure, 1.4)
 
                 assert got["n_points"] == int(expected.sum())
                 if expected.any():
@@ -285,23 +289,78 @@ class TestResiduePotentials:
         grid = grid_with_peaks({(4, 10, 10): -6.0, (16, 10, 10): 6.0})
         results = residue_potentials(grid, self.two_residues())
         assert results[0].label == "ALA 1"
-        assert results[0].value < results[-1].value
+        first, last = results[0].value, results[-1].value
+        assert first is not None and last is not None
+        assert first < last
 
     def test_top_limits_the_result(self):
         grid = grid_with_peaks({(4, 10, 10): -6.0, (16, 10, 10): 6.0})
         assert len(residue_potentials(grid, self.two_residues(), top=1)) == 1
 
-    def test_under_sampling_is_counted_not_hidden(self):
-        """A residue at the box edge must be visibly partial."""
-        edge = PQRData(
+    def test_a_residue_off_the_map_says_so_rather_than_vanishing(self):
+        """The box-edge case, asserted by its numbers rather than structurally.
+
+        The assertion this replaces was `n_sampled <= n_atoms`, which is true
+        by construction under every mutation — one mean is appended per atom at
+        most — so it could not fail. These numbers can.
+        """
+        away = PQRData(
+            coords=np.array([[-20.0, -20.0, -20.0]]),
+            charges=np.array([1.0]),
+            radii=np.array([1.5]),
+            labels=("ARG 9 NZ",),
+        )
+        grid = grid_with_peaks({(10, 10, 10): 1.0})
+        [row] = residue_potentials(grid, away)
+
+        assert row.value is None
+        assert row.n_probes == len(PROBE_DIRECTIONS)
+        assert row.n_probes_outside_grid == len(PROBE_DIRECTIONS)
+        assert row.n_probes_excluded_as_solute == 0  # a lone atom buries nothing
+        assert "outside the map" in row.as_dict()["note"]
+        assert "mean_kT_e" not in row.as_dict(), "a row with no sample must not carry a mean"
+
+    def test_a_residue_half_off_the_map_keeps_its_mean_and_counts_the_loss(self):
+        """Partly outside is not the same as outside, and both must be legible.
+
+        An atom on the box corner keeps whichever probes point inward. The row
+        carries a mean over those, and the count is what stops a caller reading
+        it as a full sample.
+        """
+        corner = PQRData(
             coords=np.array([[0.0, 0.0, 0.0]]),
             charges=np.array([1.0]),
             radii=np.array([1.5]),
             labels=("ARG 9 NZ",),
         )
         grid = grid_with_peaks({(10, 10, 10): 1.0})
-        results = residue_potentials(grid, edge)
-        assert results == [] or results[0].n_sampled <= results[0].n_atoms
+        [row] = residue_potentials(grid, corner)
+
+        assert row.value is not None
+        assert 0 < row.n_probes_used < row.n_probes
+        assert row.n_probes_used + row.n_probes_outside_grid == row.n_probes
+        assert row.n_probes_excluded_as_solute == 0
+
+    def test_the_two_ways_of_having_no_sample_are_named_apart(self):
+        """Buried and off-the-map ask for opposite responses from a caller.
+
+        One is a true answer about the structure; the other is a solve that
+        needs a bigger box. A single "unsampled" would collapse them.
+        """
+        swallowed = PQRData(
+            coords=np.array([[10.0, 10.0, 10.0], [10.2, 10.0, 10.0]]),
+            charges=np.array([0.0, 0.0]),
+            radii=np.array([0.4, 6.0]),
+            labels=("HOH 1 O", "BIG 2 X"),
+        )
+        grid = grid_with_peaks({(10, 10, 10): 1.0}, shape=(41, 41, 41))
+        rows = {r.label: r for r in residue_potentials(grid, swallowed)}
+
+        buried = rows["HOH 1"]
+        assert buried.value is None
+        assert buried.n_probes_excluded_as_solute == len(PROBE_DIRECTIONS)
+        assert buried.n_probes_outside_grid == 0
+        assert "buried" in buried.as_dict()["note"]
 
     def test_requires_labels(self):
         unlabelled = PQRData(
@@ -322,7 +381,109 @@ class TestResiduePotentials:
         )
         near = residue_potentials(grid, atom, probe_offset=0.0)[0].value
         far = residue_potentials(grid, atom, probe_offset=4.0)[0].value
+        assert near is not None and far is not None
         assert near > far, "moving the probe outward must leave the peak behind"
+
+    def test_an_atom_never_buries_its_own_probes(self):
+        """`probe_offset=0` puts every probe exactly on its own radius.
+
+        The self-exemption is not a check that cannot fail, and the fixture is
+        the reason: on round coordinates `centre + radius * direction` is
+        exact and a strict `<` would keep the probes anyway, so a tidy
+        (10, 10, 10) r=1 atom passes this test with the exemption deleted. A
+        real atom's coordinates do not round, the arithmetic lands
+        fractionally inside, and all 26 probes are lost.
+        """
+        awkward = PQRData(
+            coords=np.array([[10.137, 9.421, 11.883]]),
+            charges=np.array([1.0]),
+            radii=np.array([1.8248]),
+            labels=("LYS 1 NZ",),
+        )
+        grid = grid_with_peaks({(10, 9, 12): 3.0}, shape=(31, 31, 31))
+        [row] = residue_potentials(grid, awkward, probe_offset=0.0)
+        assert row.n_probes_excluded_as_solute == 0
+        assert row.n_probes_used == len(PROBE_DIRECTIONS)
+        assert row.value is not None
+
+
+class TestProbesLandInSolvent:
+    """The defect this fixes came from real input, so its guard lives there too.
+
+    A synthetic pair of overlapping atoms proves the arithmetic; it cannot show
+    that a protein's probes are *mostly* interior, which is the finding. These
+    need no solve — a zeros grid has the right shape and the wrong values, and
+    every quantity here is about where the points are, not what they read.
+    """
+
+    @staticmethod
+    def fas2() -> PQRData:
+        return read_pqr(Path(__file__).parent / "data" / "apbs-examples" / "fas2.pqr")
+
+    @staticmethod
+    def covering(structure: PQRData) -> PotentialGrid:
+        """A grid big enough that nothing is rejected for being off the map."""
+        lower = structure.coords.min(axis=0) - 15.0
+        upper = structure.coords.max(axis=0) + 15.0
+        shape = tuple(int(n) for n in np.ceil(upper - lower))
+        return PotentialGrid(values=np.zeros(shape), origin=lower, spacing=np.full(3, 1.0))
+
+    def test_a_protein_rejects_most_of_its_probes_and_says_how_many(self):
+        """The regression for the defect, through the public function.
+
+        Exact integers rather than a band, and that is a measurement not a
+        hope: the closest any fas2 probe comes to its verdict flipping is
+        2.3e-6 A from a cutoff surface, nine orders above the last-bit libm
+        differences that have twice moved results in this project. Deleting
+        the neighbour test moves `used` from 2,335 to 23,556.
+        """
+        structure = self.fas2()
+        rows = residue_potentials(self.covering(structure), structure)
+
+        probes = sum(r.n_probes for r in rows)
+        used = sum(r.n_probes_used for r in rows)
+        excluded = sum(r.n_probes_excluded_as_solute for r in rows)
+        off_map = sum(r.n_probes_outside_grid for r in rows)
+
+        assert probes == structure.n_atoms * len(PROBE_DIRECTIONS) == 23556
+        assert (used, excluded, off_map) == (2335, 21221, 0)
+        assert used + excluded + off_map == probes
+        assert len(rows) == 63
+        assert sum(1 for r in rows if r.value is None) == 4
+
+    def test_the_margin_keeps_every_survivor_out_of_the_solute(self):
+        """Why the default is 1.4 and not zero, against the solver's own oracle.
+
+        `ReducedSurface.inside` is what a debye solve asks where the low
+        dielectric is, so it is the authority on which side of the boundary a
+        point is on. The shipped surface is `molecular`, whose interior is
+        strictly larger than the union of van der Waals spheres — so rejecting
+        at the bare radius is not the same question, and the difference is not
+        marginal: 2,301 of its 10,268 survivors are inside the solute.
+        """
+        structure = self.fas2()
+        reach = (structure.radii + 2.0)[:, None, None]
+        points = (structure.coords[:, None, :] + reach * PROBE_DIRECTIONS[None, :, :]).reshape(
+            -1, 3
+        )
+        owner = np.repeat(np.arange(structure.n_atoms), len(PROBE_DIRECTIONS))
+        surface = ReducedSurface(structure, SolventModel())
+
+        def interior(kept: np.ndarray) -> int:
+            return sum(
+                bool(
+                    surface.inside([np.array([p[0]]), np.array([p[1]]), np.array([p[2]])])[0, 0, 0]
+                )
+                for p in points[kept]
+            )
+
+        at_margin = ~_buried_probes(points, owner, structure, DEFAULT_EXCLUSION_MARGIN_A)
+        assert at_margin.sum() == 2335
+        assert interior(at_margin) == 0, "the shipped margin must not keep a solute point"
+
+        bare = ~_buried_probes(points, owner, structure, 0.0)
+        assert bare.sum() == 10268
+        assert interior(bare) == 2301, "the bare radius is a different, wrong boundary"
 
 
 class TestSoluteMask:
@@ -365,7 +526,7 @@ class TestSoluteMask:
             radii=rng.uniform(0.5, 3.0, n),
         )
         np.testing.assert_array_equal(
-            _solute_mask(grid, structure, margin),
+            solute_mask(grid, structure, margin),
             self.naive_mask(grid, structure, margin),
         )
 
@@ -377,7 +538,7 @@ class TestSoluteMask:
             charges=np.array([1.0]),
             radii=np.array([2.0]),
         )
-        assert not _solute_mask(grid, far, 1.4).any()
+        assert not solute_mask(grid, far, 1.4).any()
 
     def test_scales_to_a_real_protein(self):
         """Catches a return to O(atoms x grid points).
@@ -400,7 +561,7 @@ class TestSoluteMask:
             radii=np.full(n_atoms, 1.9),
         )
         started = time.monotonic()
-        mask = _solute_mask(grid, structure, 1.4)
+        mask = solute_mask(grid, structure, 1.4)
         elapsed = time.monotonic() - started
         assert mask.any(), "a protein-sized structure must mask something"
         assert elapsed < 10.0, (

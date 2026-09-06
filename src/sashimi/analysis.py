@@ -18,12 +18,23 @@ import numpy as np
 
 from sashimi.protocol import DIMENSIONS, Diagnostics, FloatArray, PotentialGrid, PQRData
 
+DEFAULT_EXCLUSION_MARGIN_A = 1.4
+"""Solvent probe radius, in angstroms.
+
+A point at least `r_j + this` from every atom centre is a legal position for a
+probe of this radius, so it lies outside the solvent-excluded surface for any
+surface model built with that probe or smaller. All three derived-query tools
+here reject on it, and they share the name so that stays true.
+"""
+
 __all__ = [
+    "DEFAULT_EXCLUSION_MARGIN_A",
     "Extremum",
     "ResiduePotential",
     "potential_extrema",
     "potential_in_sphere",
     "residue_potentials",
+    "solute_mask",
 ]
 
 
@@ -40,24 +51,91 @@ class Extremum:
 
 @dataclass(frozen=True)
 class ResiduePotential:
-    """Mean potential sampled around one residue's atoms."""
+    """Mean potential sampled in the solvent around one residue's atoms.
+
+    The probe counts are not decoration. A residue's mean is taken over
+    whatever probe points survived two rejections — points inside a
+    neighbouring atom, and points off the map — and a mean over four points
+    is a different claim from a mean over forty. `n_probes` is the
+    denominator all three of the others share, so a caller can tell the two
+    ways of having nothing apart without re-deriving them.
+
+    `value` is None, and `as_dict` omits `mean_kT_e` entirely, when no probe
+    survived. That is `potential_in_sphere`'s buried branch in row form: the
+    real number or a `KeyError`, never a fabricated one.
+    """
 
     label: str
-    value: float  # kT/e
+    value: float | None  # kT/e, or None when no probe point was usable
     n_atoms: int
-    n_sampled: int  # atoms whose probe points fell inside the grid
+    n_probes: int  # points offered: len(PROBE_DIRECTIONS) per atom
+    n_probes_used: int
+    n_probes_excluded_as_solute: int
+    n_probes_outside_grid: int
     chain: str | None = None  # from the file, or None when it carried no chain
     segment: int = 1  # 1-based numbering block; >1 only where numbering restarts
 
+    @property
+    def unsampled_because(self) -> str | None:
+        """Why this residue carries no mean, or None when it carries one.
+
+        Two different nothings, named apart because they ask for opposite
+        responses: a buried residue is a true answer about the structure, and
+        an off-map residue is a solve that needs a bigger box.
+        """
+        if self.value is not None:
+            return None
+        if self.n_probes_outside_grid == 0:
+            return (
+                f"all {self.n_probes} probe points around this residue fall inside a "
+                "neighbouring atom — it is buried, so there is no solvent-side "
+                "potential here to average"
+            )
+        if self.n_probes_excluded_as_solute == 0:
+            return (
+                f"all {self.n_probes} probe points around this residue fall outside "
+                "the map — solve with more padding"
+            )
+        return (
+            f"none of the {self.n_probes} probe points around this residue is usable: "
+            f"{self.n_probes_excluded_as_solute} fall inside a neighbouring atom, "
+            f"{self.n_probes_outside_grid} outside the map"
+        )
+
     def as_dict(self) -> Diagnostics:
-        return {
+        common: Diagnostics = {
             "residue": self.label,
-            "mean_kT_e": self.value,
             "n_atoms": self.n_atoms,
-            "n_sampled": self.n_sampled,
+            "n_probes": self.n_probes,
+            "n_probes_used": self.n_probes_used,
+            "n_probes_excluded_as_solute": self.n_probes_excluded_as_solute,
+            "n_probes_outside_grid": self.n_probes_outside_grid,
             "chain": self.chain,
             "segment": self.segment,
         }
+        if self.value is None:
+            return {**common, "note": self.unsampled_because}
+        return {**common, "mean_kT_e": self.value}
+
+
+def _candidates(
+    grid: PotentialGrid,
+    exclude_near: PQRData | None,
+    exclusion_margin: float,
+    exclude_mask: np.ndarray | None,
+) -> np.ndarray:
+    """Flat indices of the grid points a search may return."""
+    if exclude_mask is not None and exclude_near is not None:
+        raise ValueError("pass exclude_near or exclude_mask, not both — they can disagree")
+    if exclude_mask is None:
+        if exclude_near is None:
+            return np.arange(grid.values.size)
+        exclude_mask = solute_mask(grid, exclude_near, exclusion_margin)
+    if exclude_mask.shape != grid.values.shape:
+        raise ValueError(
+            f"exclude_mask has shape {exclude_mask.shape}, grid has {grid.values.shape}"
+        )
+    return np.flatnonzero(~exclude_mask.reshape(-1))
 
 
 def potential_extrema(
@@ -68,7 +146,8 @@ def potential_extrema(
     min_separation: float = 5.0,
     min_fraction: float = 0.05,
     exclude_near: PQRData | None = None,
-    exclusion_margin: float = 1.4,
+    exclusion_margin: float = DEFAULT_EXCLUSION_MARGIN_A,
+    exclude_mask: np.ndarray | None = None,
 ) -> list[Extremum]:
     """The `n` strongest peaks, kept apart by `min_separation` angstroms.
 
@@ -83,6 +162,13 @@ def potential_extrema(
     `n` results, the rest being well-separated numerical noise at 1e-14 — five
     answers where the truthful answer is one. A caller asking for five peaks is
     asking "show me up to five", not "invent five".
+
+    `exclude_mask` is the same exclusion, already built — what `solute_mask`
+    returns. A caller that needs to *report* how much was excluded has to hold
+    the mask anyway, and searching both signs rebuilds it twice otherwise, so
+    passing it down is cheaper than the argument it replaces rather than merely
+    tidier. Passing both is refused: two spellings of one exclusion can
+    disagree, and the response would then describe the wrong one.
 
     `exclude_near` is what makes this answer the question people actually ask.
     The largest magnitudes in any map are the point-charge self-energy
@@ -104,10 +190,7 @@ def potential_extrema(
     # Rank only the points that are candidates. Sorting the whole array and
     # sentinelling the excluded ones is tempting but fragile: NaN sorts last
     # ascending and therefore *first* once reversed for a descending search.
-    if exclude_near is not None:
-        candidates = np.flatnonzero(~_solute_mask(grid, exclude_near, exclusion_margin).reshape(-1))
-    else:
-        candidates = np.arange(flat.size)
+    candidates = _candidates(grid, exclude_near, exclusion_margin, exclude_mask)
     if candidates.size == 0:
         return []
 
@@ -140,7 +223,7 @@ def potential_extrema(
     return accepted
 
 
-def _solute_mask(grid: PotentialGrid, structure: PQRData, margin: float) -> np.ndarray:
+def solute_mask(grid: PotentialGrid, structure: PQRData, margin: float) -> np.ndarray:
     """True where a grid point lies inside any atom's radius plus `margin`.
 
     Each atom is tested only against the grid points inside its own bounding
@@ -202,7 +285,7 @@ def potential_in_sphere(
     radius: float,
     *,
     exclude_near: PQRData | None = None,
-    exclusion_margin: float = 1.4,
+    exclusion_margin: float = DEFAULT_EXCLUSION_MARGIN_A,
 ) -> Diagnostics:
     """Statistics over the grid points inside a sphere — a pocket, say.
 
@@ -255,7 +338,7 @@ def potential_in_sphere(
         reach = radius + exclude_near.radii + exclusion_margin
         near = np.flatnonzero(np.sum((exclude_near.coords - centre) ** 2, axis=1) <= reach**2)
         if near.size:
-            inside = in_sphere & ~_solute_mask(grid, _subset(exclude_near, near), exclusion_margin)
+            inside = in_sphere & ~solute_mask(grid, _subset(exclude_near, near), exclusion_margin)
 
     n_excluded = n_in_sphere - int(inside.sum())
     common: Diagnostics = {
@@ -293,23 +376,163 @@ def potential_in_sphere(
     }
 
 
+def _golden_spiral(count: int) -> FloatArray:
+    """`count` unit vectors spread evenly over the sphere.
+
+    Six axis directions were the first scheme here and are no longer enough,
+    for a reason that only appeared once probes started being rejected: a
+    buried atom loses whichever of its six directions point into a neighbour,
+    and with six there is often nothing left. Measured at the shipped margin,
+    six directions leave **20 of 130 residues on 1a63 and 23 of 110 on
+    barnase** with no usable probe at all, against 14 and 17 at twenty-six,
+    and lift the median surviving probes per residue from 5-7 to 26.
+
+    The spiral rather than a 3x3x3 shell because the axis-aligned set puts
+    every probe on a lattice-parallel offset from its atom, which correlates
+    the sampling with the grid it is interpolating on. Nothing here measured
+    that correlation biting; avoiding it costs one line.
+    """
+    index = np.arange(count) + 0.5
+    polar = np.arccos(1.0 - 2.0 * index / count)
+    azimuth = np.pi * (1.0 + 5.0**0.5) * index
+    return np.stack(
+        [np.cos(azimuth) * np.sin(polar), np.sin(azimuth) * np.sin(polar), np.cos(polar)],
+        axis=1,
+    )
+
+
+PROBE_DIRECTIONS = _golden_spiral(26)
+"""Directions each atom is probed along. Twenty-six; `_golden_spiral` says why."""
+
+_CELL_NEIGHBOURHOOD = np.array(
+    [[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)]
+)
+
+
+def _buried_probes(
+    points: FloatArray, owner: np.ndarray, structure: PQRData, margin: float
+) -> np.ndarray:
+    """True where a probe point lies inside some *other* atom's radius plus `margin`.
+
+    `owner[p]` is the atom `points[p]` was placed around; an atom never buries
+    its own probe. That exemption is not a check that cannot fail: at
+    `probe_offset = 0` the probe sits exactly on its own radius, and on real
+    coordinates the rounding in `centre + radius * direction` puts 24.1% of
+    fas2's probes fractionally inside — measured — so without it a legal call
+    returns nothing.
+
+    Cost is why this is not the obvious double loop. Testing every probe
+    against every atom is O(probes x atoms), which on serum albumin is 474,292
+    probes against 18,242 atoms: measured at 9.8 s for a 20,000-probe
+    subsample, so around four minutes at full size — the same shape as the
+    64 s `_solute_mask` was written to avoid, on a tool an agent calls in a
+    loop. Instead the probes are binned into cells one cutoff wide, and each
+    atom is joined against the 27 cells its sphere can reach. The join is
+    ragged, so it is expanded with `repeat` rather than looped: 27 vectorised
+    passes over the whole structure, no Python loop over atoms at all. That is
+    2.3 s on albumin, and it agrees with the naive oracle probe for probe.
+    """
+    cutoff = structure.radii + margin
+    reach = float(cutoff.max())
+    if reach <= 0 or len(points) == 0:
+        return np.zeros(len(points), dtype=bool)
+
+    lower = points.min(axis=0) - reach
+    counts = np.maximum(np.ceil((points.max(axis=0) + reach - lower) / reach).astype(int), 1)
+    cell_of = np.clip(((points - lower) / reach).astype(int), 0, counts - 1)
+    keys = np.ravel_multi_index(cell_of.T, counts)
+    order = np.argsort(keys, kind="stable")
+    ordered = keys[order]
+
+    home = np.clip(((structure.coords - lower) / reach).astype(int), 0, counts - 1)
+    buried = np.zeros(len(points), dtype=bool)
+    atoms = np.arange(structure.n_atoms)
+
+    for offset in _CELL_NEIGHBOURHOOD:
+        cells = home + offset
+        legal = np.all((cells >= 0) & (cells < counts), axis=1)
+        if not legal.any():
+            continue
+        here = np.ravel_multi_index(cells[legal].T, counts)
+        starts = np.searchsorted(ordered, here, side="left")
+        ends = np.searchsorted(ordered, here, side="right")
+        widths = ends - starts
+        if not widths.any():
+            continue
+
+        # Ragged gather: `repeat` lays out one slot per (atom, probe) pair, and
+        # subtracting each pair's own run start turns a global arange into an
+        # offset within its run.
+        atom_of_pair = np.repeat(atoms[legal], widths)
+        run_start = np.repeat(np.cumsum(widths) - widths, widths)
+        within = np.arange(int(widths.sum())) - run_start
+        probe_of_pair = order[np.repeat(starts, widths) + within]
+
+        gap = points[probe_of_pair] - structure.coords[atom_of_pair]
+        hit = np.einsum("ij,ij->i", gap, gap) < cutoff[atom_of_pair] ** 2
+        hit &= owner[probe_of_pair] != atom_of_pair
+        buried[probe_of_pair[hit]] = True
+
+    return buried
+
+
 def residue_potentials(
     grid: PotentialGrid,
     structure: PQRData,
     *,
     probe_offset: float = 2.0,
+    exclusion_margin: float = DEFAULT_EXCLUSION_MARGIN_A,
     top: int | None = None,
 ) -> list[ResiduePotential]:
-    """Mean potential near each residue, most negative first.
+    """Mean potential in the solvent around each residue, most negative first.
 
-    Sampled at `probe_offset` angstroms *outside* each atom's radius rather than
-    at the atom centre: the potential at a point charge is dominated by its own
-    self-energy, so atom-centre values report the atom, not its environment.
+    Sampled at `probe_offset` angstroms *outside* each atom's radius rather
+    than at the atom centre: the potential at a point charge is dominated by
+    its own self-energy, so atom-centre values report the atom, not its
+    environment.
+
+    **Stepping outside the atom's own radius is not the same as stepping into
+    solvent**, and until this was measured the difference was the whole
+    defect. A probe 2 A beyond atom `i` lands inside atom `j` constantly —
+    **55.9% of probes on fas2, 61.4% on 1a63, 63.2% on serum albumin** — so a
+    per-residue mean was a majority-interior sample being reported as "its
+    environment". `exclude_near` fixed the same arithmetic in
+    `potential_extrema` and `potential_in_sphere`; this is the third sibling.
+
+    `exclusion_margin` is what makes the rejection mean solvent rather than
+    merely "outside a radius", and 1.4 A is not a fudge factor. The shipped
+    surface model is `molecular`, whose interior is the solvent-*excluded*
+    volume — strictly larger than the union of van der Waals spheres, because
+    the re-entrant crevices between atoms are solute while lying outside every
+    radius. Rejecting at the bare radius leaves **21.6% of the survivors on
+    fas2 still inside the solute of the map they are reading** (measured
+    against `ReducedSurface.inside`, the solver's own oracle), and those
+    points carry mean |phi| of 8.75 kT/e against 1.15 for genuine solvent —
+    the contamination this function exists to remove, one layer in. A point
+    at least `r_j + p` from every atom centre is a legal position for a probe
+    of radius `p`, so it is outside the solvent-excluded surface *for any*
+    surface model with that probe or smaller. At 1.4 A — the same default the
+    two sibling tools take — **0 of the 535 survivors on fas2 are interior**.
+    That is a proof rather than a fit, which is why it is the default and why
+    it does not need to know which surface the map was solved with.
+
+    It is conservative by construction: it also rejects the genuinely solvent
+    shell between the excluded and accessible surfaces. Pass a smaller margin
+    to sample closer in, with the understanding that below the solve's own
+    probe radius the rejection stops being a proof.
 
     Residues are grouped as `_residue_groups` describes — by contiguous run,
-    because `"<resName> <resSeq>"` is not unique across chains. Atoms whose
-    probe points fall outside the grid are skipped and counted, so a residue at
-    the box edge is visibly under-sampled rather than quietly wrong.
+    because `"<resName> <resSeq>"` is not unique across chains. A residue
+    whose probes are *all* rejected keeps its row with `value = None` and a
+    note saying which of the two nothings it is, rather than vanishing from a
+    list a caller reads as a ranking.
+
+    **What this number still is not.** It is a mean over the solvent points
+    that survived, which on a protein is a minority of those offered and sits
+    preferentially on the exposed side of each atom. It describes the field a
+    solvent-side probe would meet near the residue. It is not a
+    surface-area-weighted average, not an interaction energy, and not
+    comparable across structures solved on different grids.
     """
     if not structure.labels:
         raise ValueError(
@@ -318,39 +541,55 @@ def residue_potentials(
         )
     if len(structure.labels) != structure.n_atoms:
         raise ValueError("labels must cover every atom")
+    if probe_offset < 0:
+        raise ValueError(f"probe_offset must be non-negative, got {probe_offset}")
+    if exclusion_margin < 0:
+        raise ValueError(f"exclusion_margin must be non-negative, got {exclusion_margin}")
 
-    # Six probe points per atom, on the axes, just outside the vdW radius.
-    directions = np.array(
-        [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]], dtype=float
-    )
+    per_atom_probes = len(PROBE_DIRECTIONS)
+    reach = (structure.radii + probe_offset)[:, None, None]
+    points = (structure.coords[:, None, :] + reach * PROBE_DIRECTIONS[None, :, :]).reshape(-1, 3)
+    owner = np.repeat(np.arange(structure.n_atoms), per_atom_probes)
+
+    sampled = grid.value_at(points)
+    outside_grid = np.isnan(sampled)
+    # Off the map is charged first, and the order is a real choice. A probe
+    # that was never on the grid was not rejected as solute, it was missing --
+    # and on a map that does not cover the structure, charging it the other way
+    # over-reports masking severalfold on exactly the input where these counts
+    # are what tells the caller what went wrong.
+    excluded = _buried_probes(points, owner, structure, exclusion_margin) & ~outside_grid
+    usable = ~outside_grid & ~excluded
+
+    shape = (structure.n_atoms, per_atom_probes)
+    sampled = sampled.reshape(shape)
+    outside_grid = outside_grid.reshape(shape)
+    excluded = excluded.reshape(shape)
+    usable = usable.reshape(shape)
 
     groups = _residue_groups(structure)
-    labels = _labelled(groups)
-
     results = []
-    for group, label in zip(groups, labels, strict=True):
-        sampled = []
-        for index in group.indices:
-            offset = structure.radii[index] + probe_offset
-            probes = structure.coords[index] + directions * offset
-            values = grid.value_at(probes)
-            usable = values[~np.isnan(values)]
-            if usable.size == 0:
-                continue
-            sampled.append(float(usable.mean()))
-        if not sampled:
-            continue
+    for group, label in zip(groups, _labelled(groups), strict=True):
+        indices = np.array(group.indices, dtype=int)
+        # Per atom first, then across atoms, so a well-exposed atom does not
+        # outvote the rest of its residue by carrying more surviving probes.
+        means = [float(sampled[i][usable[i]].mean()) for i in indices if bool(usable[i].any())]
         results.append(
             ResiduePotential(
                 label=label,
-                value=float(np.mean(sampled)),
+                value=float(np.mean(means)) if means else None,
                 n_atoms=len(group.indices),
-                n_sampled=len(sampled),
+                n_probes=len(group.indices) * per_atom_probes,
+                n_probes_used=int(usable[indices].sum()),
+                n_probes_excluded_as_solute=int(excluded[indices].sum()),
+                n_probes_outside_grid=int(outside_grid[indices].sum()),
                 chain=group.chain,
                 segment=group.segment,
             )
         )
-    results.sort(key=lambda r: r.value)
+    # Unsampled rows sort last rather than being dropped: `top=N` should spend
+    # its N on residues that have a number.
+    results.sort(key=lambda r: (r.value is None, r.value if r.value is not None else 0.0))
     return results[:top] if top is not None else results
 
 

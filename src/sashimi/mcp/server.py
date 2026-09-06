@@ -25,7 +25,13 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from sashimi.analysis import potential_extrema, potential_in_sphere, residue_potentials
+from sashimi.analysis import (
+    DEFAULT_EXCLUSION_MARGIN_A,
+    potential_extrema,
+    potential_in_sphere,
+    residue_potentials,
+    solute_mask,
+)
 from sashimi.artifacts import content_address, describe_cleanup, map_path
 from sashimi.backends import get as get_backend
 from sashimi.backends import resolve as resolve_preference
@@ -544,28 +550,54 @@ def sashimi_potential_extrema(
         except (OSError, ValueError) as exc:
             raise ToolError(f"could not read PQR {pqr_path}: {exc}") from exc
 
+    # Built once here rather than inside each search, for two reasons: the two
+    # signs would otherwise build it twice, and the count is the only honest
+    # basis for the badge below.
+    excluded = (
+        solute_mask(grid, structure, DEFAULT_EXCLUSION_MARGIN_A) if structure is not None else None
+    )
+    n_excluded = int(excluded.sum()) if excluded is not None else 0
+
     out: dict[str, Any] = {
         "min_separation_a": min_separation,
-        "solute_masked": structure is not None,
+        # Whether the mask *bit*, not whether an argument was passed. A PQR that
+        # does not correspond to this map — wrong structure, wrong frame, wrong
+        # units — masks nothing, and reporting the argument would label an
+        # unmasked search as masked. #104 fixed this exact mismatch in
+        # `sashimi_potential_in_sphere`; this is the sibling it left behind.
+        "solute_masked": n_excluded > 0,
+        "solute_supplied": structure is not None,
+        "n_points": int(grid.values.size),
+        "n_points_excluded_as_solute": n_excluded,
+        "exclusion_margin_a": DEFAULT_EXCLUSION_MARGIN_A,
     }
     described = []
 
     if sign in ("positive", "both"):
         peaks = potential_extrema(
-            grid, n=n, most_positive=True, min_separation=min_separation, exclude_near=structure
+            grid, n=n, most_positive=True, min_separation=min_separation, exclude_mask=excluded
         )
         out["most_positive"] = [p.as_dict() for p in peaks]
         if peaks:
             described.append(f"most positive {peaks[0].value:+.3g} kT/e")
     if sign in ("negative", "both"):
         troughs = potential_extrema(
-            grid, n=n, most_positive=False, min_separation=min_separation, exclude_near=structure
+            grid, n=n, most_positive=False, min_separation=min_separation, exclude_mask=excluded
         )
         out["most_negative"] = [p.as_dict() for p in troughs]
         if troughs:
             described.append(f"most negative {troughs[0].value:+.3g} kT/e")
 
-    caveat = "" if structure is not None else " (solute not masked — pass pqr_path)"
+    if structure is None:
+        caveat = " (solute not masked — pass pqr_path)"
+    elif n_excluded == 0:
+        caveat = (
+            " (WARNING: the structure masked nothing — not one of its atoms lies inside this"
+            " map, so these are unmasked extrema and are probably the self-energy"
+            " singularities. Check the PQR is the one this map was computed from)"
+        )
+    else:
+        caveat = f" ({n_excluded:,} of {grid.values.size:,} points masked as solute)"
     out["summary"] = (
         f"{Path(dx_path).name}: " + ("; ".join(described) or "no extrema found") + caveat
     )
@@ -617,7 +649,7 @@ def sashimi_potential_in_sphere(
 
     # Gated on the mask having *bitten*, not on the argument being present. A PQR
     # that does not match the map — a different structure, a re-centred box —
-    # masks nothing, and `_solute_mask` reports that silently by skipping every
+    # masks nothing, and `solute_mask` reports that silently by skipping every
     # atom whose bounding box misses the grid. The caller would otherwise get the
     # unmasked mean labelled `solute_masked: true`: the confidently wrong number
     # this argument exists to prevent, wearing a badge saying it is not.
@@ -668,17 +700,33 @@ def sashimi_residue_potentials(
         Field(
             description=(
                 "Angstroms outside each atom's radius to sample. Sampling at atom "
-                "centres would report the atom's own self-energy, not its environment."
+                "centres would report the atom's own self-energy, not its environment. "
+                "Probes that land inside a neighbouring atom are rejected whatever "
+                "this is set to, so raising it does not buy a cleaner sample — it "
+                "moves the sample further from the residue."
             ),
             ge=0,
         ),
     ] = 2.0,
 ) -> dict[str, Any]:
-    """Mean potential around each residue, most negative first.
+    """Mean potential in the solvent around each residue, most negative first.
 
     Answers "which residues sit in negative potential" — the question behind
     cation binding, electrostatic steering and charge-complementarity work,
     without moving a grid anywhere.
+
+    Each atom is probed in 26 directions just outside its own radius, and a
+    probe is discarded if it lands within a solvent probe radius of any *other*
+    atom — otherwise the sample is mostly the inside of neighbouring atoms
+    (55.9% of probes on fas2), which is the solute rather than its environment.
+    On a protein most probes are discarded; `n_probes_used` against `n_probes`
+    is how thin the surviving sample is, per residue and overall.
+
+    A residue whose probes are all discarded keeps its row and carries a `note`
+    instead of a `mean_kT_e`, saying whether it is buried in the solute or off
+    the map — two answers that ask for opposite responses. Read `unsampled`
+    rather than scanning for it: the ranking puts those rows last, so `top`
+    hides them.
 
     On a multi-chain structure the residue name is prefixed, because `SER 58`
     alone names two different residues. `A:SER 58` is a chain ID the file
@@ -695,20 +743,64 @@ def sashimi_residue_potentials(
         raise ToolError(f"could not read PQR {pqr_path}: {exc}") from exc
 
     try:
-        residues = residue_potentials(grid, structure, probe_offset=probe_offset, top=top)
+        ranked = residue_potentials(grid, structure, probe_offset=probe_offset)
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
 
-    under_sampled = [r.label for r in residues if r.n_sampled < r.n_atoms]
-    note = f" {len(under_sampled)} residue(s) partly outside the grid." if under_sampled else ""
-    lead = residues[0] if residues else None
+    # Ranked in full, truncated only for the rows. Every count below is over
+    # the whole structure, and says so in its name: a total that silently
+    # changed denominator when `top` was set would be the same defect as a
+    # sampled maximum wearing the exact one's key.
+    shown = ranked[:top] if top is not None else ranked
+    probes = sum(r.n_probes for r in ranked)
+    used = sum(r.n_probes_used for r in ranked)
+    masked = sum(r.n_probes_excluded_as_solute for r in ranked)
+    off_map = sum(r.n_probes_outside_grid for r in ranked)
+
+    # Named at the top level rather than left to the rows, because the sort
+    # puts unsampled residues last and `top` would then hide exactly the ones
+    # a caller needs to be told about.
+    unsampled = [
+        {"residue": r.label, "note": r.unsampled_because} for r in ranked if r.value is None
+    ]
+    partly_off_map = [r.label for r in ranked if r.value is not None and r.n_probes_outside_grid]
+
+    lead = shown[0] if shown and shown[0].value is not None else None
+    counted = (
+        f"{len(shown)} of {len(ranked)} residue(s)."
+        if top is not None and len(shown) < len(ranked)
+        else f"{len(ranked)} residue(s)."
+    )
     return {
-        "residues": [r.as_dict() for r in residues],
-        "under_sampled": under_sampled,
-        "summary": (
-            f"{len(residues)} residue(s)."
-            + (f" Most negative: {lead.label} at {lead.value:+.3g} kT/e." if lead else "")
-            + note
+        "residues": [r.as_dict() for r in shown],
+        "n_residues": len(ranked),
+        "n_residues_returned": len(shown),
+        "probe_offset_a": probe_offset,
+        "exclusion_margin_a": DEFAULT_EXCLUSION_MARGIN_A,
+        "n_probes_all_residues": probes,
+        "n_probes_used_all_residues": used,
+        "n_probes_excluded_as_solute_all_residues": masked,
+        "n_probes_outside_grid_all_residues": off_map,
+        "unsampled": unsampled,
+        "partly_off_map": partly_off_map,
+        # Assembled as whole sentences and joined, rather than concatenated with
+        # conditional punctuation. The first draft of this ran two sentences
+        # together whenever a residue was unsampled and nothing was off the map,
+        # which is the ordinary case on a protein.
+        "summary": " ".join(
+            part
+            for part in (
+                counted,
+                f"Most negative: {lead.label} at {lead.value:+.3g} kT/e." if lead else "",
+                (
+                    f"{used:,} of {probes:,} probe points usable, {masked:,} masked as"
+                    f" solute" + (f", {off_map:,} outside the map." if off_map else ".")
+                    if probes
+                    else ""
+                ),
+                f"{len(unsampled)} residue(s) carry no mean." if unsampled else "",
+            )
+            if part
         ),
     }
 

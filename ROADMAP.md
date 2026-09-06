@@ -1295,6 +1295,27 @@ the same query returns −1.82 kT/e at a solvent-side position instead. The tool
 says in its response when the solute was not masked, because an agent cannot
 otherwise tell the difference between a binding site and an atom.
 
+**That finding has now been paid for three times, once per tool, and the third
+is the one worth reading.** `potential_extrema` learned it in phase 5;
+`potential_in_sphere` had never taken the structure at all and was fixed in
+#104, where a mean hid the singularities better than a maximum had. The third
+was `residue_potentials`, and it had *already* stepped outside each atom's own
+radius — which looked like the same lesson applied. It was not: the probes were
+never tested against **neighbouring** atoms, so 55.9% of them on fas2 sat inside
+the solute. **A defence against one instance of a trap can read as a defence
+against the trap.** Rejecting them is also not enough on its own: the shipped
+surface is `molecular`, whose interior is strictly larger than the union of van
+der Waals spheres, so a bare-radius test still left 21.6% of the survivors
+inside the solute. The margin has to be a solvent probe radius for the rejection
+to mean *solvent* — which then makes it independent of the surface model, since
+a point a probe radius clear of every atom is outside any excluded surface built
+with that probe or smaller.
+
+The same third pass found the badge on `potential_extrema` was gated on the
+*argument* rather than on the mask having excluded anything, so a PQR that
+matched nothing in the map produced unmasked extrema labelled as masked — the
+defect #104 fixed in `potential_in_sphere` and left in its sibling.
+
 Also done: the **capabilities and validate-inputs surface**.
 `sashimi_capabilities` reports backends and their state, portable surface
 models, units, grid defaults and what is deliberately unsupported — and reports
@@ -3362,23 +3383,50 @@ cross-backend band" — is **met by measurement**. It is *not* turned into a gat
 decided 2026-08-17 by Charlie on the recommendation below. All numbers on
 `fas2-molecular`, 906 atoms, 63 residues:
 
+**Re-measured 2026-09-06, and every number moved by roughly 40× without the
+solver changing.** `residue_potentials` was sampling probe points that land
+inside *neighbouring* atoms — 55.9% of them on fas2 — so the quantity graded
+below was substantially the interior singularity field rather than the
+environment. The rows are the fixed sampler's; the struck row keeps what was
+recorded 2026-08-17 so the size of the correction is visible.
+
 | comparison | median | max |
 |---|---|---|
-| APBS against *itself*, padding 8→11 Å | 0.49 kT/e | 2.12 |
-| debye against *itself*, padding 8→11 Å | 0.66 kT/e | 3.18 |
-| **debye against APBS**, common lattice | **0.32 kT/e** | 3.73 |
-| debye against APBS at h ≈ 0.5 / 0.4 / 0.35 | 0.43 / 0.49 / 0.43 | — |
+| APBS against *itself*, padding 8→11 Å | 0.0049 kT/e | 0.0387 |
+| debye against *itself*, padding 8→11 Å | 0.0137 kT/e | 0.0552 |
+| **debye against APBS**, common lattice | **0.0126 kT/e** | 0.0352 |
+| ~~as recorded 2026-08-17: 0.49 / 0.66 / 0.32, max 2.12 / 3.18 / 3.73~~ | — | — |
 
 | rank comparison | Spearman | top-10 overlap |
 |---|---|---|
-| APBS against itself, padding 8→11 Å | ≥ 0.9916 | 9/10 |
-| debye against itself, padding 8→11 Å | ≥ 0.9783 | 8/10 |
-| debye against APBS | 0.9794–0.9842 | 7–8/10 |
+| debye against itself, padding 8→11 Å | 0.9991 | **10/10** |
+| debye against APBS | 0.9991 | **10/10** |
+| ~~as recorded 2026-08-17~~ | ~~≥ 0.9783 / 0.9794–0.9842~~ | ~~8/10 / 7–8/10~~ |
 
-**Every row says the same thing: the disagreement between solvers is the size
-of each solver's own grid noise.** debye is not failing — the quantity is
-dominated by discretization, not by which solver computes it. Two consequences
-that decided the treatment:
+**Every row still says the same thing: the disagreement between solvers is the
+size of each solver's own grid noise** — 0.0126 against 0.0137 is a ratio of
+0.92, where before it was 0.32 against 0.66. debye is not failing; the quantity
+is dominated by discretization, not by which solver computes it. **The values
+shrank and the disagreements shrank further**: median |value| went 3.09 → 0.67
+kT/e while noise-to-signal went 0.177 → 0.020, so the axis got *cleaner* rather
+than quieter, which is the evidence that the old numbers were measuring
+contamination.
+
+*Two recorded constants could not be reproduced even before the fix, and the
+reason is open.* Re-measured against the unfixed sampler, debye's box noise is
+0.5412 / 0.1443 / 0.5479 / 0.5254 / 0.0702 / 0.5973 across the six padding pairs
+— none of them the recorded **0.6605**, though the recorded max of 3.18 matches
+10→11 exactly (3.1822) — and debye against APBS is **0.4478**, not the recorded
+0.32. The recordings themselves are genuine: a worktree at the pre-#96 tree
+returns CYX 565 at −9.6242 against the −9.6241 pinned in
+`tests/test_debye_m6.py`. **#96 is not the cause**, though it does touch this
+case (0.15 M salt, `ion_radius` 2.0 ≥ `surface_radius` 1.4): it moves residue
+values by ~0.008 kT/e and the cross-backend median from 0.4347 to 0.4478. What
+is left is the protocol — the row above is labelled *common lattice*, and both
+the test and these re-measurements give each backend the grid its own
+`request_for` resolves. That is a hypothesis and it has not been measured.
+
+Two consequences that decided the treatment:
 
 - **The obvious relational bar has the wrong comparator.** "As well as APBS
   agrees with itself" *fails* (0.9794 < 0.9916). The comparator has to be the
@@ -3387,10 +3435,15 @@ that decided the treatment:
   against itself — passes by **0.0011**. A gate with that margin goes red for
   reasons unrelated to debye, which is §7's "check that cannot fail" inverted:
   a check that cannot *pass* reliably teaches as little as one that cannot fail.
-- **Top-N is not gateable at all.** It is unstable *within* one backend — APBS
+- ~~**Top-N is not gateable at all.** It is unstable *within* one backend — APBS
   drops to 9/10 against itself across a box change, debye to 8/10. An earlier
   draft of this gate proposed "the same top-10 set"; it would have been flaky by
-  construction.
+  construction.~~ **This stopped being true on 2026-09-06.** With the probes
+  rejected, debye is **10/10 against itself** across 8→11 Å and **10/10 against
+  APBS**: the instability that killed the top-N gate was the contamination, not
+  the ranking. Whether to now gate it is a decision for this section and not a
+  test edit, so `tests/test_debye_m6.py` records the change and gates nothing
+  new.
 
 So M6 gates the DX half, records this one, and `tests/test_debye_m6.py` pins the
 relationship the way M3 pinned its neutral solute — **if debye ever becomes
@@ -6176,6 +6229,15 @@ twice in this milestone.
 
 This is the audit's most consequential finding and no lens looked for it,
 because every lens graded on the 3–4 Å shell.
+
+> **The observable itself moved on 2026-09-06.** `residue_potentials` was
+> sampling probe points inside neighbouring atoms and now rejects them, so the
+> r-values recorded in this subsection are not reproducible with the current
+> function. They are kept as the record of what was measured then. The
+> milestone's conclusion is unaffected and arguably strengthened: the finding
+> was that *residue pooling averages away the near-surface error this milestone
+> changes*, and pooling now happens over points that are actually in the
+> solvent, further from the boundary where `sdh` and `mdh` differ.
 
 The criterion above names **`residue_potentials`**. Graded on
 `residue_potentials` — same box, same lattice, `molecular` at 1.0 Å, against the
