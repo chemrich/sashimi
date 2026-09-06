@@ -175,15 +175,51 @@ def _solute_mask(grid: PotentialGrid, structure: PQRData, margin: float) -> np.n
     return mask
 
 
+def _subset(structure: PQRData, indices: np.ndarray) -> PQRData:
+    """The atoms at `indices`, as a `PQRData` the mask builder can take.
+
+    Labels and chains are carried along so the result is a well-formed structure
+    rather than a bag of coordinates; nothing here reads them, but returning
+    something that only half-satisfies the type is how the next caller gets
+    surprised. **Both are optional and both are subsetted**: `labels` is empty
+    on a structure built in code, and `PQRData.__post_init__` rejects a `chains`
+    tuple whose length does not cover the atoms — so passing the parent's
+    through unsliced would raise on any real PQR that carries chains.
+    """
+    picked = [int(i) for i in indices]
+    return PQRData(
+        coords=structure.coords[indices],
+        charges=structure.charges[indices],
+        radii=structure.radii[indices],
+        labels=tuple(structure.labels[i] for i in picked) if structure.labels else (),
+        chains=tuple(structure.chains[i] for i in picked) if structure.chains else (),
+    )
+
+
 def potential_in_sphere(
     grid: PotentialGrid,
     centre: FloatArray,
     radius: float,
+    *,
+    exclude_near: PQRData | None = None,
+    exclusion_margin: float = 1.4,
 ) -> Diagnostics:
     """Statistics over the grid points inside a sphere — a pocket, say.
 
     Reports `n_points` so a caller can tell an empty or barely-sampled region
     from a well-covered one; a mean over three points is not a mean.
+
+    **Pass `exclude_near` for any sphere that contains atoms, which is every
+    real pocket.** The strongest values in a map are the point-charge
+    self-energy singularities at the atom centres — order 500 kT/e on a
+    dipeptide — so a mean taken over a pocket without masking the solute is a
+    mean of those singularities and not of the field a ligand would feel.
+    `potential_extrema` learned this first; the same arithmetic decides a mean,
+    and a mean hides it better than a maximum does, because nothing in the
+    number looks wrong.
+
+    The margin is the same 1.4 A default: a probe radius past the van der Waals
+    surface, so the solvent-side shell a ligand actually occupies survives.
     """
     if radius <= 0:
         raise ValueError(f"radius must be positive, got {radius}")
@@ -195,21 +231,61 @@ def potential_in_sphere(
     ]
     xx, yy, zz = np.meshgrid(*axes, indexing="ij")
     distance_sq = (xx - centre[0]) ** 2 + (yy - centre[1]) ** 2 + (zz - centre[2]) ** 2
-    inside = distance_sq <= radius**2
+    in_sphere = distance_sq <= radius**2
+    n_in_sphere = int(in_sphere.sum())
 
-    if not inside.any():
+    if not in_sphere.any():
         return {
             "n_points": 0,
             "centre": centre.tolist(),
             "radius_a": radius,
+            "solute_masked": exclude_near is not None,
             "note": "no grid points fall inside this sphere",
+        }
+
+    inside = in_sphere
+    if exclude_near is not None:
+        # Only atoms whose own cutoff sphere reaches this query sphere can mask a
+        # point in it, and on a protein that is a handful out of thousands. The
+        # test is exact — an atom further than `radius + r_i + margin` from the
+        # centre cannot contain any point within `radius` of it — so the mask is
+        # identical, and `tests/test_analysis.py` pins that against the unfiltered
+        # path. Measured on serum albumin at r = 5 A this is the difference
+        # between ~0.9 s and a few milliseconds, on a tool an agent calls in a loop.
+        reach = radius + exclude_near.radii + exclusion_margin
+        near = np.flatnonzero(np.sum((exclude_near.coords - centre) ** 2, axis=1) <= reach**2)
+        if near.size:
+            inside = in_sphere & ~_solute_mask(grid, _subset(exclude_near, near), exclusion_margin)
+
+    n_excluded = n_in_sphere - int(inside.sum())
+    common: Diagnostics = {
+        "centre": centre.tolist(),
+        "radius_a": radius,
+        "solute_masked": exclude_near is not None,
+        "n_points_in_sphere": n_in_sphere,
+        "n_points_excluded_as_solute": n_excluded,
+    }
+
+    # Distinct from the empty-sphere case above, and the distinction is the
+    # useful part: this sphere is *buried*. Returning a masked mean of nothing
+    # would be a divide by zero; returning the unmasked mean would be the exact
+    # singularity average this argument exists to prevent.
+    if not inside.any():
+        return {
+            **common,
+            "n_points": 0,
+            "note": (
+                f"all {n_in_sphere} grid points inside this sphere fall inside some "
+                f"atom's radius plus the {exclusion_margin} A margin — the sphere is "
+                "buried in the solute, so there is no solvent-side potential here to "
+                "average. Move the centre outward, or widen the radius past the surface"
+            ),
         }
 
     sampled = grid.values[inside]
     return {
+        **common,
         "n_points": int(inside.sum()),
-        "centre": centre.tolist(),
-        "radius_a": radius,
         "min_kT_e": float(sampled.min()),
         "max_kT_e": float(sampled.max()),
         "mean_kT_e": float(sampled.mean()),

@@ -35,6 +35,7 @@ from sashimi.validate import (
     Incomparable,
     SolverFamily,
     System,
+    compare_grids,
     compare_results,
     overlap_probe_points,
     validate,
@@ -318,6 +319,75 @@ def test_probe_points_fall_inside_every_grid():
 def test_probe_points_are_deterministic():
     grids = [grid(), grid(spacing=0.25, n=17)]
     assert np.array_equal(overlap_probe_points(grids), overlap_probe_points(grids))
+
+
+def test_compare_grids_pairs_every_node_when_the_lattice_is_shared():
+    a, b = grid(fill=1.0), grid(fill=1.25)
+    out = compare_grids(a, b)
+
+    assert out["method"] == "lattice"
+    assert out["n_points"] == 9**3
+    assert out["mean_diff_kT_e"] == pytest.approx(-0.25)
+    assert out["rmsd_kT_e"] == pytest.approx(0.25)
+    assert "note" not in out
+
+
+def test_compare_grids_samples_the_shared_region_when_the_lattice_is_not():
+    """The solver-versus-solver case: two boxes no caller chose to align."""
+    a = grid(origin=(0.0, 0.0, 0.0), spacing=0.5, n=21, fill=2.0)
+    b = grid(origin=(2.0, 2.0, 2.0), spacing=0.3, n=21, fill=2.0)
+
+    out = compare_grids(a, b)
+
+    assert out["method"] == "sampled"
+    assert out["n_points"] > 0
+    assert out["n_points"] not in (a.values.size, b.values.size)
+    # Same constant field sampled two ways: interpolation must not invent a difference.
+    assert out["rmsd_kT_e"] == pytest.approx(0.0, abs=1e-9)
+    assert "differ in geometry" in out["note"]
+    # Trilinear sampling of a constant field gives std ~1e-16, not 0. An
+    # exact-zero guard would hand corrcoef rounding noise and report r = 0.023
+    # beside an RMSD of 2e-16 — a wrong number, stated confidently.
+    assert out["correlation"] is None
+    # A maximum over samples is a lower bound, so it must not wear the exact key.
+    assert "max_abs_diff_kT_e" not in out
+    assert out["max_abs_diff_over_samples_kT_e"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_real_field_still_correlates_on_the_sampled_path():
+    """The relative guard must not suppress a correlation that genuinely exists."""
+    n = 21
+    ramp = np.linspace(-1.0, 1.0, n)
+    values = np.repeat(np.repeat(ramp[:, None, None], n, 1), n, 2)
+    a = PotentialGrid(values=values, origin=np.zeros(3), spacing=np.full(3, 0.5))
+    b = PotentialGrid(values=values * 2.0, origin=np.full(3, 0.2), spacing=np.full(3, 0.45))
+    out = compare_grids(a, b)
+    assert out["method"] == "sampled"
+    assert out["correlation"] is not None
+    assert out["correlation"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_compare_grids_refuses_when_there_is_no_shared_volume():
+    a = grid(origin=(0.0, 0.0, 0.0), n=5)
+    b = grid(origin=(100.0, 100.0, 100.0), n=5)
+    with pytest.raises(Incomparable, match="no common region"):
+        compare_grids(a, b)
+
+
+def test_a_sampled_comparison_is_never_mistaken_for_an_exact_one():
+    """`method` is the whole guard: the two RMSDs are not the same quantity."""
+    shared = compare_grids(grid(fill=1.0), grid(fill=1.5))
+    crossed = compare_grids(
+        grid(origin=(0.0, 0.0, 0.0), spacing=0.5, n=21, fill=1.0),
+        grid(origin=(1.0, 1.0, 1.0), spacing=0.3, n=21, fill=1.5),
+    )
+    assert shared["method"] != crossed["method"]
+    assert shared["n_points"] != crossed["n_points"]
+    assert ("note" in crossed) and ("note" not in shared)
+    # The exact maximum exists on one path only, so a caller cannot read an
+    # estimate as though it were exact — it is a KeyError, not a smaller number.
+    assert "max_abs_diff_kT_e" in shared
+    assert "max_abs_diff_kT_e" not in crossed
 
 
 def test_disjoint_grids_yield_no_points():

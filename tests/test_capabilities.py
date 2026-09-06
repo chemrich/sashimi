@@ -140,7 +140,14 @@ class TestCapabilities:
         # between them — a test that asserts registry *order* where it means
         # registry *content*.
         detail = {backend["name"]: backend["detail"] for backend in caps["backends"]}
-        assert "brew install apbs" in detail["apbs"]
+        # Was `brew install apbs`, which is not a command that works: APBS is not
+        # in homebrew-core, only in the third-party `brewsci/bio` tap. Pinning the
+        # tap rather than the sentence keeps this a test of "the hint is usable"
+        # instead of a test of its wording.
+        assert "brewsci/bio" in detail["apbs"]
+        # And an absent APBS is not a dead end on a bare install, so the report
+        # has to say what does work in this process.
+        assert "debye" in detail["apbs"]
         # Every backend must explain its own absence, not just the first one.
         assert "compbio.clemson.edu" in detail["delphi"]
         assert "Treecodes/TABI-PB" in detail["tabipb"]

@@ -332,8 +332,42 @@ map. Out-of-grid points return null, never a clamped edge value, because a
 clamped number reads as a real measurement.
 
 `sashimi_compare_maps(dx_a, dx_b)` — RMSD, max absolute difference, correlation.
-Mismatched grids are refused rather than silently resampled. Useful for
+~~Mismatched grids are refused rather than silently resampled.~~ Useful for
 mutant-versus-wildtype now; doubles as solver-versus-solver validation later.
+
+**"Later" arrived, and the refusal was refusing most of it. Changed 2026-09-02.**
+Two backends *usually* do not share a lattice — each sizes its box by its own
+rules — so a solver-versus-solver call generally hit the geometry error, and hit
+it with a message that reads like a caller mistake rather than a fact about
+finite-difference solvers. *An earlier draft of this paragraph said backends
+**cannot** share a lattice and that **every** such call was refused. Both are
+false and this repository already knew it:* `size_grid` puts debye and the
+DelPhi backend on a **bit-identical lattice for 23 of the 100 corpus cases** —
+every Kirkwood case and most Born-ion ones — which
+`tests/test_kirkwood_field.py::TestWhyDebyeAndDelphiAgree` pins, and
+`validate.check_same_lattice` exists to *require* that condition. The change is
+justified without the absolute, and the absolute would have contradicted §12. The rule's actual content is the word **silently**:
+what must not happen is a caller unable to tell an exact comparison from an
+interpolated one. So the tool now reports `method` — `"lattice"` over every node
+of a shared box, or `"sampled"` over deterministic points in the region both
+cover, carrying a `note` and an `n_points` that is a probe count rather than a
+node count. *The two RMSDs are not the same quantity and nothing should average
+them.* `sashimi.validate.compare_grids` owns it, beside the
+`overlap_probe_points` the cross-backend path already used — the sampled
+comparison was always how `validate` compared backends; it simply was not
+reachable from MCP. Maps whose boxes do not overlap at all are still refused,
+because there is then no region in which the question has an answer.
+
+**Two things `method` deliberately does not do.** It does not certify
+provenance: `"lattice"` means the boxes matched, not that one solver made both
+maps, and where two *different* solvers share a box §12's reading applies — a
+near-field comparison between them measures the lattice as much as the solvers.
+And the sampled maximum is reported under `max_abs_diff_over_samples_kT_e`
+rather than the exact path's `max_abs_diff_kT_e`, because a maximum over samples
+is a lower bound on the true one at any sample count, where a mean and an RMS
+converge. *A caller reading the exact key gets the exact number or a KeyError,
+never an underestimate wearing its name* — the same rule §6 already applies to
+out-of-grid interpolation, where a clamped edge value reads as a measurement.
 
 Deliberately absent: a PDB-fetching tool (mcpymol owns structure acquisition)
 and raw APBS-input passthrough (defeats the abstraction). A test asserts no APBS

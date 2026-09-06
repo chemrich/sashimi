@@ -2,9 +2,9 @@
 
 Order: `$SASHIMI_APBS_PATH`, then `shutil.which`, then an active conda
 environment. APBS is a compiled binary that no Python installer can provide, so
-it comes from the system package manager (`brew install apbs`, `apt install
-apbs`) and `which` is the normal answer. The conda fallback is a courtesy for
-environments that still supply it.
+it comes from a package manager (`brew install brewsci/bio/apbs`, `apt install
+apbs`, `micromamba install -c conda-forge apbs`) and `which` is the normal
+answer. The conda fallback is a courtesy for environments that still supply it.
 
 Nothing here pins a version — the expected 3.4.1 is asserted in the test suite
 and re-verified against the golden corpus, so a drifted system binary fails
@@ -32,9 +32,17 @@ from sashimi.errors import BackendUnavailable
 __all__ = ["ApbsBinary", "ApbsNotFound", "discover_apbs"]
 
 _VERSION_RE = re.compile(r"APBS\s+(\d+\.\d+\.\d+)")
+# `brew install apbs` does not work and never did: APBS is not in homebrew-core.
+# It lives in the third-party `brewsci/bio` tap, which recent Homebrew refuses to
+# load without an explicit trust step, so the tap has to be named. A hint that
+# names a command which fails is worse than no hint — the reader believes the
+# problem is their machine.
 _INSTALL_HINT = (
-    "Install it with `brew install apbs` (macOS) or `apt install apbs` "
-    "(Ubuntu 24.04+ / Debian 12+), or point $SASHIMI_APBS_PATH at an existing binary."
+    "Install it with `brew tap brewsci/bio && brew install brewsci/bio/apbs` (macOS), "
+    "`apt install apbs` (Ubuntu 24.04+ / Debian 12+), or `micromamba install -c "
+    "conda-forge apbs=3.4.1` (either, and what CI tests); or point $SASHIMI_APBS_PATH "
+    "at an existing binary. If you do not need APBS specifically, `debye` and `gb` "
+    "run in this process and need no binary at all."
 )
 
 

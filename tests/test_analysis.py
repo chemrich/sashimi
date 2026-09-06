@@ -153,6 +153,117 @@ class TestSphere:
         with pytest.raises(ValueError, match="radius must be positive"):
             potential_in_sphere(grid, np.zeros(3), radius=0.0)
 
+    def test_an_unmasked_pocket_mean_is_the_atom_and_not_the_field(self):
+        """The trap `potential_extrema` was given `exclude_near` for, in a mean.
+
+        A pocket contains atoms by definition, and the value at an atom centre
+        is that charge's own self-energy. Masking has to move the mean by more
+        than rounding or the argument does nothing.
+        """
+        grid = grid_with_peaks({(10, 10, 10): 500.0, (14, 10, 10): 3.0})
+        atom = PQRData(
+            coords=np.array([[10.0, 10.0, 10.0]]),
+            charges=np.array([1.0]),
+            radii=np.array([2.0]),
+            labels=("ION 1 I",),
+        )
+        centre = np.full(3, 10.0 * SPACING)
+
+        unmasked = potential_in_sphere(grid, centre, radius=6.0)
+        masked = potential_in_sphere(
+            grid, centre, radius=6.0, exclude_near=atom, exclusion_margin=3.0
+        )
+
+        assert unmasked["solute_masked"] is False
+        assert masked["solute_masked"] is True
+        assert masked["n_points_excluded_as_solute"] > 0
+        assert masked["n_points"] < unmasked["n_points"]
+        # The singularity dominates the unmasked mean; removing it must show.
+        assert abs(masked["mean_kT_e"]) < abs(unmasked["mean_kT_e"])
+        assert unmasked["max_kT_e"] > 100.0
+        assert masked["max_kT_e"] < 100.0
+
+    def test_a_buried_sphere_says_it_is_buried_rather_than_dividing_by_zero(self):
+        grid = grid_with_peaks({(10, 10, 10): 5.0})
+        blanket = PQRData(
+            coords=np.array([[10.0 * SPACING, 10.0 * SPACING, 10.0 * SPACING]]),
+            charges=np.array([1.0]),
+            radii=np.array([100.0]),
+            labels=("BIG 1 B",),
+        )
+        stats = potential_in_sphere(
+            grid, np.full(3, 10.0 * SPACING), radius=2.0, exclude_near=blanket
+        )
+        assert stats["n_points"] == 0
+        assert stats["n_points_in_sphere"] > 0
+        assert "buried" in stats["note"]
+        # Distinct from the empty-sphere case, which reports no points at all.
+        assert "no grid points fall inside" not in stats["note"]
+
+    def test_the_atom_filter_is_answer_preserving(self):
+        """The mask is built from nearby atoms only; that must change nothing.
+
+        An atom further than `radius + r_i + margin` from the centre cannot
+        contain a point inside the sphere, so restricting to those is exact
+        rather than approximate. It is worth ~20x on a protein, and an
+        optimisation that moved a reported number would not be worth anything.
+        """
+        rng = np.random.default_rng(11)
+        n = 400
+        structure = PQRData(
+            coords=rng.uniform(0.0, 12.0, size=(n, 3)),
+            charges=rng.normal(size=n),
+            radii=rng.uniform(1.2, 2.2, size=n),
+        )
+        grid = PotentialGrid(
+            values=rng.normal(size=(31, 31, 31)),
+            origin=np.zeros(3),
+            spacing=np.full(3, 0.5),
+        )
+        for centre in (np.full(3, 6.0), np.full(3, 2.0), np.array([9.0, 3.0, 11.0])):
+            for radius in (1.5, 4.0):
+                got = potential_in_sphere(grid, centre, radius=radius, exclude_near=structure)
+                axes = [
+                    grid.origin[a] + np.arange(grid.values.shape[a]) * grid.spacing[a]
+                    for a in range(3)
+                ]
+                xx, yy, zz = np.meshgrid(*axes, indexing="ij")
+                in_sphere = (
+                    (xx - centre[0]) ** 2 + (yy - centre[1]) ** 2 + (zz - centre[2]) ** 2
+                ) <= radius**2
+                expected = in_sphere & ~_solute_mask(grid, structure, 1.4)
+
+                assert got["n_points"] == int(expected.sum())
+                if expected.any():
+                    values = grid.values[expected]
+                    assert got["mean_kT_e"] == float(values.mean())
+                    assert got["min_kT_e"] == float(values.min())
+                    assert got["max_kT_e"] == float(values.max())
+
+    def test_the_filter_carries_optional_fields_rather_than_dropping_them(self):
+        """`chains` is length-validated, so a subset that keeps the parent's raises."""
+        structure = PQRData(
+            coords=np.array([[1.0, 1.0, 1.0], [40.0, 40.0, 40.0]]),
+            charges=np.array([1.0, -1.0]),
+            radii=np.array([2.0, 2.0]),
+            labels=("ALA 1 CA", "GLY 2 CA"),
+            chains=("A", "B"),
+        )
+        grid = PotentialGrid(
+            values=np.ones((21, 21, 21)), origin=np.zeros(3), spacing=np.full(3, 0.5)
+        )
+        stats = potential_in_sphere(
+            grid, np.array([1.0, 1.0, 1.0]), radius=3.0, exclude_near=structure
+        )
+        assert stats["n_points_excluded_as_solute"] > 0
+
+    def test_masking_is_off_by_default_so_the_old_answer_is_unchanged(self):
+        grid = grid_with_peaks({(10, 10, 10): 4.0})
+        centre = np.full(3, 10.0 * SPACING)
+        assert potential_in_sphere(grid, centre, radius=3.0)["mean_kT_e"] == pytest.approx(
+            potential_in_sphere(grid, centre, radius=3.0, exclude_near=None)["mean_kT_e"]
+        )
+
 
 class TestResiduePotentials:
     @staticmethod
