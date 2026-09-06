@@ -27,7 +27,17 @@ import numpy as np
 import pytest
 
 from sashimi.analytic import kirkwood_potential
-from sashimi.corpus import MANIFEST
+from sashimi.corpus import MANIFEST, kirkwood_pqr
+from sashimi.debye.backend import DebyeSolver
+from sashimi.debye.options import DebyeOptions
+from sashimi.pqr import read_pqr
+from sashimi.protocol import (
+    FiniteDifferenceRequest,
+    GridSpec,
+    PotentialGrid,
+    SolventModel,
+    SurfaceModel,
+)
 
 CORPUS = Path(__file__).resolve().parent / "corpus"
 RADIUS = 3.0  # every Kirkwood case is a 3 A sphere
@@ -191,3 +201,110 @@ class TestWhyDebyeAndDelphiAgree:
             n = _lattice_ceil(minimum)
             assert (n - 1) % LATTICE_STEP == 0
             assert odd_gsize(n) == n, f"DelPhi cannot sit on debye's {n}"
+
+
+class TestTheRampCostsTheField:
+    """One cell of the sweep that settled `dielectric_smoothing` at w = 0.5.
+
+    ROADMAP.md section 12 "The ramp at `w = 0.5`, settled against a closed
+    form" records ~2,400 solves; a sweep does not belong in CI, but its
+    direction is cheap to hold. This is two solves on the same lattice, graded
+    against the closed form, and it fails if the ramp ever stops costing the
+    exterior field — which is the measurement the knob's default rests on.
+
+    **This is a direction test, not a magnitude test, and the box is why.**
+    `padding = 10` is the shipped default and a deliberately conservative place
+    to assert from: the ramp's penalty *grows* with the box, because debye's
+    Dirichlet face is Coulomb in eps_s and its positive error partly cancels the
+    hard scheme's negative one. The same fixture reads ~4.6x at padding 13.95.
+    So a ratio measured here understates the effect and must not be quoted as
+    its size — section 12 carries the box-conditional numbers.
+
+    **The bar is set from the worst lattice phase, not the committed one.**
+    Walking `padding` across one cell at this resolution gives ratios 2.180,
+    2.144, 2.132, 2.190, 2.893, 2.907, 2.400, 2.578 — so `> 1.5` clears the
+    worst of them by 42% while still being far above 1.0. An earlier draft of
+    this test took the bar from a single phase and would have been flaky by
+    construction, which is section 12's own recorded lesson about this fixture.
+    """
+
+    OFFSET = 1.5  # d/a = 0.5 on the 3 A sphere
+    SHELL = (5.0, 5.5, 6.0)  # 2-3 A outside the surface, clear of the interface
+
+    @staticmethod
+    def solvent() -> SolventModel:
+        """No salt, eps_p = 1: what the closed form is a solution to.
+
+        `SolventModel()`'s bare default carries `ionic_strength = 0.15` and
+        `solute_dielectric = 2.0`. Grading a screened solve against an
+        unscreened reference reads 45% error, which looks like a solver defect
+        and is a setup defect.
+        """
+        return SolventModel(
+            solute_dielectric=1.0,
+            ionic_strength=0.0,
+            surface_model=SurfaceModel.VAN_DER_WAALS,
+        )
+
+    def probes(self):
+        index = np.arange(256) + 0.5
+        polar = np.arccos(1.0 - 2.0 * index / 256)
+        azimuth = np.pi * (1.0 + 5.0**0.5) * index
+        directions = np.stack(
+            [np.cos(azimuth) * np.sin(polar), np.sin(azimuth) * np.sin(polar), np.cos(polar)],
+            axis=1,
+        )
+        return np.concatenate([directions * r for r in self.SHELL])
+
+    def median_error(self, structure, width, points, exact):
+        solver = DebyeSolver(options=DebyeOptions(dielectric_smoothing=width))
+        result = solver.solve(
+            FiniteDifferenceRequest(
+                structure=structure,
+                solvent=self.solvent(),
+                grid=GridSpec(resolution=0.35, padding=10.0),
+                want_potential=True,
+            )
+        )
+        potential = result.potential
+        assert isinstance(potential, PotentialGrid), "a finite-difference solve returns a volume"
+        got = potential.value_at(points)
+        usable = ~np.isnan(got)
+        assert usable.sum() == len(points), "the shell must lie inside the box"
+        return float(np.median(np.abs(got[usable] - exact[usable]) / np.abs(exact[usable])))
+
+    def test_the_ramp_is_further_from_the_exact_field_than_the_hard_assignment(self, tmp_path):
+        pqr = tmp_path / "kirkwood.pqr"
+        pqr.write_text(kirkwood_pqr(RADIUS, self.OFFSET))
+        structure = read_pqr(pqr)
+
+        points = self.probes()
+        radii = np.linalg.norm(points, axis=1)
+        solvent = self.solvent()
+        exact = np.array(
+            [
+                kirkwood_potential(
+                    r,
+                    x / r,
+                    RADIUS,
+                    self.OFFSET,
+                    1.0,
+                    solute_dielectric=solvent.solute_dielectric,
+                    solvent_dielectric=solvent.solvent_dielectric,
+                    temperature=solvent.temperature,
+                )
+                for r, x in zip(radii, points[:, 0], strict=True)
+            ]
+        )
+
+        hard = self.median_error(structure, 0.0, points, exact)
+        ramped = self.median_error(structure, 0.5, points, exact)
+
+        # Both must be sane before their ratio means anything: a solver broken
+        # in both schemes would give a ratio near 1 and pass a one-sided bar.
+        assert hard < 0.02, f"the hard scheme is {hard:.4%} from the closed form"
+        assert ramped / hard > 1.5, (
+            f"the ramp at w = 0.5 is now {ramped / hard:.3f}x the hard scheme's shell error "
+            f"({ramped:.4%} against {hard:.4%}). Section 12 settled the default on it being "
+            "worse; if it is no longer, that is a result and not a bar to loosen."
+        )
