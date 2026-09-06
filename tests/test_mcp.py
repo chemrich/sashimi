@@ -59,7 +59,7 @@ class TestSurface:
     async def test_every_tool_documents_itself(self, client):
         for tool in await client.list_tools():
             assert tool.description, f"{tool.name} has no description"
-            props = (tool.inputSchema or {}).get("properties", {})
+            props = (tool.input_schema or {}).get("properties", {})
             # sashimi_capabilities takes no arguments by design.
             if tool.name == "sashimi_capabilities":
                 continue
@@ -276,7 +276,7 @@ class TestSolve:
         """`max_points` is not a tool parameter, so the guardrail can only
         relax the request, never reject it — and the response says which."""
         tools = {t.name: t for t in await client.list_tools()}
-        params = (tools["sashimi_solve"].inputSchema or {}).get("properties", {})
+        params = (tools["sashimi_solve"].input_schema or {}).get("properties", {})
         assert "max_points" not in params
         assert "resolution_relaxed" in json.dumps(
             payload(
@@ -662,7 +662,7 @@ class TestDiscoverySurface:
         tools = {tool.name: tool for tool in await client.list_tools()}
 
         for name in ("sashimi_solve", "sashimi_validate_inputs"):
-            schema = tools[name].inputSchema["properties"]["surface_model"]
+            schema = tools[name].input_schema["properties"]["surface_model"]
             assert schema["default"] == expected, f"{name} advertises {schema['default']!r}"
 
     async def test_solve_rejects_an_unknown_surface_model_the_same_way(self, client, tmp_path):
