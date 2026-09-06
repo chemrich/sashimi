@@ -74,21 +74,59 @@ class DebyeOptions:
     # ramp buys the **energy** and does not buy the **field**: on `ala-gly` at
     # 0.4545 A it is 4.9x closer to the converged energy than the hard
     # assignment, and 2.4-13x *further* from a refined referee on the potential
-    # 2-3 A outside the surface at w >= 0.75. At w = 0.5 the referees available
-    # here cannot settle it, and on a Born sphere with an exact reference the two
-    # summaries disagree -- worst-direction improves, shell RMS does not -- so
-    # there is no clean gain there either. debye's consumer colours a surface, so
-    # it reads the half the ramp does not win.
+    # 2-3 A outside the surface at w >= 0.75.
+    #
+    # **w = 0.5 was the open case and is now closed, against an exact referee.**
+    # Every earlier field measurement used a refined debye run as the yardstick,
+    # which shares its construction with the candidate. Graded instead against
+    # `analytic.kirkwood_potential` -- a closed form for an off-centre charge in
+    # a sphere, sharing no construction with any lattice -- w = 0.5 is **worse
+    # on the 2-3 A shell in 269 of 272 paired configurations**, over four charge
+    # offsets, five spacings and up to sixteen lattice phases per cell (four to
+    # eight at the finest spacings), field and energy taken from the same
+    # solves. **w = 0.25 is decided against too**, where it was previously
+    # undecided outright.
+    #
+    # The *sign* is what is settled: it survives every box tested. The
+    # *magnitude* is box-dependent and should not be quoted bare -- the same
+    # fixture reads 1.6-2.5x at padding 10 A and 5.8x at 24 A, because debye's
+    # Dirichlet face is Coulomb in eps_s and its positive error partly cancels
+    # the hard scheme's negative one. What is box-free is that the ramp's shell
+    # error is **proportional to the physical band width w*h**, at 2.4-2.7 %/A
+    # for a charge at d/a = 0.3 rising to 9.0-10.8 %/A at 0.9, near-constant
+    # across a 3.1x range in h and a 4x range in w. **That is a modelling error,
+    # not a discretization error, which is why refining does not close it** --
+    # the hard scheme's field converges at order +1.3 to +1.6 against the ramp's
+    # +1.11 to +1.18, so there is no crossover in either direction.
+    #
+    # **Why the Born sphere said "roughly neutral" and was not merely
+    # insensitive.** For any spherically symmetric eps(r) at zero ionic
+    # strength, Gauss's law fixes the exterior potential of a *centred* charge
+    # regardless of what the interface scheme does inside. A Born gate is
+    # therefore **provably** blind to this error rather than just short of
+    # resolution -- the same "gate a monopole passes twice" shape as M9. The
+    # off-centre fixture supplies the n >= 1 reaction-field multipoles that
+    # carry it.
     #
     # **Turn it on for a solvation energy on a coarse grid**, where it is worth
-    # about a factor of two in resolution. Do not turn it on to display a field.
-    # `sashimi.debye.dielectric` carries the reasoning and ROADMAP.md section 12
-    # "The field axis, measured" the tables.
+    # 1.7-3.1x in spacing. Do not turn it on to display a field, where the same
+    # substitution runs backwards and costs 1.9-2.4x in spacing -- about 14x the
+    # nodes. `sashimi.debye.dielectric` carries the reasoning and ROADMAP.md
+    # section 12 "The field axis, measured" the tables.
     #
-    # Two coverage gaps sit beside the field measurement and neither is closed:
-    # the **molecular surface** is exercised by two tests on one 20-atom
-    # dipeptide, and the **width** has one pinning test that is
-    # spacing-specific.
+    # **The energy gain is not universal either.** It is 3.2-7.2x at d/a <= 0.7,
+    # and at d/a = 0.9 -- the charge about one cell from the interface -- there
+    # is no accuracy gain at all (the ramp wins 8 to 12 of 16 phases). What it
+    # buys there is *reproducibility*: the peak-to-peak spread over lattice
+    # phase collapses from 107.3 to 10.8 percentage points, leaving the value
+    # biased by -8 to -14%. A number that is reliably wrong is not a more
+    # accurate number.
+    #
+    # Coverage gaps that remain open. The Kirkwood fixture is **one convex
+    # sphere**, so it says nothing about concave or re-entrant geometry, and
+    # `molecular` is bitwise the same object as `van-der-waals` on it -- so the
+    # molecular surface is still exercised only by two tests on one 20-atom
+    # dipeptide. Also untested: non-zero ionic strength, and eps_p > 1.
     #
     # And do not read a pose-dispersion improvement as the accuracy case. A pose
     # spread is the *phase-dependent* half of the discretization error and on
