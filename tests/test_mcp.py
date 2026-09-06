@@ -164,22 +164,65 @@ class TestCompareMaps:
         # A constant offset preserves shape exactly.
         assert result["correlation"] == pytest.approx(1.0)
 
-    async def test_mismatched_grids_are_refused_not_resampled(self, client, tmp_path):
+    async def test_mismatched_grids_are_sampled_and_never_silently(self, client, tmp_path):
+        """ROADMAP.md section 6 forbids a *silent* resample, not a comparison.
+
+        Two backends cannot be made to share a lattice — each sizes its box by
+        its own rules — so refusing on geometry refused the solver-versus-solver
+        use the same sentence promises. What the rule is really protecting is a
+        caller who cannot tell the two comparisons apart, so the test is that
+        the answer says which one it made.
+        """
         a, b = tmp_path / "a.dx", tmp_path / "b.dx"
         write_dx(a, make_grid())
         write_dx(b, make_grid(shape=(7, 7, 7)))
 
-        with pytest.raises(ToolError, match="grid shapes differ"):
+        result = payload(
             await client.call_tool("sashimi_compare_maps", {"dx_a": str(a), "dx_b": str(b)})
+        )
+        assert result["method"] == "sampled"
+        assert "note" in result, "a sampled comparison must announce itself"
+        assert "differ in geometry" in result["note"]
+        assert "geometry" in result["summary"]
+        # Not the node count of either grid: it is a sample of the shared region.
+        assert result["n_points"] not in (7**3, make_grid().values.size)
 
-    async def test_mismatched_geometry_is_refused(self, client, tmp_path):
+    async def test_mismatched_geometry_is_sampled_not_refused(self, client, tmp_path):
         a, b = tmp_path / "a.dx", tmp_path / "b.dx"
         write_dx(a, make_grid())
         shifted = make_grid()
-        shifted.origin = np.array([5.0, 0.0, 0.0])
+        # 9 nodes at 0.5 A spans 0-4 A, so this still overlaps on 1-4 A. A larger
+        # shift would leave no shared volume, which is the next test.
+        shifted.origin = np.array([1.0, 0.0, 0.0])
         write_dx(b, shifted)
 
-        with pytest.raises(ToolError, match="grid geometry differs"):
+        result = payload(
+            await client.call_tool("sashimi_compare_maps", {"dx_a": str(a), "dx_b": str(b)})
+        )
+        assert result["method"] == "sampled"
+
+    async def test_identical_lattices_still_compare_every_node(self, client, tmp_path):
+        """The exact path must not quietly become the sampled one."""
+        a, b = tmp_path / "a.dx", tmp_path / "b.dx"
+        write_dx(a, make_grid())
+        write_dx(b, make_grid(offset=0.25))
+
+        result = payload(
+            await client.call_tool("sashimi_compare_maps", {"dx_a": str(a), "dx_b": str(b)})
+        )
+        assert result["method"] == "lattice"
+        assert result["n_points"] == make_grid().values.size
+        assert "note" not in result
+
+    async def test_maps_that_share_no_volume_are_refused(self, client, tmp_path):
+        """Sampling needs a shared region; without one there is no question to answer."""
+        a, b = tmp_path / "a.dx", tmp_path / "b.dx"
+        write_dx(a, make_grid())
+        far = make_grid()
+        far.origin = np.array([500.0, 500.0, 500.0])
+        write_dx(b, far)
+
+        with pytest.raises(ToolError, match="no common region"):
             await client.call_tool("sashimi_compare_maps", {"dx_a": str(a), "dx_b": str(b)})
 
 
@@ -268,6 +311,86 @@ class TestDerivedQueries:
         dx = tmp_path / path
         write_dx(dx, PotentialGrid(values=values, origin=np.zeros(3), spacing=np.full(3, 1.0)))
         return dx
+
+    @staticmethod
+    def pqr_at(tmp_path, centre, radius=2.0, name="one.pqr"):
+        """A one-atom PQR placed in the map's own coordinates."""
+        path = tmp_path / name
+        x, y, z = centre
+        path.write_text(
+            f"ATOM      1  I   ION A   1    {x:8.3f}{y:8.3f}{z:8.3f} 1.0000 {radius:.4f}\n"
+        )
+        return path
+
+    async def test_in_sphere_warns_when_the_solute_was_not_masked(self, client, tmp_path):
+        """The number is the atoms unless the caller says otherwise, and it must say so."""
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_in_sphere",
+                {
+                    "dx_path": str(self.peaked_map(tmp_path)),
+                    "centre": [16.0, 16.0, 16.0],
+                    "radius": 5.0,
+                },
+            )
+        )
+        assert result["solute_masked"] is False
+        assert "pass pqr_path" in result["summary"]
+
+    async def test_in_sphere_masks_the_solute_and_reports_how_much(self, client, tmp_path):
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_in_sphere",
+                {
+                    "dx_path": str(self.peaked_map(tmp_path)),
+                    "centre": [16.0, 16.0, 16.0],
+                    "radius": 5.0,
+                    "pqr_path": str(self.pqr_at(tmp_path, (16.0, 16.0, 16.0))),
+                },
+            )
+        )
+        assert result["solute_masked"] is True
+        assert result["n_points_excluded_as_solute"] > 0
+        assert result["n_points"] < result["n_points_in_sphere"]
+        assert "masked as solute" in result["summary"]
+        assert "pass pqr_path" not in result["summary"]
+
+    async def test_in_sphere_says_when_the_pqr_masked_nothing(self, client, tmp_path):
+        """A PQR that does not match the map is worse than none: it looks like it worked."""
+        result = payload(
+            await client.call_tool(
+                "sashimi_potential_in_sphere",
+                {
+                    "dx_path": str(self.peaked_map(tmp_path)),
+                    "centre": [16.0, 16.0, 16.0],
+                    "radius": 3.0,
+                    # 400 A away: every atom's bounding box misses the grid.
+                    "pqr_path": str(self.pqr_at(tmp_path, (400.0, 400.0, 400.0))),
+                },
+            )
+        )
+        assert result["solute_masked"] is True
+        assert result["n_points_excluded_as_solute"] == 0
+        assert "masked nothing" in result["summary"]
+
+    async def test_in_sphere_distinguishes_a_buried_sphere_from_an_absent_one(
+        self, client, tmp_path
+    ):
+        buried = payload(
+            await client.call_tool(
+                "sashimi_potential_in_sphere",
+                {
+                    "dx_path": str(self.peaked_map(tmp_path)),
+                    "centre": [10.0, 10.0, 10.0],
+                    "radius": 2.0,
+                    "pqr_path": str(self.pqr_at(tmp_path, (10.0, 10.0, 10.0), radius=50.0)),
+                },
+            )
+        )
+        assert buried["n_points"] == 0
+        assert buried["n_points_in_sphere"] > 0
+        assert "buried" in buried["summary"]
+        assert "outside the map" not in buried["summary"]
 
     async def test_extrema_reports_both_signs_with_coordinates(self, client, tmp_path):
         result = payload(
