@@ -16,24 +16,35 @@ decided 2026-08-17 by Charlie. On `fas2-molecular` (906 atoms, 63 residues),
 every measurement says the same thing: **the disagreement between solvers is the
 size of each solver's own grid noise.**
 
-    APBS  against itself, padding 8->11 A   median 0.49 kT/e
-    debye against itself, padding 8->11 A   median 0.66 kT/e
-    debye against APBS                      median 0.32-0.49 kT/e
+    APBS  against itself, padding 8->11 A   median 0.0049 kT/e
+    debye against itself, padding 8->11 A   median 0.0137 kT/e
+    debye against APBS                      median 0.0126 kT/e
 
-    rank, Spearman:  APBS self >= 0.9916   debye self >= 0.9783
-                     debye vs APBS 0.9794-0.9842
+    rank, Spearman:  debye self 8->11 0.9991   debye vs APBS 0.9991
 
-debye is not failing; the quantity is dominated by discretization. Two things
-follow, and they are why there is no gate here:
+debye is not failing; the quantity is dominated by discretization. That is what
+has no gate here, and it still holds: 0.0126 against 0.0137 is a ratio of 0.92.
 
-- **The obvious relational bar has the wrong comparator.** "Agrees with APBS as
-  well as APBS agrees with itself" *fails* — 0.9794 < 0.9916 — because a
-  cross-solver difference cannot be expected to beat the noise of a solver
-  inside it. Against the noisier participant it passes by **0.0011**. A gate
-  with that margin reddens for reasons unrelated to debye, which teaches as
-  little as a check that cannot fail.
-- **Top-N is not gateable at all**: unstable *within* one backend, APBS 9/10 and
-  debye 8/10 against themselves across a box change.
+**Every number above moved by roughly 40x on 2026-09-06, and the solver did not
+change.** `residue_potentials` was sampling probe points that fall inside
+*neighbouring* atoms — 55.9% of them on fas2 — so what it reported was
+substantially the interior singularity field rather than the environment. With
+the probes rejected against a solvent probe radius the values themselves shrink
+(median |value| 3.09 -> 0.67 kT/e), but the disagreements shrink further:
+noise-to-signal goes 0.177 -> 0.020. The axis got *cleaner*, not quieter.
+
+Two consequences, one of which is a live question rather than a re-record:
+
+- **The obvious relational bar still has the wrong comparator.** A cross-solver
+  difference cannot be expected to beat the noise of a solver inside it, so
+  "agrees with APBS as well as APBS agrees with itself" still fails (0.0126 >
+  0.0049) and a gate there would redden for reasons unrelated to debye.
+- **"Top-N is not gateable at all" is no longer true, and this file does not
+  act on it.** That claim rested on top-N being unstable within one backend —
+  APBS 9/10 and debye 8/10 against themselves across a box change. Measured
+  after the fix: debye is **10/10 against itself** across 8->11 A and **10/10
+  against APBS**. Gating it is a ROADMAP section 12 M6 decision, not a test
+  edit, so it is recorded here and left alone.
 
 So this file pins the relationship the way `test_debye_m3.py` pins its neutral
 solute. If debye ever becomes clearly better than the noise — which is what
@@ -60,22 +71,46 @@ CASE = "fas2-molecular"
 # ten most negative residues and their means, in order. Recorded at one fixed
 # padding: the 8/10 top-N instability above is across *box changes*, so it does
 # not apply to re-solving the same question.
+# Re-recorded 2026-09-06 against the fixed sampler. Only five of the fifty-nine
+# sampled residues are negative at all now, so "the ten most negative" runs into
+# positive values -- which is a truer answer for a basic toxin than a list of ten
+# large negatives taken from inside its own atoms.
 RECORDED_TOP_10 = {
-    "CYX 565": -9.6241,
-    "TYR 604": -8.8136,
-    "PRO 599": -8.0149,
-    "CYX 596": -7.8840,
-    "GLY 587": -7.3324,
-    "THR 597": -6.6277,
-    "ASP 588": -6.2008,
-    "ASP 600": -5.8646,
-    "CYX 584": -4.9808,
-    "PRO 574": -4.7146,
+    "ASP 589": -0.5443,
+    "ASP 588": -0.4317,
+    "ASP 600": -0.2013,
+    "GLU 562": -0.0943,
+    "THR 558": -0.0038,
+    "GLY 587": 0.1120,
+    "PRO 599": 0.1307,
+    "ASN 563": 0.1720,
+    "PRO 586": 0.1742,
+    "CYX 560": 0.1923,
 }
 
-# debye's own box-to-box median, padding 8->11 A, measured 2026-08-17. The
-# comparator for "is the cross-backend difference still just noise".
-DEBYE_BOX_NOISE_KT_E = 0.6605
+# debye's own box-to-box median, padding 8->11 A. The comparator for "is the
+# cross-backend difference still just noise".
+#
+# **The value this replaces did not reproduce, and the reason is still open.**
+# 0.6605 was recorded 2026-08-17 as the 8->11 pairing, but re-measured against
+# the *unfixed* sampler on 2026-09-06 no pairing gives it: 8->9 0.5412, 8->10
+# 0.1443, 8->11 0.5479, 9->10 0.5254, 9->11 0.0702, 10->11 0.5973. The recorded
+# *max* of 3.18 does match 10->11 exactly (3.1822).
+#
+# Three things were checked and none of them is the cause. The recordings are
+# genuine: on a worktree at the pre-#96 tree the old sampler returns CYX 565 at
+# **-9.6242** against RECORDED_TOP_10's -9.6241. #96 is not the cause either,
+# though it does touch this case (0.15 M salt, ion_radius 2.0 >= surface_radius
+# 1.4): it moves the residue values by ~0.008 kT/e, and the cross-backend median
+# from 0.4347 to 0.4478 -- neither near the 0.32 kT/e section 12 records beside
+# the 0.6605. What is left is the protocol: section 12 labels its cross-backend
+# row "common lattice", and this file compares each backend on the grid its own
+# `request_for` resolves. That is the likeliest difference and it is a
+# hypothesis, not a measurement.
+# Under the fixed sampler the pairing spread also collapses -- 0.0060 to 0.0137
+# across all six pairs, against 8.5x before -- so the number is far less a
+# property of which two boxes were chosen.
+DEBYE_BOX_NOISE_KT_E = 0.0137
 
 
 def volumetric(result) -> PotentialGrid:
@@ -105,7 +140,9 @@ def debye_residues():
     solver, family = backends.solver_for("debye")
     result = solver.solve(system.request_for(family))
     return result, {
-        r.label: r.value for r in residue_potentials(volumetric(result), system.structure)
+        r.label: r.value
+        for r in residue_potentials(volumetric(result), system.structure)
+        if r.value is not None
     }
 
 
@@ -184,7 +221,11 @@ def test_the_residue_axis_is_recorded_and_not_judged(debye_residues):
     system = case_system()
     solver, family = backends.solver_for("apbs")
     apbs = solver.solve(system.request_for(family))
-    apbs_values = {r.label: r.value for r in residue_potentials(volumetric(apbs), system.structure)}
+    apbs_values = {
+        r.label: r.value
+        for r in residue_potentials(volumetric(apbs), system.structure)
+        if r.value is not None
+    }
 
     shared = sorted(set(debye_values) & set(apbs_values))
     difference = np.array([abs(debye_values[r] - apbs_values[r]) for r in shared])
