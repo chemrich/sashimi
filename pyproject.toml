@@ -25,7 +25,12 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=3.4.7",
+    # 4.0.2 rather than 3.4.7, and the floor is a claim about what is tested
+    # rather than about what works. `src/` never touched the field MCP SDK v2
+    # renamed (`Tool.inputSchema` -> `input_schema`), so the server does still
+    # run on fastmcp 3 — but nothing exercises that, the lock resolves 4.0.2,
+    # and a floor no run ever visits is the shape of a check that cannot fail.
+    "fastmcp>=4.0.2",
     "numpy>=2.0",
     # Structure preparation. Pure Python, so PyPI is the whole story here —
     # unlike APBS, which uv cannot install and which comes from the system

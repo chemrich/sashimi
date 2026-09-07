@@ -1641,7 +1641,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastmcp", specifier = ">=3.4.7" },
+    { name = "fastmcp", specifier = ">=4.0.2" },
     { name = "numba", marker = "extra == 'fast'", specifier = ">=0.61" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pdb2pqr", specifier = "==3.7.1" },
