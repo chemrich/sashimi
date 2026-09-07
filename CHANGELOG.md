@@ -59,6 +59,13 @@ number this project previously recorded, both are given.
   in keys that say so (`n_probes_all_residues` and friends), so `top` truncates
   the rows and nothing else. `under_sampled` is gone; `partly_off_map` and
   `unsampled` replace it and mean different things.
+- **The `fastmcp` floor is `>=4.0.2`**, up from `>=3.4.7`. This is a claim about
+  what is tested rather than about what works: nothing in `src/` touches the
+  field MCP SDK v2 renamed, so the server does still run on fastmcp 3 — but no
+  run exercises that, and a floor nothing visits is the shape of a check that
+  cannot fail. **A consumer resolving alongside something pinned to fastmcp 3
+  can no longer install `sashimi-electro`**, which is the cost of saying only
+  what we have measured.
 - **`sashimi.analysis.solute_mask` is public**, and `potential_extrema` accepts
   the mask it returns via `exclude_mask`. A caller that must report how much
   was excluded has to hold the mask anyway, and searching both signs used to
