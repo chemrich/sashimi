@@ -50,8 +50,40 @@ jobs:
       # that conda-forge ships a working osx-arm64 APBS 3.4.1 — is a fact about
       # a third party that changes rarely, and every commit is exercised on
       # osx-arm64 locally before it is pushed.
+      #
+      # `ubuntu-24.04-arm` closes the clause phase 8 could not meet — §10's
+      # fourth rung names osx-arm64, linux-64 and linux-aarch64, and the third
+      # had never run anywhere, in CI or in any recorded local measurement.
+      #
+      # **It is not here for "arm".** osx-arm64 above is arm64 and runs on every
+      # push to main. What is untested is the *combination* — **glibc's libm on
+      # aarch64, and OpenBLAS's aarch64 kernels**. macOS arm uses Apple's libm;
+      # ubuntu x86_64 uses glibc's x86 paths; neither visits these. That is the
+      # defect class this solver has already hit twice: `surface.py` records the
+      # platform `pow` disagreeing with `x*x` on 26 of 27,799 separations, and
+      # BLAS summation order differing in the last bit between two runners. A
+      # surface classification is discrete — inside or outside, no margin — so
+      # it is the one place where last-bit arithmetic changes an answer rather
+      # than its last digit.
+      #
+      # `none` and not `full`, because conda-forge ships no linux-aarch64 APBS.
+      # That is not a thin leg: it runs the whole binary-free suite plus
+      # `corpus verify --backend debye --tier standard`, which is the only
+      # automatic check on 35 of the 58 debye recordings, at `energy_rtol`
+      # 1e-4. It does *not* cover the compiled kernel — `none` syncs without
+      # extras — though the lock does carry cp313 `manylinux_2_27_aarch64`
+      # wheels for numba and llvmlite, so that would need a profile rather than
+      # a toolchain.
+      #
+      # On pull requests too, unlike macOS, and for the reason macOS is not:
+      # macOS is exercised locally before every push, and **nothing here runs
+      # linux-aarch64 locally**. Arm runners are free on public repositories,
+      # and this leg is slower than nothing but faster than `full`, so it does
+      # not move the critical path. Version-pinned rather than `-latest`
+      # because `ubuntu-24.04-arm` is the arm counterpart of the image
+      # `ubuntu-latest` currently resolves to.
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"},{"os":"ubuntu-latest","profile":"none"}]' || '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"},{"os":"ubuntu-latest","profile":"none"},{"os":"macos-latest","profile":"full"}]') }}
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"},{"os":"ubuntu-latest","profile":"none"},{"os":"ubuntu-24.04-arm","profile":"none"}]' || '[{"os":"ubuntu-latest","profile":"full"},{"os":"ubuntu-latest","profile":"apbs-only"},{"os":"ubuntu-latest","profile":"none"},{"os":"ubuntu-24.04-arm","profile":"none"},{"os":"macos-latest","profile":"full"}]') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -115,7 +147,7 @@ jobs:
           path: ~/.local/delphi
           # Bump the trailing version to force a rebuild; the digest is the
           # upstream tarball's, so a silently re-cut release also invalidates it.
-          key: delphi-cpp-8.5.0-51f3e2ac-${{ runner.os }}-v1
+          key: delphi-cpp-8.5.0-51f3e2ac-${{ runner.os }}-${{ runner.arch }}-v1
 
       # Measured at 40 s under emulation on Ubuntu 24.04 (g++ 13.3, boost 1.83)
       # and ~13 s natively, so the cache is a convenience rather than a
@@ -168,13 +200,20 @@ jobs:
       # the build fetches its own mesher. Pinned to a commit because TABI-PB
       # publishes no release tarball, and allowed to fail so a third party's
       # outage skips the tier rather than reddening CI.
+      # The key carries `runner.arch` as well as `runner.os` because since
+      # 2026-09-06 there is a Linux leg that is not x86_64, and `runner.os` is
+      # `Linux` on both. Inert today — these builds are `full`-gated and `full`
+      # cannot run on aarch64 — but restoring an x86_64 binary onto an arm
+      # runner would surface as a mesher that cannot exec, and this workflow
+      # already records twice that a skipped tier looks exactly like a passing
+      # one.
       - name: Cache the TABI-PB build
         if: runner.os == 'Linux' && matrix.profile == 'full'
         id: tabipb-cache
         uses: actions/cache@v6
         with:
           path: ~/.local/tabipb
-          key: tabipb-970c98d4-${{ runner.os }}-v1
+          key: tabipb-970c98d4-${{ runner.os }}-${{ runner.arch }}-v1
 
       - name: Build TABI-PB
         id: tabipb
