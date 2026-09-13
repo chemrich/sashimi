@@ -116,7 +116,7 @@ jobs:
           # In a temp dir: every APBS invocation drops an io.mc log in cwd.
           (cd "$(mktemp -d)" && "$apbs_bin" --version 2>&1 | head -3)
 
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
 
