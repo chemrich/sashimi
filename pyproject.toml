@@ -35,7 +35,7 @@ dependencies = [
     # Structure preparation. Pure Python, so PyPI is the whole story here —
     # unlike APBS, which uv cannot install and which comes from the system
     # package manager. See README "Install".
-    "pdb2pqr==3.7.1",
+    "pdb2pqr==3.8.0",
     "pydantic>=2.0",
 ]
 
